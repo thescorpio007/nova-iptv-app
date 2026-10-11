@@ -668,11 +668,7 @@ fun FooterStrip(clockPosition: String, showClock: Boolean = true) {
 @Composable
 fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: () -> Unit) {
     val no = remember { androidx.compose.ui.focus.FocusRequester() }
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        android.util.Log.i("NovaTest", "HIDE ask $name")
-        kotlinx.coroutines.delay(100)
-        runCatching { no.requestFocus() }
-    }
+    androidx.compose.runtime.LaunchedEffect(Unit) { android.util.Log.i("NovaTest", "HIDE ask $name") }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Hide “$name”?") },
@@ -688,6 +684,18 @@ fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: ()
         },
         dismissButton = {
             androidx.compose.material3.TextButton(onClick = onDismiss, modifier = Modifier.focusRequester(no)) { Text("No") }
+            // The remote starts on "No" (retry until the dialog window is ready to take the focus).
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                repeat(20) {
+                    kotlinx.coroutines.delay(50)
+                    if (runCatching { no.requestFocus() }.isSuccess) {
+                        kotlinx.coroutines.delay(50)
+                        runCatching { no.requestFocus() }
+                        android.util.Log.i("NovaTest", "HIDE ask: remote on No")
+                        return@LaunchedEffect
+                    }
+                }
+            }
         },
         confirmButton = {
             androidx.compose.material3.TextButton(onClick = { onDismiss(); onYes() }) {

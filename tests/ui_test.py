@@ -1262,7 +1262,8 @@ def double_ok_hide():
         shot("hide-ask")
         check("The window offers No / Yes, hide", find("Yes, hide", 5, exact=True) is not None and find("No", 3, exact=True) is not None)
         check("Double OK does not open the film page", find("Download & watch", 2) is None)
-        key(23)  # the remote starts on "No"
+        check("The remote starts on No", wait_log(r"HIDE ask: remote on No", 5))
+        key(23)  # OK on "No"
         time.sleep(1)
         check("No keeps the film (the remote starts on No)", count_log(r"HIDDEN ") == hidden and find("Yes, hide", 2, exact=True) is None)
         adb("shell input keyevent 23 23")
