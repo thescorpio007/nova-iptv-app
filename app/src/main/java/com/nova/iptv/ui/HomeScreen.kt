@@ -78,6 +78,7 @@ import com.nova.iptv.data.ItemType
 import com.nova.iptv.data.LiveChannel
 import com.nova.iptv.data.Movie
 import com.nova.iptv.data.SavedItem
+import com.nova.iptv.data.Series
 import com.nova.iptv.data.XtreamApi
 import com.nova.iptv.player.PlayItem
 import kotlinx.coroutines.launch
@@ -926,6 +927,15 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
     val shown = remember(state.items, o, edit, selected, sort) { vm.visibleItems(z, state.items, o, edit, sort) }
     val keys = remember(shown) { uniqueKeys(shown.map { it.key }) }
     val posterBack = rememberPosterReturn(vm, remember(shown) { shown.map { it.key } })
+    // Double click / double OK on a poster: "Hide …?" (Yes / No).
+    var hideAsk by remember { mutableStateOf<Movie?>(null) }
+    hideAsk?.let { item ->
+        HideAskDialog(item.name, item.icon, onYes = {
+            val i = shown.indexOf(item)
+            (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
+            vm.toggleItemHidden(z, item)
+        }, onDismiss = { hideAsk = null })
+    }
     val recent by vm.recent.collectAsStateWithLifecycle()
     val lastKey = recent.firstOrNull { it.type == ItemType.MOVIE }?.key
     val listState = rememberLazyListState()
@@ -989,6 +999,7 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
                     modifier = posterBack.second(m.key, ownPoster),
                     onClick = { vm.openMovie(m) },
                     onLongClick = { vm.toggleFavorite(vm.saved(m)) },
+                    onDoubleClick = if (selected == MainViewModel.FAV) null else ({ hideAsk = m }),
                     favorite = favKeys.contains("${ItemType.MOVIE}|${m.accountId}|${m.streamId}"),
                     active = m.key == lastKey,
                     badge = posterBadge(vm, m.accountId, sort, m.year, m.rating),
@@ -1014,6 +1025,15 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
     val shown = remember(state.items, o, edit, selected, sort) { vm.visibleItems(z, state.items, o, edit, sort) }
     val keys = remember(shown) { uniqueKeys(shown.map { it.key }) }
     val posterBack = rememberPosterReturn(vm, remember(shown) { shown.map { it.key } })
+    // Double click / double OK on a poster: "Hide …?" (Yes / No).
+    var hideAsk by remember { mutableStateOf<Series?>(null) }
+    hideAsk?.let { item ->
+        HideAskDialog(item.name, item.cover, onYes = {
+            val i = shown.indexOf(item)
+            (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
+            vm.toggleItemHidden(z, item)
+        }, onDismiss = { hideAsk = null })
+    }
     val listState = rememberLazyListState()
     val follow = rememberFollow(listState)
     val keepInPlace = rememberKeepInPlace(listState)
@@ -1075,6 +1095,7 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
                     modifier = posterBack.second(s.key, ownPoster),
                     onClick = { vm.openSeries(s) },
                     onLongClick = { vm.toggleFavorite(vm.saved(s)) },
+                    onDoubleClick = if (selected == MainViewModel.FAV) null else ({ hideAsk = s }),
                     favorite = favKeys.contains("${ItemType.SERIES}|${s.accountId}|${s.seriesId}"),
                     badge = posterBadge(vm, s.accountId, sort, s.year, s.rating),
                     showTitle = settings.posterTitles,

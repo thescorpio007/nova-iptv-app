@@ -1241,7 +1241,38 @@ steps = [
     ("Restore backup from the welcome screen", restore_from_login),
     ("Accounts link and start-up check", accounts_link),
     ("Restore from a link with a password", restore_by_link),
+    ("Double OK hides a film", double_ok_hide),
 ]
+
+def double_ok_hide():
+    """Double OK (or double tap) on a poster asks "Hide …?"; No keeps it, Yes hides it. No code asked."""
+    adb("shell settings put system accelerometer_rotation 0")
+    adb("shell settings put system user_rotation 1")
+    time.sleep(4)
+    try:
+        tap("Films")
+        time.sleep(3)
+        tap("Action", 15, exact=True)
+        adb("shell input keyevent 21")  # the remote takes over
+        time.sleep(2)
+        asked = count_log(r"HIDE ask")
+        hidden = count_log(r"HIDDEN ")
+        adb("shell input keyevent 23 23")
+        check("Double OK on a poster asks to hide it", wait_count(r"HIDE ask", asked + 1, 8))
+        shot("hide-ask")
+        check("The window offers No / Yes, hide", find("Yes, hide", 5, exact=True) is not None and find("No", 3, exact=True) is not None)
+        check("Double OK does not open the film page", find("Download & watch", 2) is None)
+        key(23)  # the remote starts on "No"
+        time.sleep(1)
+        check("No keeps the film (the remote starts on No)", count_log(r"HIDDEN ") == hidden and find("Yes, hide", 2, exact=True) is None)
+        adb("shell input keyevent 23 23")
+        wait_count(r"HIDE ask", asked + 2, 8)
+        tap("Yes, hide", 5, exact=True)
+        check("Yes hides it at once, without any code", wait_count(r"HIDDEN ", hidden + 1, 8) and find("Parental", 2) is None)
+    finally:
+        adb("shell settings put system user_rotation 0")
+        time.sleep(4)
+
 
 def restart_check():
     adb(f"shell am force-stop {PKG}")
@@ -1265,6 +1296,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("Install and open", install),
         ("First login", login_first),
         ("Restart with an account", restart_check),
+        ("Double OK hides a film", double_ok_hide),
     ]
 
 for title, fn in steps:

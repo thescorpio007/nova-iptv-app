@@ -128,6 +128,9 @@ object NovaInput {
 /** How long OK must be held on the remote to count as a long press. */
 const val LONG_OK_MS = 550L
 
+/** Two clicks (or two OK presses) closer than this are a double click. */
+const val DOUBLE_CLICK_MS = 350L
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FocusBox(
@@ -138,8 +141,28 @@ fun FocusBox(
     scaleOnFocus: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onFocused: (() -> Unit)? = null,
+    onDoubleClick: (() -> Unit)? = null,
     content: @Composable BoxScope.(focused: Boolean) -> Unit,
 ) {
+    // Double click / double OK: the single click waits a moment to see whether a second one follows.
+    val clickScope = androidx.compose.runtime.rememberCoroutineScope()
+    var pendingClick by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val latestClick by androidx.compose.runtime.rememberUpdatedState(onClick)
+    val latestDouble by androidx.compose.runtime.rememberUpdatedState(onDoubleClick)
+    val click: () -> Unit = if (onDoubleClick == null) onClick else ({
+        val waiting = pendingClick
+        if (waiting != null && waiting.isActive) {
+            waiting.cancel()
+            pendingClick = null
+            latestDouble?.invoke()
+        } else {
+            pendingClick = clickScope.launch {
+                kotlinx.coroutines.delay(DOUBLE_CLICK_MS)
+                pendingClick = null
+                latestClick()
+            }
+        }
+    })
     var hasFocus by remember { mutableStateOf(false) }
     var okSeenDown by remember { mutableStateOf(false) }
     var okLong by remember { mutableStateOf(false) }
@@ -194,14 +217,14 @@ fun FocusBox(
                         androidx.compose.ui.input.key.KeyEventType.KeyUp -> {
                             if (!okSeenDown) return@onPreviewKeyEvent false
                             okSeenDown = false
-                            if (okLong || ne.eventTime - ne.downTime >= LONG_OK_MS) onLongClick() else onClick()
+                            if (okLong || ne.eventTime - ne.downTime >= LONG_OK_MS) onLongClick() else click()
                             true
                         }
                         else -> false
                     }
                 }
             )
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .combinedClickable(onClick = click, onLongClick = onLongClick)
     ) {
         content(focused)
     }
@@ -264,8 +287,9 @@ fun PosterCard(
     showTitle: Boolean = true,
     favorite: Boolean = false,
     modifier: Modifier = Modifier,
+    onDoubleClick: (() -> Unit)? = null,
 ) {
-    FocusBox(modifier = modifier, onClick = onClick, onLongClick = onLongClick, scaleOnFocus = true, shape = RoundedCornerShape(12.dp), selected = active) { focused ->
+    FocusBox(modifier = modifier, onClick = onClick, onLongClick = onLongClick, onDoubleClick = onDoubleClick, scaleOnFocus = true, shape = RoundedCornerShape(12.dp), selected = active) { focused ->
         Column(Modifier.fillMaxWidth().padding(4.dp)) {
             Box {
                 Logo(
@@ -637,4 +661,38 @@ fun FooterStrip(clockPosition: String, showClock: Boolean = true) {
         androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
         if (clockRight) clock() else signature()
     }
+}
+
+
+/** "Hide …?" after a double click on a poster: No (where the remote starts) / Yes, hide. No code asked. */
+@Composable
+fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: () -> Unit) {
+    val no = remember { androidx.compose.ui.focus.FocusRequester() }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        android.util.Log.i("NovaTest", "HIDE ask $name")
+        kotlinx.coroutines.delay(100)
+        runCatching { no.requestFocus() }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Hide “$name”?") },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Logo(image, name, Modifier.width(54.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                Spacer(Modifier.width(14.dp))
+                Text(
+                    "It disappears from Films, Series, Search and Recent. You can show it again in Settings → Hidden items.",
+                    fontSize = 14.sp,
+                )
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss, modifier = Modifier.focusRequester(no)) { Text("No") }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onDismiss(); onYes() }) {
+                Text("Yes, hide", color = MaterialTheme.colorScheme.error)
+            }
+        },
+    )
 }
