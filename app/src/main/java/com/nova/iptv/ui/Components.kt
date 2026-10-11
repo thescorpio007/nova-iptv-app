@@ -664,47 +664,41 @@ fun FooterStrip(clockPosition: String, showClock: Boolean = true) {
 }
 
 
-/** "Hide …?" after a double click on a poster: No (where the remote starts) / Yes, hide. No code asked. */
+/**
+ * "Hide …?" after a double click on a poster: No (where the remote starts) / Yes, hide. No code asked.
+ * A system dialog, because it reliably puts the remote on "No" on every TV box.
+ */
 @Composable
 fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: () -> Unit) {
-    val no = remember { androidx.compose.ui.focus.FocusRequester() }
-    androidx.compose.runtime.LaunchedEffect(Unit) { android.util.Log.i("NovaTest", "HIDE ask $name") }
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Hide “$name”?") },
-        text = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Logo(image, name, Modifier.width(54.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
-                Spacer(Modifier.width(14.dp))
-                Text(
-                    "It disappears from Films, Series, Search and Recent. You can show it again in Settings → Hidden items.",
-                    fontSize = 14.sp,
-                )
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val latestYes by androidx.compose.runtime.rememberUpdatedState(onYes)
+    val latestDismiss by androidx.compose.runtime.rememberUpdatedState(onDismiss)
+    androidx.compose.runtime.DisposableEffect(name) {
+        android.util.Log.i("NovaTest", "HIDE ask $name")
+        var yes = false
+        val dialog = android.app.AlertDialog.Builder(context, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Hide “$name”?")
+            .setMessage("It disappears from Films, Series, Search and Recent. You can show it again in Settings → Hidden items.")
+            .setNegativeButton("No", null)
+            .setPositiveButton("Yes, hide") { _, _ -> yes = true }
+            .create()
+        dialog.setOnDismissListener {
+            latestDismiss()
+            if (yes) latestYes()
+        }
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)?.apply { isAllCaps = false; setTextColor(0xFFFF8A80.toInt()) }
+            dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)?.apply {
+                isAllCaps = false
+                isFocusableInTouchMode = false
+                requestFocus()
+                post { requestFocus(); if (isFocused) android.util.Log.i("NovaTest", "HIDE ask: remote on No") }
             }
-        },
-        dismissButton = {
-            var noFocused by remember { mutableStateOf(false) }
-            androidx.compose.material3.TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.focusRequester(no).onFocusChanged { noFocused = it.isFocused },
-            ) { Text("No") }
-            // The remote starts on "No": keep asking until the button really has the focus (the dialog window
-            // takes a moment to be ready).
-            androidx.compose.runtime.LaunchedEffect(Unit) {
-                repeat(40) {
-                    kotlinx.coroutines.delay(75)
-                    if (noFocused) {
-                        android.util.Log.i("NovaTest", "HIDE ask: remote on No")
-                        return@LaunchedEffect
-                    }
-                    runCatching { no.requestFocus() }
-                }
-            }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = { onDismiss(); onYes() }) {
-                Text("Yes, hide", color = MaterialTheme.colorScheme.error)
-            }
-        },
-    )
+        }
+        dialog.show()
+        onDispose {
+            dialog.setOnDismissListener(null)
+            if (dialog.isShowing) dialog.dismiss()
+        }
+    }
 }
