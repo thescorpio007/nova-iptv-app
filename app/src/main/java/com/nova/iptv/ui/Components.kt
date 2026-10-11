@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.focusGroup
@@ -671,6 +672,7 @@ fun FooterStrip(clockPosition: String, showClock: Boolean = true) {
  * "Hide …?" after a double click on a poster: No (where the remote starts) / Yes, hide. No code asked.
  * Drawn over the posters in the same screen (not a separate window), so the remote always reaches it.
  */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: () -> Unit) {
     val no = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -691,7 +693,7 @@ fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: ()
         Modifier
             .fillMaxSize()
             .background(Color(0xB3000000))
-            .pointerInput(Unit) { androidx.compose.foundation.gestures.detectTapGestures { onDismiss() } }
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } }
             .focusProperties { exit = { androidx.compose.ui.focus.FocusRequester.Cancel } }
             .focusGroup(),
         contentAlignment = Alignment.Center,
@@ -701,7 +703,7 @@ fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: ()
                 .padding(20.dp)
                 .widthIn(max = 540.dp)
                 .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(22.dp))
-                .pointerInput(Unit) { androidx.compose.foundation.gestures.detectTapGestures { } }
+                .pointerInput(Unit) { detectTapGestures { } }
                 .padding(20.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
