@@ -1,3 +1,4 @@
+import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -22,7 +23,7 @@ android {
             // Fixed key so every build can install over the previous one. The key and its passwords are never in
             // the public code in clear: keystore-enc/ holds them encrypted, and GitHub opens them with the hidden
             // secret NOVA_KEY_PASS into keystore/ (the private copy keeps keystore/ as it is).
-            val local = java.util.Properties().apply {
+            val local = Properties().apply {
                 val f = rootProject.file("keystore/signing.properties")
                 if (f.exists()) f.inputStream().use { load(it) }
             }
