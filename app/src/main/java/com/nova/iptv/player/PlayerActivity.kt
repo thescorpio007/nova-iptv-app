@@ -2071,6 +2071,23 @@ class PlayerActivity : ComponentActivity() {
         runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { networkCallback = cb }
     }
 
+    /**
+     * 4K and other big films: the chosen size (e.g. 100 MB) holds only a few seconds of them, so allow enough for
+     * about two minutes ahead (plus the 20 % kept behind), at most 2 GB, and only while 1 GB stays free on the drive.
+     */
+    private fun growReadAhead(ra: ReadAheadBuffer, total: Long, durMs: Long) {
+        val bytesPerSec = total * 1000.0 / durMs
+        val want = (bytesPerSec * 120 / 0.8).toLong()
+        if (want <= ra.limitBytes) return
+        val dir = java.io.File(Folders.bufferDir(this, Folders.BUFFER_MOVIES, app.storage.usePublicFolder), "readahead")
+        val free = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(0L)
+        val allowed = minOf(want, 2048L * 1024 * 1024, ra.limitBytes + free - 1024L * 1024 * 1024)
+        if (allowed > ra.limitBytes + 8L * 1024 * 1024) {
+            ra.growTo(allowed)
+            Log.i("NovaTest", "READAHEAD grown to ${allowed / (1024 * 1024)} MB (${(bytesPerSec * 8 / 1_000_000).toInt()} Mbit/s film)")
+        }
+    }
+
     /** "⬇ Buffered ahead: 2:35" (read-ahead) or "⬇ Downloaded 45 %" (download & watch), and the seek limit. */
     private fun updateDiskStatus() {
         val item = current
@@ -2086,11 +2103,14 @@ class PlayerActivity : ComponentActivity() {
             ra != null -> {
                 val total = ra.totalBytes
                 if (total > 0 && dur > 0) {
-                    val playByte = (p.currentPosition.toDouble() / dur * total).toLong()
-                    val ahead = ra.contiguousFrom(playByte)
-                    val aheadMs = (ahead.toDouble() / total * dur).toLong()
-                    vod.diskStatus = "⬇ Buffered ahead: " + formatDuration(aheadMs) + "  (" + (ahead / (1024 * 1024)) + " MB on disk)"
-                    vod.diskFraction = ((playByte + ahead).toDouble() / total).toFloat()
+                    growReadAhead(ra, total, dur)
+                    // Ahead = what the player already holds in memory + what is on disk after the point it reads from.
+                    val readByte = ra.readPos
+                    val onDisk = ra.contiguousFrom(readByte)
+                    val memoryMs = (p.bufferedPosition - p.currentPosition).coerceAtLeast(0)
+                    val aheadMs = memoryMs + (onDisk.toDouble() / total * dur).toLong()
+                    vod.diskStatus = "⬇ Buffered ahead: " + formatDuration(aheadMs) + "  (" + (onDisk / (1024 * 1024)) + " MB on disk)"
+                    vod.diskFraction = ((readByte + onDisk).toDouble() / total).toFloat()
                 } else {
                     vod.diskStatus = "⬇ Filling the read-ahead…"
                     vod.diskFraction = null

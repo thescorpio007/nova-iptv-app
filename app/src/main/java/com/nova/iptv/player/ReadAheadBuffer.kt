@@ -41,9 +41,22 @@ class ReadAheadBuffer(
         private const val TAG = "NovaReadAhead"
     }
 
-    private val limit = limitBytes.coerceAtLeast(3 * SEG)
-    private val aheadLimit = (limit * 8 / 10).coerceAtLeast(2 * SEG)
-    private val behindLimit = (limit - aheadLimit).coerceAtLeast(SEG)
+    @Volatile private var limit = limitBytes.coerceAtLeast(3 * SEG)
+    private val aheadLimit get() = (limit * 8 / 10).coerceAtLeast(2 * SEG)
+    private val behindLimit get() = (limit - aheadLimit).coerceAtLeast(SEG)
+
+    /** Size in use now (bytes): the chosen size, or more for a big film (see [growTo]). */
+    val limitBytes: Long get() = limit
+
+    /** Big films (4K): allow more on disk so about two minutes stay ahead. Never shrinks. */
+    fun growTo(bytes: Long) {
+        if (bytes <= limit) return
+        lock.withLock {
+            limit = bytes
+            reevaluate = true
+            changed.signalAll()
+        }
+    }
 
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
