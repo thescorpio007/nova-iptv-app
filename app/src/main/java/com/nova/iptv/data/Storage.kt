@@ -287,6 +287,11 @@ class Storage(context: Context) {
         get() = prefs.getString("watchdog_mode", "live") ?: "live"
         set(value) = prefs.edit().putString("watchdog_mode", value).apply()
 
+    /** "Open link" tab: the last links opened (newest first), each "time|url". */
+    var recentLinks: List<String>
+        get() = prefs.getString("recent_links", null)?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
+        set(value) = prefs.edit().putString("recent_links", value.take(15).joinToString("\n")).apply()
+
     /** Search: what to look for ("all", "live", "movie", "series") and in which account (null = all servers). */
     var searchKind: String
         get() = prefs.getString("search_kind", "all") ?: "all"

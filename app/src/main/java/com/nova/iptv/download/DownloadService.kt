@@ -75,6 +75,10 @@ class DownloadService : Service() {
     }
 
     private fun download(app: NovaApp, start: DownloadItem) {
+        if (HlsDownload.isHls(start.url)) {
+            HlsDownload(app, start) { title, total, done -> notifyProgress(title, total, done) }.run()
+            return
+        }
         val id = start.id
         val file = File(start.path)
         file.parentFile?.mkdirs()

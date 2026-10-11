@@ -2126,7 +2126,11 @@ class PlayerActivity : ComponentActivity() {
                     vod.seekLimitMs = null
                     vod.diskFraction = 1f
                 } else {
-                    val frac = if (d.totalBytes > 0) (d.doneBytes.toDouble() / d.totalBytes).coerceIn(0.0, 1.0) else 0.0
+                    val frac = when {
+                        d.totalBytes > 0 -> (d.doneBytes.toDouble() / d.totalBytes).coerceIn(0.0, 1.0)
+                        d.parts > 0 -> (d.partsDone.toDouble() / d.parts).coerceIn(0.0, 1.0)
+                        else -> 0.0
+                    }
                     vod.diskFraction = frac.toFloat()
                     vod.seekLimitMs = if (dur > 0) maxOf(0L, (frac * dur).toLong() - 5_000) else null
                     val state = when (d.status) {

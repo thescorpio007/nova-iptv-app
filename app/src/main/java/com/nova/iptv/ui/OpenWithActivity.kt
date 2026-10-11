@@ -29,6 +29,10 @@ class OpenWithActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent?.action == Intent.ACTION_SEND) {
+            shared()
+            return
+        }
         val uri = intent?.data
         if (uri == null) {
             finish()
@@ -58,6 +62,43 @@ class OpenWithActivity : ComponentActivity() {
             }
             finish()
         }
+    }
+
+    // ------------------------------------------------------------------ Share → Play with Nova
+
+    /** A link shared as text (1DM, browsers…) or a shared video file: Play now / Download & watch / Download only. */
+    private fun shared() {
+        @Suppress("DEPRECATION")
+        val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        val link = LinkActions.findLink(intent.getStringExtra(Intent.EXTRA_TEXT))
+        Log.i("NovaTest", "SHARE received ${if (link != null) "link" else if (stream != null) "file" else "nothing"}")
+        if (link == null) {
+            if (stream != null) {
+                // A shared file: play it like "Open with".
+                startActivity(Intent(this, OpenWithActivity::class.java).setAction(Intent.ACTION_VIEW).setDataAndType(stream, intent.type)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            } else {
+                Toast.makeText(this, "No video link found in what was shared", Toast.LENGTH_LONG).show()
+            }
+            finish()
+            return
+        }
+        val choices = arrayOf("▶  Play now", "⬇▶  Download & watch", "⬇  Download only", "Cancel")
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("▶ Nova IPTV — " + LinkActions.title(link))
+            .setItems(choices) { _, which ->
+                when (which) {
+                    0 -> LinkActions.play(this, link)
+                    1 -> LinkActions.downloadAndWatch(this, link)
+                    2 -> {
+                        LinkActions.download(this, link)
+                        Toast.makeText(this, "Download added — see Downloads in Nova", Toast.LENGTH_LONG).show()
+                    }
+                }
+                finish()
+            }
+            .setOnCancelListener { finish() }
+            .show()
     }
 
     // ------------------------------------------------------------------ what was opened

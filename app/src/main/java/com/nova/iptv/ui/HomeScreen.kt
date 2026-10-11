@@ -136,6 +136,7 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
                     Tab.SEARCH -> SearchScreen(vm, onPlay)
                     Tab.RECENT -> RecentScreen(vm, onPlay)
                     Tab.DOWNLOADS -> DownloadsScreen(vm, onPlay)
+                    Tab.LINK -> LinkScreen(vm)
                     Tab.SETTINGS -> SettingsScreen(vm)
                 }
             }
@@ -170,7 +171,7 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (!tab.zone) SmallTab("←", false) { vm.setTab(Tab.LIVE) }
-                    Tab.entries.filter { !it.zone }.forEach { t -> SmallTab(t.label, t == tab) { vm.setTab(t) } }
+                    Tab.entries.filter { !it.zone }.forEach { t -> SmallTab(if (t == Tab.LINK) "🔗 Link" else t.label, t == tab) { vm.setTab(t) } }
                     Spacer(Modifier.weight(1f))
                     if (tab.zone) {
                         EditButton(edit, big = false) { if (edit) vm.setEditMode(false) else PinGate.require(vm.appStorage.hasPin) { vm.setEditMode(true) } }

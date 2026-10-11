@@ -168,7 +168,8 @@ class GrowingFileDataSource(
         while (true) {
             val have = file.length()
             val d0 = item()
-            if (pos >= have + SIDE_GAP && d0.status != DownloadStatus.DONE) {
+            // HLS downloads are joined parts: there is nothing to fetch "on the side", just wait for them.
+            if (pos >= have + SIDE_GAP && d0.status != DownloadStatus.DONE && d0.parts == 0) {
                 return readSide(buffer, offset, length)
             }
             if (sideStream != null || pausedForSide) closeSide(resume = true)

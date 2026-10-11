@@ -200,6 +200,9 @@ data class DownloadItem(
     val status: String = DownloadStatus.QUEUED,
     val error: String? = null,
     val createdAt: Long = 0L,
+    /** HLS links (.m3u8): number of parts, and parts already saved (0 = a normal single file). */
+    val parts: Int = 0,
+    val partsDone: Int = 0,
 )
 
 object DownloadStatus {

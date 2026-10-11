@@ -1,0 +1,174 @@
+package com.nova.iptv.download
+
+import com.nova.iptv.NovaApp
+import com.nova.iptv.data.DownloadItem
+import com.nova.iptv.data.DownloadStatus
+import okhttp3.Request
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.RandomAccessFile
+import java.net.URI
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
+/**
+ * Downloads an HLS link (.m3u8): fetches every part in order and joins them into one file that plays
+ * like a normal video (also while it is still downloading — "Download & watch").
+ *  - a master list picks the best quality;
+ *  - AES-128 protected parts are opened with their key;
+ *  - progress is kept next to the file ("….parts"), so a paused / interrupted download continues where it stopped.
+ */
+class HlsDownload(
+    private val app: NovaApp,
+    private val start: DownloadItem,
+    private val progress: (title: String, total: Long, done: Long) -> Unit,
+) {
+    companion object {
+        fun isHls(url: String) = url.substringBefore('?').substringBefore('#').endsWith(".m3u8", ignoreCase = true)
+        private val ATTR = Regex("""([A-Z0-9-]+)=("[^"]*"|[^,]*)""")
+    }
+
+    private class Key(val method: String, val uri: String?, val iv: ByteArray?)
+    private class Part(val url: String, val key: Key?, val sequence: Long)
+
+    private val id = start.id
+    private val file = File(start.path)
+    private val progressFile = File(start.path + ".parts")
+    private val keys = HashMap<String, ByteArray>()
+
+    private fun get(url: String): ByteArray {
+        val req = Request.Builder().url(url).header("User-Agent", app.storage.userAgent).build()
+        app.http.newCall(req).execute().use { r ->
+            if (!r.isSuccessful) throw IOException("Server returned HTTP ${r.code}")
+            return r.body?.bytes() ?: throw IOException("Empty response")
+        }
+    }
+
+    private fun resolve(base: String, ref: String): String =
+        if (ref.contains("://")) ref else runCatching { URI(base).resolve(ref).toString() }.getOrDefault(ref)
+
+    private fun attrs(line: String): Map<String, String> =
+        ATTR.findAll(line.substringAfter(':')).associate { it.groupValues[1] to it.groupValues[2].trim('"') }
+
+    /** The parts of the video (after choosing the best quality in a master list). */
+    private fun parts(): Pair<String?, List<Part>> {
+        var url = start.url
+        var text = String(get(url))
+        if (!text.trimStart().startsWith("#EXTM3U")) throw IOException("This link is not a video list (.m3u8)")
+        if (text.contains("#EXT-X-STREAM-INF")) {
+            val lines = text.lines().map { it.trim() }
+            var best: String? = null
+            var bestBw = -1L
+            lines.forEachIndexed { i, l ->
+                if (l.startsWith("#EXT-X-STREAM-INF")) {
+                    val bw = attrs(l)["BANDWIDTH"]?.toLongOrNull() ?: 0
+                    val next = lines.drop(i + 1).firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
+                    if (next != null && bw > bestBw) { bestBw = bw; best = next }
+                }
+            }
+            url = resolve(url, best ?: throw IOException("No video quality found in this list"))
+            text = String(get(url))
+        }
+        if (!text.contains("#EXT-X-ENDLIST")) throw IOException("This is a live stream, not a video that can be downloaded")
+        var key: Key? = null
+        var init: String? = null
+        var seq = 0L
+        val out = mutableListOf<Part>()
+        text.lines().map { it.trim() }.forEach { l ->
+            when {
+                l.startsWith("#EXT-X-MEDIA-SEQUENCE") -> seq = l.substringAfter(':').trim().toLongOrNull() ?: 0
+                l.startsWith("#EXT-X-KEY") -> {
+                    val a = attrs(l)
+                    val method = a["METHOD"] ?: "NONE"
+                    if (method != "NONE" && method != "AES-128") throw IOException("This video is protected ($method) and can't be downloaded")
+                    key = if (method == "NONE") null else Key(
+                        method, a["URI"]?.let { resolve(url, it) },
+                        a["IV"]?.removePrefix("0x")?.removePrefix("0X")?.let { hex -> hex.padStart(32, '0').chunked(2).map { it.toInt(16).toByte() }.toByteArray() },
+                    )
+                }
+                l.startsWith("#EXT-X-MAP") -> init = attrs(l)["URI"]?.let { resolve(url, it) }
+                l.isNotEmpty() && !l.startsWith("#") -> out += Part(resolve(url, l), key, seq++)
+            }
+        }
+        if (out.isEmpty()) throw IOException("No video parts found in this list")
+        return init to out
+    }
+
+    private fun decrypt(data: ByteArray, part: Part): ByteArray {
+        val k = part.key ?: return data
+        val keyBytes = keys.getOrPut(k.uri ?: "") { get(k.uri ?: throw IOException("Missing key")) }
+        val iv = k.iv ?: ByteArray(16).also { b -> var s = part.sequence; for (i in 15 downTo 8) { b[i] = (s and 0xff).toByte(); s = s shr 8 } }
+        val c = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(iv))
+        return c.doFinal(data)
+    }
+
+    /** "index length" of the parts already saved. */
+    private fun readProgress(): Pair<Int, Long> = runCatching {
+        val (i, len) = progressFile.readText().trim().split(' ')
+        i.toInt() to len.toLong()
+    }.getOrDefault(0 to 0L)
+
+    private fun running() = DownloadCenter.get(id)?.status == DownloadStatus.DOWNLOADING
+
+    fun run() {
+        file.parentFile?.mkdirs()
+        DownloadCenter.update(id) { it.copy(status = DownloadStatus.DOWNLOADING, error = null) }
+        var attempt = 0
+        while (true) {
+            if (!running()) return
+            try {
+                val (init, parts) = parts()
+                var (next, length) = readProgress()
+                if (next == 0) length = 0
+                // Continue exactly after the last complete part.
+                RandomAccessFile(file, "rw").use { it.setLength(length) }
+                FileOutputStream(file, true).use { out ->
+                    if (next == 0 && init != null) {
+                        val bytes = get(init)
+                        out.write(bytes); out.flush()
+                        length += bytes.size
+                        progressFile.writeText("0 $length")
+                    }
+                    var lastUi = 0L
+                    while (next < parts.size) {
+                        if (!running()) return
+                        val part = parts[next]
+                        val bytes = decrypt(get(part.url), part)
+                        out.write(bytes); out.flush()
+                        length += bytes.size
+                        next++
+                        progressFile.writeText("$next $length")
+                        attempt = 0
+                        val now = System.currentTimeMillis()
+                        if (now - lastUi > 1000 || next == parts.size) {
+                            lastUi = now
+                            val estimate = length * parts.size / next
+                            DownloadCenter.update(id, persist = next % 20 == 0) {
+                                it.copy(doneBytes = length, parts = parts.size, partsDone = next, error = null)
+                            }
+                            progress(start.title, estimate, length)
+                        }
+                    }
+                }
+                progressFile.delete()
+                DownloadCenter.update(id) {
+                    it.copy(status = DownloadStatus.DONE, doneBytes = length, totalBytes = length, parts = parts.size, partsDone = parts.size, error = null)
+                }
+                return
+            } catch (e: Exception) {
+                if (!running()) return
+                val message = e.message ?: "Download failed"
+                // Problems that a retry can't solve.
+                if (message.startsWith("This ") || ++attempt >= 8) {
+                    DownloadCenter.update(id) { it.copy(status = DownloadStatus.FAILED, error = message, doneBytes = file.length()) }
+                    return
+                }
+                DownloadCenter.update(id) { it.copy(error = "Retrying… ($message)", doneBytes = file.length()) }
+                try { Thread.sleep(minOf(2000L * attempt, 15_000L)) } catch (ie: InterruptedException) { return }
+            }
+        }
+    }
+}

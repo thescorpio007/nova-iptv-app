@@ -81,8 +81,17 @@ private fun DownloadRow(
     onDelete: () -> Unit,
 ) {
     val mb = d.doneBytes / (1024 * 1024)
-    val totalMb = if (d.totalBytes > 0) d.totalBytes / (1024 * 1024) else -1
-    val progress = if (d.totalBytes > 0) (d.doneBytes.toFloat() / d.totalBytes).coerceIn(0f, 1f) else null
+    // HLS links: the size is known only at the end, so the parts give the progress.
+    val totalMb = when {
+        d.totalBytes > 0 -> d.totalBytes / (1024 * 1024)
+        d.parts > 0 && d.partsDone > 0 -> d.doneBytes * d.parts / d.partsDone / (1024 * 1024)
+        else -> -1
+    }
+    val progress = when {
+        d.totalBytes > 0 -> (d.doneBytes.toFloat() / d.totalBytes).coerceIn(0f, 1f)
+        d.parts > 0 -> (d.partsDone.toFloat() / d.parts).coerceIn(0f, 1f)
+        else -> null
+    }
     val kindLabel = when (d.kind) {
         "recording" -> "Recording"
         "episode" -> "Episode"

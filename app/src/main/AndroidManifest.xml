@@ -158,6 +158,16 @@
                 <data android:pathPattern=".*\\.M3U" />
                 <data android:pathPattern=".*\\..*\\.M3U" />
             </intent-filter>
+            <!-- "Share → Play with Nova": links (text) and video files shared by 1DM, browsers, file managers. -->
+            <intent-filter android:label="Play with Nova">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="application/x-mpegurl" />
+                <data android:mimeType="application/vnd.apple.mpegurl" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
         </activity>
 
         <activity

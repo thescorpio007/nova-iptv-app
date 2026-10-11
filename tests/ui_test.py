@@ -1241,6 +1241,7 @@ steps = [
     ("Restore backup from the welcome screen", restore_from_login),
     ("Accounts link and start-up check", accounts_link),
     ("Restore from a link with a password", restore_by_link),
+    ("Open link and Share", lambda: open_link()),
     ("Double OK hides a film", lambda: double_ok_hide()),
 ]
 
@@ -1275,6 +1276,25 @@ def double_ok_hide():
         time.sleep(4)
 
 
+def open_link():
+    """The "🔗 Link" tab plays any video link; Share → Nova offers Play / Download & watch / Download."""
+    tap("Link", 15)
+    fill("Video link", SERVER + "/movie/alice/secret/301.mp4")
+    hide_keyboard()
+    n = count_log(r"READY ")
+    tap("▶ Play", 10)
+    check("Open link: a pasted link plays", wait_count(r"READY ", n + 1, 40))
+    back_to_main("open-link")
+    tap("Link", 15)
+    check("Open link: the link is listed under Recent links", find("301.mp4", 10) is not None)
+    adb(f"shell am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "
+        f"'Watch this {SERVER}/movie/alice/secret/302.mp4' -n {PKG}/.ui.OpenWithActivity")
+    check("Share → Nova: the choice window opens", wait_log(r"SHARE received link", 15) and find("Play now", 10) is not None)
+    shot("share-choice")
+    tap("Download only", 10)
+    check("Share → Download only adds a download", wait_log(r"LINK download 302.mp4", 10))
+
+
 def restart_check():
     adb(f"shell am force-stop {PKG}")
     adb(f"shell am start -n {PKG}/.ui.MainActivity")
@@ -1297,6 +1317,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("Install and open", install),
         ("First login", login_first),
         ("Restart with an account", restart_check),
+        ("Open link and Share", open_link),
         ("Double OK hides a film", double_ok_hide),
     ]
 
