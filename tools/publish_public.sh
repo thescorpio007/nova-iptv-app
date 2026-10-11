@@ -11,7 +11,7 @@ find "$PUB" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 (cd "$SRC" && git ls-files -z | grep -zvE '^(keystore/|tools/link_check\.py$|\.github/workflows/link-check\.yml$)' \
   | tar --null -T - -cf -) | tar -xf - -C "$PUB"
 # Safety: never publish the key or its passwords.
-if git -C "$PUB" ls-files --others --cached | grep -qiE '\.jks$|signing\.properties'; then echo "KEY FOUND - stopping"; exit 1; fi
+if git -C "$PUB" ls-files --others --cached | grep -qiE '\.jks$|signing\.properties$|public-pass'; then echo "KEY FOUND - stopping"; exit 1; fi
 if grep -rIqE 'storePassword\s*=\s*"' "$PUB/app" ; then echo "PASSWORD FOUND - stopping"; exit 1; fi
 git add -A
 git commit -qm "${1:-Sync}" || { echo "nothing to publish"; exit 0; }

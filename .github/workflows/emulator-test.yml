@@ -37,19 +37,21 @@ jobs:
 
       - name: Put the signing key in place (from GitHub Secrets)
         env:
-          NOVA_KEYSTORE_B64: ${{ secrets.NOVA_KEYSTORE_B64 }}
+          NOVA_KEY_PASS: ${{ secrets.NOVA_KEY_PASS }}
         run: |
           mkdir -p keystore
-          if [ -n "$NOVA_KEYSTORE_B64" ]; then echo "$NOVA_KEYSTORE_B64" | base64 -d > keystore/nova-release.jks; fi
-          ls -la keystore | sed 's/^/  /'
+          # Public copy: the key is stored encrypted; the one secret NOVA_KEY_PASS opens it.
+          if [ ! -f keystore/nova-release.jks ] && [ -n "$NOVA_KEY_PASS" ]; then
+            for f in nova-release.jks signing.properties; do
+              openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "keystore-enc/$f.enc" -out "keystore/$f" -pass env:NOVA_KEY_PASS
+            done
+          fi
+          ls keystore | sed 's/^/  /'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build the APK
-        env:
-          NOVA_STORE_PASSWORD: ${{ secrets.NOVA_STORE_PASSWORD }}
-          NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon

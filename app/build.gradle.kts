@@ -20,8 +20,8 @@ android {
     signingConfigs {
         create("release") {
             // Fixed key so every build can install over the previous one. The key and its passwords are never in
-            // the public code: GitHub puts them in place from its hidden "Secrets" (NOVA_KEYSTORE_B64,
-            // NOVA_STORE_PASSWORD, NOVA_KEY_PASSWORD), or they come from keystore/signing.properties (private copy).
+            // the public code in clear: keystore-enc/ holds them encrypted, and GitHub opens them with the hidden
+            // secret NOVA_KEY_PASS into keystore/ (the private copy keeps keystore/ as it is).
             val local = java.util.Properties().apply {
                 val f = rootProject.file("keystore/signing.properties")
                 if (f.exists()) f.inputStream().use { load(it) }
