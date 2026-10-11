@@ -1251,9 +1251,13 @@ def double_ok_hide():
     try:
         tap("Films")
         time.sleep(3)
-        tap("Action", 15, exact=True)
-        adb("shell input keyevent 21")  # the remote takes over
-        time.sleep(2)
+        # Phone layout: the "Action" posters are already shown; ▼ moves the remote down onto them.
+        n = count_log(r"POSTERS focus in")
+        for _ in range(4):
+            key(20)
+            if count_log(r"POSTERS focus in") > n:
+                break
+        time.sleep(1)
         asked = count_log(r"HIDE ask")
         hidden = count_log(r"HIDDEN ")
         adb("shell input keyevent 23 23")
