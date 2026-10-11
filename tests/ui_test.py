@@ -1247,9 +1247,7 @@ steps = [
 
 def double_ok_hide():
     """Double OK (or double tap) on a poster asks "Hide …?"; No keeps it, Yes hides it. No code asked."""
-    adb("shell settings put system accelerometer_rotation 0")
-    adb("shell settings put system user_rotation 1")
-    time.sleep(4)
+    # Portrait: in landscape the emulator letterboxes the app and its pop-up windows don't get the keys.
     try:
         tap("Films")
         time.sleep(3)
@@ -1273,8 +1271,7 @@ def double_ok_hide():
         tap("Yes, hide", 5, exact=True)
         check("Yes hides it at once, without any code", wait_count(r"HIDDEN ", hidden + 1, 8) and find("Parental", 2) is None)
     finally:
-        adb("shell settings put system user_rotation 0")
-        time.sleep(4)
+        pass
 
 
 def open_link():
