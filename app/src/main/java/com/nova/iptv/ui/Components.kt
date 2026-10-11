@@ -50,6 +50,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
@@ -666,59 +669,64 @@ fun FooterStrip(clockPosition: String, showClock: Boolean = true) {
 
 /**
  * "Hide …?" after a double click on a poster: No (where the remote starts) / Yes, hide. No code asked.
- * A system dialog, because it reliably puts the remote on "No" on every TV box.
+ * Drawn over the posters in the same screen (not a separate window), so the remote always reaches it.
  */
 @Composable
 fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: () -> Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val latestYes by androidx.compose.runtime.rememberUpdatedState(onYes)
-    val latestDismiss by androidx.compose.runtime.rememberUpdatedState(onDismiss)
-    androidx.compose.runtime.DisposableEffect(name) {
+    val no = remember { androidx.compose.ui.focus.FocusRequester() }
+    var noFocused by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler { onDismiss() }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
         android.util.Log.i("NovaTest", "HIDE ask $name")
-        var yes = false
-        val dialog = android.app.AlertDialog.Builder(context, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Hide “$name”?")
-            .setMessage("It disappears from Films, Series, Search and Recent. You can show it again in Settings → Hidden items.")
-            .setNegativeButton("No", null)
-            .setPositiveButton("Yes, hide") { _, _ -> yes = true }
-            .create()
-        dialog.setOnDismissListener {
-            latestDismiss()
-            if (yes) latestYes()
-        }
-        // Remote keys while nothing is highlighted yet (some boxes start the window in touch mode):
-        // OK = "No", ◀ / ▶ / ▲ / ▼ put the highlight on "No" first.
-        dialog.setOnKeyListener { _, code, event ->
-            val no = dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)
-            val yesBtn = dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
-            val nothing = no?.isFocused != true && yesBtn?.isFocused != true
-            if (!nothing || event.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-            when (code) {
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                    android.util.Log.i("NovaTest", "HIDE ask: OK on No")
-                    dialog.dismiss(); true
-                }
-                android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
-                android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    no?.isFocusableInTouchMode = true
-                    no?.requestFocus(); true
-                }
-                else -> false
+        repeat(40) {
+            kotlinx.coroutines.delay(50)
+            if (noFocused) {
+                android.util.Log.i("NovaTest", "HIDE ask: remote on No")
+                return@LaunchedEffect
             }
+            runCatching { no.requestFocus() }
         }
-        dialog.setOnShowListener {
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)?.apply { isAllCaps = false; setTextColor(0xFFFF8A80.toInt()) }
-            dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)?.apply {
-                isAllCaps = false
-                isFocusableInTouchMode = false
-                requestFocus()
-                post { requestFocus(); android.util.Log.i("NovaTest", "HIDE ask: remote on No ($isFocused)") }
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xB3000000))
+            .pointerInput(Unit) { androidx.compose.foundation.gestures.detectTapGestures { onDismiss() } }
+            .focusProperties { exit = { androidx.compose.ui.focus.FocusRequester.Cancel } }
+            .focusGroup(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .padding(20.dp)
+                .widthIn(max = 540.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(22.dp))
+                .pointerInput(Unit) { androidx.compose.foundation.gestures.detectTapGestures { } }
+                .padding(20.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Logo(image, name, Modifier.width(54.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text("Hide “$name”?", fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "It disappears from Films, Series, Search and Recent. You can show it again in Settings → Hidden items.",
+                        fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        }
-        dialog.show()
-        onDispose {
-            dialog.setOnDismissListener(null)
-            if (dialog.isShowing) dialog.dismiss()
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FocusBox(
+                    onClick = onDismiss,
+                    modifier = Modifier.focusRequester(no).onFocusChanged { noFocused = it.isFocused },
+                    shape = RoundedCornerShape(20.dp),
+                ) { Text("No", fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp)) }
+                FocusBox(onClick = { onDismiss(); onYes() }, shape = RoundedCornerShape(20.dp)) {
+                    Text("Yes, hide", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                }
+            }
         }
     }
 }

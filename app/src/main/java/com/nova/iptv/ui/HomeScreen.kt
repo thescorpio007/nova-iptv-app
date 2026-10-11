@@ -930,18 +930,6 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
     val posterBack = rememberPosterReturn(vm, remember(shown) { shown.map { it.key } })
     // Double click / double OK on a poster: "Hide …?" (Yes / No).
     var hideAsk by remember { mutableStateOf<Movie?>(null) }
-    hideAsk?.let { item ->
-        HideAskDialog(item.name, item.icon, onYes = {
-            val i = shown.indexOf(item)
-            (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
-            vm.toggleItemHidden(z, item)
-        }, onDismiss = {
-            // "No": the remote goes back onto the same poster ("Yes" then moves it to the next one).
-            vm.restoreFocusKey.value = null
-            vm.restoreFocusKey.value = item.key
-            hideAsk = null
-        })
-    }
     val recent by vm.recent.collectAsStateWithLifecycle()
     val lastKey = recent.firstOrNull { it.type == ItemType.MOVIE }?.key
     val listState = rememberLazyListState()
@@ -1014,6 +1002,19 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
             }
         }
     }
+    // Drawn last: on top of the posters.
+    hideAsk?.let { item ->
+        HideAskDialog(item.name, item.icon, onYes = {
+            val i = shown.indexOf(item)
+            (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
+            vm.toggleItemHidden(z, item)
+        }, onDismiss = {
+            // "No": the remote goes back onto the same poster ("Yes" then moves it to the next one).
+            vm.restoreFocusKey.value = null
+            vm.restoreFocusKey.value = item.key
+            hideAsk = null
+        })
+    }
 }
 
 @Composable
@@ -1033,18 +1034,6 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
     val posterBack = rememberPosterReturn(vm, remember(shown) { shown.map { it.key } })
     // Double click / double OK on a poster: "Hide …?" (Yes / No).
     var hideAsk by remember { mutableStateOf<Series?>(null) }
-    hideAsk?.let { item ->
-        HideAskDialog(item.name, item.cover, onYes = {
-            val i = shown.indexOf(item)
-            (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
-            vm.toggleItemHidden(z, item)
-        }, onDismiss = {
-            // "No": the remote goes back onto the same poster ("Yes" then moves it to the next one).
-            vm.restoreFocusKey.value = null
-            vm.restoreFocusKey.value = item.key
-            hideAsk = null
-        })
-    }
     val listState = rememberLazyListState()
     val follow = rememberFollow(listState)
     val keepInPlace = rememberKeepInPlace(listState)
@@ -1113,6 +1102,19 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
                 )
             }
         }
+    }
+    // Drawn last: on top of the posters.
+    hideAsk?.let { item ->
+        HideAskDialog(item.name, item.cover, onYes = {
+            val i = shown.indexOf(item)
+            (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
+            vm.toggleItemHidden(z, item)
+        }, onDismiss = {
+            // "No": the remote goes back onto the same poster ("Yes" then moves it to the next one).
+            vm.restoreFocusKey.value = null
+            vm.restoreFocusKey.value = item.key
+            hideAsk = null
+        })
     }
 }
 
