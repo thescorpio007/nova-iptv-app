@@ -1288,7 +1288,7 @@ def open_link():
     tap("Link", 15)
     check("Open link: the link is listed under Recent links", find("301.mp4", 10) is not None)
     adb(f"shell am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "
-        f"'Watch this {SERVER}/movie/alice/secret/302.mp4' -n {PKG}/.ui.OpenWithActivity")
+        f"Watch:{SERVER}/movie/alice/secret/302.mp4 -n {PKG}/.ui.OpenWithActivity")
     check("Share → Nova: the choice window opens", wait_log(r"SHARE received link", 15) and find("Play now", 10) is not None)
     shot("share-choice")
     tap("Download only", 10)

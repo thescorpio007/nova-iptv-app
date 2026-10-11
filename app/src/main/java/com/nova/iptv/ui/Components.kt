@@ -683,17 +683,21 @@ fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: ()
             }
         },
         dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss, modifier = Modifier.focusRequester(no)) { Text("No") }
-            // The remote starts on "No" (retry until the dialog window is ready to take the focus).
+            var noFocused by remember { mutableStateOf(false) }
+            androidx.compose.material3.TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.focusRequester(no).onFocusChanged { noFocused = it.isFocused },
+            ) { Text("No") }
+            // The remote starts on "No": keep asking until the button really has the focus (the dialog window
+            // takes a moment to be ready).
             androidx.compose.runtime.LaunchedEffect(Unit) {
-                repeat(20) {
-                    kotlinx.coroutines.delay(50)
-                    if (runCatching { no.requestFocus() }.isSuccess) {
-                        kotlinx.coroutines.delay(50)
-                        runCatching { no.requestFocus() }
+                repeat(40) {
+                    kotlinx.coroutines.delay(75)
+                    if (noFocused) {
                         android.util.Log.i("NovaTest", "HIDE ask: remote on No")
                         return@LaunchedEffect
                     }
+                    runCatching { no.requestFocus() }
                 }
             }
         },
