@@ -44,7 +44,11 @@ jobs:
               openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "keystore-enc/$f.enc" -out "keystore/$f" -pass env:NOVA_KEY_PASS
             done
           fi
-          ls keystore | sed 's/^/  /'
+          if [ ! -f keystore/nova-release.jks ]; then
+            echo "::error title=Signing key missing::The NOVA_KEY_PASS secret is $( [ -n "$NOVA_KEY_PASS" ] && echo "set (${#NOVA_KEY_PASS} characters) but did not open the key" || echo "NOT set in this repository")"
+            exit 1
+          fi
+          echo "::notice title=Signing key::ready"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
