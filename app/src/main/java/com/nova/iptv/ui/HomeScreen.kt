@@ -935,7 +935,12 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
             val i = shown.indexOf(item)
             (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
             vm.toggleItemHidden(z, item)
-        }, onDismiss = { hideAsk = null })
+        }, onDismiss = {
+            // "No": the remote goes back onto the same poster ("Yes" then moves it to the next one).
+            vm.restoreFocusKey.value = null
+            vm.restoreFocusKey.value = item.key
+            hideAsk = null
+        })
     }
     val recent by vm.recent.collectAsStateWithLifecycle()
     val lastKey = recent.firstOrNull { it.type == ItemType.MOVIE }?.key
@@ -1033,7 +1038,12 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
             val i = shown.indexOf(item)
             (shown.getOrNull(i + 1) ?: shown.getOrNull(i - 1))?.let { vm.restoreFocusKey.value = it.key }
             vm.toggleItemHidden(z, item)
-        }, onDismiss = { hideAsk = null })
+        }, onDismiss = {
+            // "No": the remote goes back onto the same poster ("Yes" then moves it to the next one).
+            vm.restoreFocusKey.value = null
+            vm.restoreFocusKey.value = item.key
+            hideAsk = null
+        })
     }
     val listState = rememberLazyListState()
     val follow = rememberFollow(listState)

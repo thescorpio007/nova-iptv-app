@@ -692,7 +692,7 @@ fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: ()
                 isAllCaps = false
                 isFocusableInTouchMode = false
                 requestFocus()
-                post { requestFocus(); if (isFocused) android.util.Log.i("NovaTest", "HIDE ask: remote on No") }
+                post { requestFocus(); android.util.Log.i("NovaTest", "HIDE ask: remote on No ($isFocused)") }
             }
         }
         dialog.show()
