@@ -108,7 +108,7 @@ class Storage(context: Context) {
         set(value) = prefs.edit().putBoolean("open_group_on_focus", value).apply()
 
     /** Sort order per zone ("live", "movie", "series"): custom, added, year, name, rating, number. */
-    fun sortFor(zone: String): String = prefs.getString("sort_$zone", if (zone == "movie") "added" else "custom")
+    fun sortFor(zone: String): String = prefs.getString("sort_$zone", if (zone == "movie") "rating" else "custom")
         ?: "custom"
     fun setSortFor(zone: String, value: String) = prefs.edit().putString("sort_$zone", value).apply()
 
@@ -151,7 +151,7 @@ class Storage(context: Context) {
 
     /** Disk read-ahead for films & series in MB (0 = off): one connection fills segments ahead of the player. */
     var readAheadMb: Int
-        get() = prefs.getInt("read_ahead_mb", 200)
+        get() = prefs.getInt("read_ahead_mb", 100)
         set(value) = prefs.edit().putInt("read_ahead_mb", value).apply()
 
     /** How see-through the overlays over live TV are (group list, recent bar), in %. */
