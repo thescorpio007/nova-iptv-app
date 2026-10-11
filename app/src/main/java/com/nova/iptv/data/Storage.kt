@@ -236,6 +236,8 @@ class Storage(context: Context) {
      */
     fun has(key: String): Boolean = prefs.contains(key)
 
+    fun markDone(key: String) = prefs.edit().putBoolean(key, true).apply()
+
     fun resetSettings() {
         val keep = setOf(
             "accounts", "active_account", "favorites_v2", "recent_v2", "org", "downloads",

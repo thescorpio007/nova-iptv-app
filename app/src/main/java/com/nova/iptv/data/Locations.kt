@@ -60,7 +60,25 @@ object Locations {
         this.appContext = context.applicationContext
         this.storage = storage
         migrate()
+        applyHouseDefaults()
     }
+
+    /**
+     * Once (also after restoring an older backup): internal storage Download/NovaIPTV as the main place,
+     * backups and buffers "Same as main", films sorted by rating, 100 MB disk read-ahead.
+     */
+    private fun applyHouseDefaults() {
+        if (storage.has(HOUSE_DEFAULTS)) return
+        set(Kind.MAIN, Location("internal", "Download/NovaIPTV"))
+        set(Kind.BACKUPS, Location("main"))
+        set(Kind.BUFFERS, Location("main"))
+        storage.setSortFor("movie", "rating")
+        storage.readAheadMb = 100
+        storage.markDone(HOUSE_DEFAULTS)
+        android.util.Log.i("NovaTest", "DEFAULTS applied: internal storage, rating sort, 100 MB read-ahead")
+    }
+
+    private const val HOUSE_DEFAULTS = "house_defaults_1"
 
     // ------------------------------------------------------------------ saved settings
 
@@ -79,10 +97,8 @@ object Locations {
     }
 
     private fun defaultFor(k: Kind): Location = when (k) {
-        // Nova's default: any USB / SD drive (whichever is plugged in), internal storage when there is none.
-        Kind.MAIN -> Location("any_usb", "NovaIPTV")
-        // Buffers on the box's own fast storage (saves the USB stick from constant writing).
-        Kind.BUFFERS -> Location("cache")
+        // Nova's default: the box's internal storage, Download/NovaIPTV; everything else follows it.
+        Kind.MAIN -> Location("internal", "Download/NovaIPTV")
         else -> Location("main")
     }
 

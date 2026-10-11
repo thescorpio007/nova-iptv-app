@@ -1449,6 +1449,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Replaces everything with the backup's content and reloads the app. */
     fun restoreBackup(text: String) {
         storage.importBackup(text)
+        com.nova.iptv.data.Locations.init(getApplication(), storage) // older backups: internal storage, rating sort, 100 MB
         Folders.customRoot = storage.storageRoot
         DownloadCenter.init(storage)
         accounts.value = storage.accounts
