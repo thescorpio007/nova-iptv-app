@@ -1,0 +1,318 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+
+namespace Nova.Core.Tests
+{
+    /// <summary>Answers API calls with prepared JSON, chosen by the "action" in the address.</summary>
+    internal class FakeServer : HttpMessageHandler
+    {
+        public readonly Dictionary<string, string> Answers = new Dictionary<string, string>();
+        public readonly List<string> Requests = new List<string>();
+        public string LastUserAgent;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var url = request.RequestUri.AbsoluteUri; // exactly as sent (ToString() would un-escape it)
+            Requests.Add(url);
+            IEnumerable<string> ua;
+            if (request.Headers.TryGetValues("User-Agent", out ua)) LastUserAgent = string.Join(" ", ua);
+            var q = request.RequestUri.Query;
+            var action = "";
+            foreach (var part in q.TrimStart('?').Split('&'))
+                if (part.StartsWith("action=")) action = part.Substring(7);
+            string body;
+            if (!Answers.TryGetValue(action, out body))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    internal static partial class Program
+    {
+        private static int _passed, _failed;
+
+        private static void Check(bool ok, string what)
+        {
+            if (ok) { _passed++; }
+            else { _failed++; Console.WriteLine("FAIL: " + what); }
+        }
+
+        private static void Eq<T>(T expected, T actual, string what)
+        {
+            Check(EqualityComparer<T>.Default.Equals(expected, actual), what + " — expected <" + expected + "> got <" + actual + ">");
+        }
+
+        private static readonly Account Acc = new Account { Id = "a1", Name = "Main", Server = "http://host.tv:8080/", Username = "user name", Password = "p@ss" };
+
+        private static int Main()
+        {
+            Run("Server addresses", ServerAddresses);
+            Run("Pasted links", PastedLinks);
+            Run("Login", () => Login().GetAwaiter().GetResult());
+            Run("Lists", () => Lists().GetAwaiter().GetResult());
+            Run("Series info", SeriesInfoParsing);
+            Run("Film info", FilmInfo);
+            Run("Guide", Guide);
+            Run("Ratings, years, durations", Helpers);
+            Run("Storage", Storage);
+            Run("Catalog and search", () => CatalogSearch().GetAwaiter().GetResult());
+            RunStreamingTests();
+            Console.WriteLine();
+            Console.WriteLine("Passed: " + _passed + "   Failed: " + _failed);
+            return _failed == 0 ? 0 : 1;
+        }
+
+        private static void Run(string name, Action test)
+        {
+            Console.WriteLine("== " + name);
+            try { test(); }
+            catch (Exception e) { _failed++; Console.WriteLine("FAIL: " + name + " threw " + e); }
+        }
+
+        private static void ServerAddresses()
+        {
+            Eq("http://host.tv:8080", XtreamApi.NormalizeServer("host.tv:8080/"), "adds http, drops slash");
+            Eq("http://host.tv:80", XtreamApi.NormalizeServer("http://host.tv:80/player_api.php?username=x"), "drops api page and query");
+            Eq("https://h.tv", XtreamApi.NormalizeServer(" https://h.tv/get.php "), "https kept, get.php dropped");
+            Eq("http://host.tv:8080/live/user%20name/p%40ss/42.ts", XtreamApi.LiveUrl(Acc, "42", "ts"), "live address escapes login");
+            Eq("http://host.tv:8080/movie/user%20name/p%40ss/7.mkv", XtreamApi.MovieUrl(Acc, "7", "mkv"), "film address");
+            Eq("http://host.tv:8080/series/user%20name/p%40ss/9.mp4", XtreamApi.EpisodeUrl(Acc, "9", "mp4"), "episode address");
+        }
+
+        private static void PastedLinks()
+        {
+            string s, u, p;
+            Check(XtreamApi.TryParseLink("http://abc.com:8080/get.php?username=joe&password=123&type=m3u_plus", out s, out u, out p), "m3u link recognised");
+            Eq("http://abc.com:8080", s, "server from link");
+            Eq("joe", u, "user from link");
+            Eq("123", p, "password from link");
+            Check(XtreamApi.TryParseLink("http://abc.com/get.php?username=a&password=b", out s, out u, out p) && s == "http://abc.com", "default port hidden");
+            Check(!XtreamApi.TryParseLink("http://abc.com:8080", out s, out u, out p), "plain server is not a link");
+        }
+
+        private static async Task Login()
+        {
+            var fake = new FakeServer();
+            var api = new XtreamApi(() => "UA-test", fake);
+            fake.Answers[""] = "{\"user_info\":{\"auth\":1,\"status\":\"Active\",\"exp_date\":\"1893456000\",\"max_connections\":\"1\",\"active_cons\":0,\"is_trial\":\"0\"}}";
+            var info = await api.Authenticate(Acc);
+            Eq("Active", info.Status, "status");
+            Eq(1893456000L, info.ExpDate ?? 0, "expiry");
+            Eq("1", info.MaxConnections, "max connections");
+            Eq("0", info.ActiveConnections, "active connections (number sent as number)");
+            Eq("UA-test", fake.LastUserAgent, "user agent sent");
+            Check(fake.Requests[0].Contains("username=user%20name") && fake.Requests[0].Contains("password=p%40ss"), "login escaped in API address");
+
+            fake.Answers[""] = "{\"user_info\":{\"auth\":0}}";
+            var wrong = false;
+            try { await api.Authenticate(Acc); } catch (NovaException e) { wrong = e.Message.Contains("Wrong username"); }
+            Check(wrong, "wrong password reported");
+
+            fake.Answers[""] = "<html>not xtream</html>";
+            var bad = false;
+            try { await api.Authenticate(Acc); } catch (NovaException) { bad = true; }
+            Check(bad, "non-JSON answer reported as a readable error");
+
+            fake.Answers[""] = "{\"user_info\":{\"auth\":\"1\",\"exp_date\":null,\"status\":\"Active\"}}";
+            info = await api.Authenticate(Acc);
+            Check(info.ExpDate == null, "unlimited account has no expiry");
+        }
+
+        private static async Task Lists()
+        {
+            var fake = new FakeServer();
+            var api = new XtreamApi(() => "UA", fake);
+            fake.Answers["get_live_categories"] = "[{\"category_id\":\"1\",\"category_name\":\"News\"},{\"category_id\":2,\"category_name\":null},{\"category_name\":\"no id\"}]";
+            var cats = await api.Categories(Acc, ContentType.Live);
+            Eq(2, cats.Count, "categories without id skipped");
+            Eq("2", cats[1].Id, "numeric id read as text");
+            Eq("Unnamed", cats[1].Name, "missing name");
+            Eq("a1|1", cats[0].Key, "category key has account");
+
+            fake.Answers["get_live_streams"] = "[{\"num\":\"3\",\"name\":\"BBC\",\"stream_id\":101,\"stream_icon\":\"\",\"category_id\":\"1\",\"tv_archive\":1,\"added\":\"1700000000\"}," +
+                "{\"num\":4.0,\"name\":\"CNN\",\"stream_id\":\"102\",\"stream_icon\":\"http://x/y.png\",\"category_id\":\"1\",\"tv_archive\":\"0\",\"added\":null}]";
+            var ch = await api.LiveStreams(Acc, "1");
+            Eq(2, ch.Count, "two channels");
+            Eq(3, ch[0].Num, "number from text");
+            Eq(4, ch[1].Num, "number from decimal");
+            Check(ch[0].Icon == null, "empty icon is null");
+            Check(ch[0].HasArchive && !ch[1].HasArchive, "catch-up flag");
+            Eq(1700000000L, ch[0].Added, "added time");
+            Check(fake.Requests.Last().Contains("category_id=1"), "group asked for");
+
+            // Some servers send an object map instead of an array, or nothing at all.
+            fake.Answers["get_vod_streams"] = "{\"0\":{\"stream_id\":\"7\",\"name\":\"Film (2019)\",\"rating\":\"7.5\",\"container_extension\":\"mkv\"},\"1\":{\"stream_id\":\"8\",\"name\":\"Other\",\"rating_5based\":4}}";
+            var films = await api.Movies(Acc, null);
+            Eq(2, films.Count, "object map accepted");
+            Eq("mkv", films[0].Extension, "container");
+            Eq("7.5", films[0].Rating, "rating");
+            Eq("8", films[1].Rating, "rating from 5-star scale");
+            Eq(2019, films[0].Year ?? 0, "year from name");
+            Eq("mp4", films[1].Extension, "default container");
+
+            fake.Answers["get_series"] = "null";
+            Eq(0, (await api.SeriesList(Acc, null)).Count, "null list = empty");
+            fake.Answers["get_series"] = "[]";
+            Eq(0, (await api.SeriesList(Acc, null)).Count, "empty list");
+            fake.Answers["get_series"] = "[{\"series_id\":5,\"name\":\"Show\",\"cover\":\"c.jpg\",\"plot\":\"p\",\"rating\":\"85\",\"last_modified\":\"1600000000\",\"releaseDate\":\"2011-04-17\"}]";
+            var series = await api.SeriesList(Acc, null);
+            Eq("8.5", series[0].Rating, "rating out of 100 scaled");
+            Eq(2011, series[0].Year ?? 0, "year from release date");
+            Eq(1600000000L, series[0].Added, "last modified as added");
+        }
+
+        private static void SeriesInfoParsing()
+        {
+            var s = new Series { AccountId = "a1", SeriesId = "5", Name = "Show" };
+            var root = JObject.Parse("{\"info\":{\"cover\":\"cov.jpg\",\"plot\":\"Plot!\",\"genre\":\"Drama\",\"cast\":\"A, B\",\"director\":\"D\",\"episode_run_time\":\"45\",\"backdrop_path\":[\"bd.jpg\"],\"youtube_trailer\":\"abc\"}," +
+                "\"episodes\":{\"2\":[{\"id\":\"21\",\"episode_num\":\"2\",\"title\":\"S2E2\",\"container_extension\":\"mkv\"},{\"id\":\"20\",\"episode_num\":1,\"title\":\"S2E1\",\"info\":{\"plot\":\"ep plot\",\"movie_image\":\"e.jpg\"}}]," +
+                "\"1\":[{\"id\":\"10\",\"episode_num\":\"1\",\"title\":\"S1E1\"}]}}");
+            var info = XtreamApi.ParseSeriesInfo(s, root);
+            Check(info.Seasons.SequenceEqual(new[] { 1, 2 }), "seasons sorted");
+            Eq("20", info.Episodes[2][0].Id, "episodes sorted by number");
+            Eq("ep plot", info.Episodes[2][0].Plot, "episode plot");
+            Eq("mkv", info.Episodes[2][1].Extension, "episode container");
+            Eq("cov.jpg", info.Series.Cover, "cover filled from info");
+            Eq("45m / episode", info.Details.Duration, "run time");
+            Eq("bd.jpg", info.Details.Backdrop, "backdrop from array");
+            Eq("https://www.youtube.com/watch?v=abc", info.Details.TrailerUrl, "trailer address");
+
+            // Array of seasons form.
+            var root2 = JObject.Parse("{\"episodes\":[[{\"id\":\"1\",\"season\":\"3\",\"episode_num\":\"1\"}]]}");
+            var info2 = XtreamApi.ParseSeriesInfo(new Series { AccountId = "a1", SeriesId = "6", Name = "X", Plot = "pp" }, root2);
+            Check(info2.Seasons.SequenceEqual(new[] { 3 }), "season from episode");
+            Eq("pp", info2.Plot, "plot falls back to list plot");
+        }
+
+        private static void FilmInfo()
+        {
+            var d = XtreamApi.DetailsOf(JObject.Parse("{\"plot\":\"P\",\"director\":\"Dir\",\"actors\":\"X, Y\",\"genre\":\"Action\",\"releasedate\":\"2020-01-02\",\"duration\":\"01:24:00\",\"rating\":\"6,8\",\"movie_image\":\"m.jpg\",\"backdrop_path\":\"b.jpg\",\"trailer\":\"https://youtu.be/q\"}"));
+            Eq("P", d.Plot, "plot");
+            Eq("X, Y", d.Cast, "actors as cast");
+            Eq("1h 24m", d.Duration, "hh:mm:ss duration");
+            Eq(6.8, d.Rating ?? 0, "comma decimal rating");
+            Eq("b.jpg", d.Backdrop, "backdrop as text");
+            Eq("https://youtu.be/q", d.TrailerUrl, "full trailer address kept");
+            var d2 = XtreamApi.DetailsOf(JObject.Parse("{\"duration_secs\":5400}"));
+            Eq("1h 30m", d2.Duration, "duration from seconds");
+        }
+
+        private static void Guide()
+        {
+            Func<string, string> b64 = s => Convert.ToBase64String(Encoding.UTF8.GetBytes(s));
+            var root = JObject.Parse("{\"epg_listings\":[{\"title\":\"" + b64("Later") + "\",\"description\":\"" + b64("d2") + "\",\"start_timestamp\":\"2000\",\"stop_timestamp\":\"3000\"}," +
+                "{\"title\":\"" + b64("Now — Arabic عربي") + "\",\"description\":\"\",\"start_timestamp\":1000,\"stop_timestamp\":2000},{\"title\":\"x\"}]}");
+            var list = XtreamApi.ParseEpg(root);
+            Eq(2, list.Count, "entries without times skipped");
+            Eq("Now — Arabic عربي", list[0].Title, "base64 UTF-8 title, sorted");
+            EpgEntry now, next;
+            XtreamApi.NowNext(list, 1500 * 1000L, out now, out next);
+            Eq("Now — Arabic عربي", now == null ? null : now.Title, "now");
+            Eq("Later", next == null ? null : next.Title, "next");
+            Eq(0.5, list[0].Progress(1500 * 1000L), "progress");
+            var plain = XtreamApi.ParseEpg(JObject.Parse("{\"epg_listings\":[{\"title\":\"not base64!\",\"start_timestamp\":1,\"stop_timestamp\":2}]}"));
+            Eq("not base64!", plain[0].Title, "plain text title kept");
+        }
+
+        private static void Helpers()
+        {
+            Eq("1h 05m", XtreamApi.FormatMinutes(65), "minutes format");
+            Eq("45m", XtreamApi.FormatMinutes(45), "short minutes");
+            Eq("2h 00m", XtreamApi.FormatDuration("120 min"), "minutes text");
+            Eq(1999, XtreamApi.YearFromName("Matrix [1999] HD") ?? 0, "year in brackets");
+            Check(XtreamApi.YearFromName("Blade Runner 2049x") == null, "no year glued to text");
+            Eq(2049, XtreamApi.YearFromName("Blade Runner 2049") ?? 0, "year at end");
+        }
+
+        private static void Storage()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "nova-test-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var st = new Store(dir, Path.Combine(dir, "cache"));
+                Eq(0, st.Accounts.Count, "starts empty");
+                var a = new Account { Name = "One", Server = "http://s", Username = "u", Password = "p" };
+                st.SaveAccount(a);
+                Check(!string.IsNullOrEmpty(a.Id), "id given");
+                var fav = SavedItem.Of(new LiveChannel { AccountId = a.Id, StreamId = "9", Name = "Ch" });
+                Check(st.ToggleFavorite(fav), "favorite added");
+                var s = st.Settings.Copy(); s.LiveFormat = "m3u8"; st.SaveSettings(s);
+                st.SaveAccount(a); // second save creates the .bak copy
+
+                var again = new Store(dir, Path.Combine(dir, "cache"));
+                Eq(1, again.Accounts.Count, "account kept");
+                Eq("m3u8", again.Settings.LiveFormat, "setting kept");
+                Check(again.IsFavorite(fav), "favorite kept");
+                Eq(1, again.FavoritesOf(ItemType.Live).Count, "favorites by type");
+                var json = File.ReadAllText(Path.Combine(dir, "favorites.json"));
+                Check(json.Contains("\"accountId\"") && json.Contains("\"savedAt\""), "favorites use the Android field names");
+
+                File.WriteAllText(Path.Combine(dir, "accounts.json"), "{ broken");
+                var recovered = new Store(dir, Path.Combine(dir, "cache"));
+                Eq(1, recovered.Accounts.Count, "damaged file recovered from .bak");
+
+                recovered.RemoveAccount(a.Id);
+                Eq(0, recovered.Favorites.Count, "removing an account removes its favorites");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+
+        private static async Task CatalogSearch()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "nova-test-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var st = new Store(dir, Path.Combine(dir, "cache"));
+                st.SaveAccount(new Account { Id = "a1", Name = "One", Server = "http://s1", Username = "u", Password = "p" });
+                var fake = new FakeServer();
+                var cat = new Catalog(new XtreamApi(() => "UA", fake), st);
+                fake.Answers["get_live_categories"] = "[{\"category_id\":\"1\",\"category_name\":\"News\"}]";
+                fake.Answers["get_live_streams"] = "[{\"stream_id\":1,\"name\":\"BBC News\"},{\"stream_id\":2,\"name\":\"Sky News HD\"},{\"stream_id\":3,\"name\":\"Cartoon\"}]";
+                fake.Answers["get_vod_streams"] = "[{\"stream_id\":5,\"name\":\"The News Movie\"}]";
+                fake.Answers["get_series"] = "[]";
+
+                var sections = await cat.Sections(ContentType.Live);
+                Eq(1, sections.Count, "one section per account");
+                Eq("News", sections[0].Groups[0].Name, "group loaded");
+                var before = fake.Requests.Count;
+                await cat.Sections(ContentType.Live);
+                Eq(before, fake.Requests.Count, "groups cached");
+
+                var res = await cat.Search("news", 50, CancellationToken.None);
+                Eq(2, res.Channels.Count, "channels found");
+                Eq("BBC News", res.Channels[0].Name, "sorted by name");
+                Eq(1, res.Movies.Count, "films found");
+                var res2 = await cat.Search("sky hd", 50, CancellationToken.None);
+                Eq(1, res2.Channels.Count, "all words must match");
+
+                fake.Answers.Remove("get_series");
+                cat.Clear();
+                var res3 = await cat.Search("news", 50, CancellationToken.None);
+                Eq(1, res3.Errors.Count, "a failing list is reported, others still found");
+                Eq(2, res3.Channels.Count, "channels still found");
+
+                fake.Answers.Remove("get_vod_categories");
+                var films = await cat.Sections(ContentType.Movie);
+                Check(films[0].Error != null, "group error kept per account");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+    }
+}

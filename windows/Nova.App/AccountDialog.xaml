@@ -1,0 +1,31 @@
+<Window x:Class="Nova.App.AccountDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Account" Icon="Assets/nova.ico"
+        Background="{StaticResource Surface}" Foreground="{StaticResource TextBrush}" FontFamily="Segoe UI" FontSize="14"
+        Width="560" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False" UseLayoutRounding="True">
+    <StackPanel Margin="28,22,28,24">
+        <TextBlock x:Name="Heading" Text="Add account" FontSize="22" FontWeight="Bold" Foreground="{StaticResource Accent}"/>
+        <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,16"
+                   Text="Tip: paste your full M3U / Xtream link into Server and the other fields fill in by themselves."/>
+
+        <TextBlock Text="Name (optional)" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
+        <TextBox x:Name="NameBox" Margin="0,0,0,12"/>
+        <TextBlock Text="Server, e.g. http://example.com:8080" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
+        <TextBox x:Name="ServerBox" Margin="0,0,0,12" TextChanged="OnServerChanged"/>
+        <TextBlock Text="Username" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
+        <TextBox x:Name="UserBox" Margin="0,0,0,12"/>
+        <TextBlock Text="Password" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
+        <TextBox x:Name="PassBox" Margin="0,0,0,8"/>
+
+        <TextBlock x:Name="Status" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="14"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button x:Name="SaveAnyway" Style="{StaticResource FlatButton}" Content="Save without checking" Margin="0,0,10,0"
+                    Visibility="Collapsed" Click="OnSaveAnyway"/>
+            <Button Style="{StaticResource NovaButton}" Content="Cancel" Margin="0,0,10,0" IsCancel="True" MinWidth="90"/>
+            <Button x:Name="SignIn" Style="{StaticResource AccentButton}" Content="Sign in" IsDefault="True" MinWidth="110" Click="OnSignIn"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

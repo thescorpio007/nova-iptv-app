@@ -1,0 +1,148 @@
+name: Emulator test
+
+# Runs the app on an Android emulator against a fake Xtream server.
+# Results (report, screenshots, logcat) are pushed to the "ci-tests" branch.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "full = every test (~75 min), short = opens, signs in and restarts (~10 min), stuck = stuck-picture check"
+        default: full
+  workflow_run:
+    workflows: ["Build APK"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ (github.event.inputs.mode || 'short') == 'full' && 75 || 20 }}
+    env:
+      ANDROID_USER_HOME: /home/runner/.android
+      ANDROID_AVD_HOME: /mnt/avd
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Put the signing key in place (from GitHub Secrets)
+        env:
+          NOVA_KEYSTORE_B64: ${{ secrets.NOVA_KEYSTORE_B64 }}
+        run: |
+          mkdir -p keystore
+          if [ -n "$NOVA_KEYSTORE_B64" ]; then echo "$NOVA_KEYSTORE_B64" | base64 -d > keystore/nova-release.jks; fi
+          ls -la keystore | sed 's/^/  /'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the APK
+        env:
+          NOVA_STORE_PASSWORD: ${{ secrets.NOVA_STORE_PASSWORD }}
+          NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Make test videos
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+          mkdir -p tests/media
+          ffmpeg -loglevel error -f lavfi -i testsrc=size=1280x720:rate=25 \
+            -f lavfi -i sine=frequency=440:sample_rate=48000 -t 90 \
+            -c:v libx264 -preset veryfast -pix_fmt yuv420p -g 25 -c:a aac -b:a 128k \
+            -f mpegts tests/media/sample.ts
+          ffmpeg -loglevel error -f lavfi -i testsrc2=size=1280x720:rate=25 \
+            -f lavfi -i sine=frequency=660:sample_rate=48000 -t 60 \
+            -c:v libx264 -preset veryfast -pix_fmt yuv420p -g 25 -c:a aac -b:a 128k \
+            -movflags +faststart tests/media/sample.mp4
+          # A live stream whose picture stops after 20 s while the sound and data keep coming (stuck picture).
+          ffmpeg -loglevel error -i tests/media/sample.ts -t 20 -map 0 -c copy -streamid 0:256 -streamid 1:257 -f mpegts tests/media/part1.ts
+          ffmpeg -loglevel error -copyts -ss 20 -i tests/media/sample.ts -map 0:a -c copy -streamid 0:257 -f mpegts tests/media/part2.ts
+          cat tests/media/part1.ts tests/media/part2.ts > tests/media/stuck.ts
+          # An MKV with its index (Cues) at the end, like most provider films.
+          ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy tests/media/sample.mkv
+          ls -la tests/media
+
+      - name: Start the fake Xtream server
+        run: |
+          nohup python3 tests/mock_xtream.py > mock.log 2>&1 &
+          sleep 2
+          curl -s "http://127.0.0.1:8080/player_api.php?username=alice&password=x" | head -c 300; echo
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install the emulator
+        run: |
+          mkdir -p results
+          # The main disk is nearly full; free some space and keep the emulator on /mnt.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift "$ANDROID_HOME/ndk" || true
+          sudo mkdir -p /mnt/avd && sudo chown -R "$USER" /mnt/avd
+          df -h / /mnt
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          {
+            echo "ANDROID_HOME=$ANDROID_HOME"; ls "$ANDROID_HOME/cmdline-tools" || true
+            yes | "$SDKM" --licenses > /dev/null || true
+            mkdir -p "$ANDROID_AVD_HOME"
+            "$SDKM" --install "emulator" "platform-tools" "system-images;android-33;aosp_atd;x86_64" > /dev/null 2>&1
+            echo no | "$AVDM" create avd -n test -k "system-images;android-33;aosp_atd;x86_64" -d pixel_6 --force 2>&1 | tail -5
+            "$ANDROID_HOME/emulator/emulator" -list-avds
+          } > results/install.txt 2>&1
+          cat results/install.txt
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -q '^test$'
+
+      - name: Start the emulator
+        run: |
+          mkdir -p results
+          export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
+          { ls -la /dev/kvm; emulator -accel-check; nproc; free -m; } > results/kvm.txt 2>&1 || true
+          cat results/kvm.txt
+          nohup emulator -avd test -no-window -no-snapshot -no-audio -no-boot-anim \
+            -gpu swiftshader_indirect -camera-back none -camera-front none -cores 2 -memory 3072 -partition-size 2048 \
+            > results/emulator.log 2>&1 &
+          timeout 300 adb wait-for-device || { echo "emulator did not appear"; exit 1; }
+          booted=0
+          for i in $(seq 1 120); do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then booted=1; break; fi
+            sleep 5
+          done
+          echo "booted=$booted after $((i*5)) s" | tee -a results/kvm.txt
+          [ "$booted" = "1" ]
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell input keyevent 82
+
+      - name: Run the app tests
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          NOVA_MODE="${{ github.event.inputs.mode || 'short' }}" python3 tests/ui_test.py app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish test results
+        if: always()
+        run: |
+          mkdir -p results
+          cp mock.log results/ 2>/dev/null || true
+          git config user.name "test-bot"
+          git config user.email "test-bot@users.noreply.github.com"
+          git checkout --orphan ci-tests
+          git rm -rf --cached . > /dev/null
+          git add -f results
+          git commit -m "Emulator test results, run ${{ github.run_number }}"
+          git push -f origin ci-tests

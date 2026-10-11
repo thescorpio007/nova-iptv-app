@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Nova IPTV core: Xtream API, models, storage. No user interface, so it can be tested on its own. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <RootNamespace>Nova.Core</RootNamespace>
+    <AssemblyName>Nova.Core</AssemblyName>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <InternalsVisibleTo Include="Nova.Core.Tests" />
+  </ItemGroup>
+
+</Project>

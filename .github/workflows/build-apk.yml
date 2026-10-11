@@ -1,0 +1,93 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+    # The Windows app has its own build (windows-build.yml).
+    paths-ignore:
+      - 'windows/**'
+      - 'docs/**'
+      - '.github/workflows/windows-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The GitHub Ubuntu runner already contains the Android SDK (ANDROID_HOME).
+      - name: Check Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME" || true
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Put the signing key in place (from GitHub Secrets)
+        env:
+          NOVA_KEYSTORE_B64: ${{ secrets.NOVA_KEYSTORE_B64 }}
+        run: |
+          mkdir -p keystore
+          if [ -n "$NOVA_KEYSTORE_B64" ]; then echo "$NOVA_KEYSTORE_B64" | base64 -d > keystore/nova-release.jks; fi
+          ls -la keystore | sed 's/^/  /'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the APK
+        env:
+          NOVA_STORE_PASSWORD: ${{ secrets.NOVA_STORE_PASSWORD }}
+          NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEY_PASSWORD }}
+        id: build
+        run: |
+          chmod +x gradlew
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+          mkdir -p out
+          cp app/build/outputs/apk/release/*.apk out/NovaIPTV.apk
+
+      # When the build fails, report the important lines as annotations and keep the full
+      # log on a "ci-logs" branch, so the errors can be read without the Actions log viewer.
+      - name: Report build errors
+        if: failure()
+        run: |
+          touch build.log
+          grep -nE "^e: |error:|What went wrong|Could not|FAILURE|Unresolved|Exception" build.log | head -60 > errors.txt || true
+          if [ ! -s errors.txt ]; then tail -60 build.log > errors.txt; fi
+          msg=$(sed -e 's/%/%25/g' errors.txt | awk 'BEGIN{ORS="%0A"} {print}')
+          echo "::error title=Build failed::${msg}"
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git checkout --orphan ci-logs
+          git rm -rf --cached . > /dev/null
+          mkdir -p logs
+          cp build.log "logs/run-${{ github.run_number }}.log"
+          cp errors.txt "logs/run-${{ github.run_number }}-errors.txt"
+          git add logs
+          git commit -m "Build log for run ${{ github.run_number }}"
+          git push -f origin ci-logs
+
+      - name: Keep the APK as a download (Actions tab)
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovaIPTV-apk
+          path: out/NovaIPTV.apk
+
+      - name: Publish the APK on the Releases page (direct download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Nova IPTV build ${{ github.run_number }}
+          body: Install NovaIPTV.apk on your phone or Android TV.
+          files: out/NovaIPTV.apk
+          make_latest: true

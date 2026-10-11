@@ -1,0 +1,117 @@
+name: Build Windows
+
+# Builds the 32-bit Windows app only when the Windows code changes (the APK build ignores it).
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (x86, .NET Framework 4.8)
+        id: build
+        run: |
+          $ver = "1.0.${{ github.run_number }}"
+          msbuild windows\NovaIPTV.sln -restore -m -nologo -v:minimal `
+            -p:Configuration=Release -p:Version=$ver -p:TreatWarningsAsErrors=false 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Run the core tests
+        run: |
+          $exe = Get-ChildItem windows\Nova.Core.Tests\bin\Release -Recurse -Filter Nova.Core.Tests.exe | Select-Object -First 1
+          & $exe.FullName 2>&1 | Tee-Object -FilePath tests.log
+          $code = $LASTEXITCODE
+          $summary = (Select-String -Path tests.log -Pattern 'Passed:' | Select-Object -Last 1).Line
+          Write-Host "::notice title=Core tests::$summary"
+          if ($code -ne 0) { exit 1 }
+
+      - name: Check the app output
+        run: |
+          $out = (Get-ChildItem windows\Nova.App\bin\Release -Recurse -Filter Nova.exe | Select-Object -First 1).DirectoryName
+          "OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Output folder: $out"
+          if (Test-Path "$out\libvlc\win-x64") { Remove-Item "$out\libvlc\win-x64" -Recurse -Force; Write-Host "Removed 64-bit VLC" }
+          if (-not (Test-Path "$out\libvlc\win-x86\libvlc.dll")) { Write-Error "32-bit VLC engine missing"; exit 1 }
+          Get-ChildItem $out -Recurse -Include *.pdb,*.xml | Remove-Item -Force
+          # Check the program really is 32-bit.
+          $bytes = [System.IO.File]::ReadAllBytes("$out\Nova.exe")
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          Write-Host ("PE machine: 0x{0:X}" -f $machine)
+          if ($machine -ne 0x14c) { Write-Error "Nova.exe is not 32-bit"; exit 1 }
+          $size = (Get-ChildItem $out -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host ("::notice title=App::32-bit (PE 0x{0:X}), {1:N1} MB" -f $machine, $size)
+
+      - name: Portable zip
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $stage = "dist\NovaIPTV"
+          Copy-Item $env:OUT $stage -Recurse
+          Set-Content "$stage\portable.txt" "This file makes Nova keep its settings in the 'data' folder next to Nova.exe (portable mode). Delete it to use your Windows user folder instead."
+          Compress-Archive -Path $stage -DestinationPath dist\NovaIPTV-Windows-Portable.zip -CompressionLevel Optimal
+
+      - name: Get the .NET 4.8 web installer (for old PCs that don't have it)
+        continue-on-error: true
+        run: |
+          # Small web installer (~1.4 MB); it downloads only what the PC needs.
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?LinkId=2085155" -OutFile windows\ndp48-web.exe -UseBasicParsing
+          $len = (Get-Item windows\ndp48-web.exe).Length
+          if ($len -gt 10MB) { Remove-Item windows\ndp48-web.exe; Write-Host "::warning::Got the full .NET package instead of the web installer; not bundled" }
+          else { Write-Host ("::notice title=.NET 4.8::web installer bundled ({0:N0} KB)" -f ($len / 1KB)) }
+
+      - name: Installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc /Qp "/DAppVersion=1.0.${{ github.run_number }}" "/DSourceDir=$env:OUT" "/O$((Resolve-Path dist).Path)" windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem dist | ForEach-Object { Write-Host ("::notice title=Output::{0} {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          foreach ($f in @('build.log', 'tests.log')) {
+            if (Test-Path $f) {
+              $lines = Select-String -Path $f -Pattern 'error|FAIL' | Select-Object -First 60 | ForEach-Object { $_.Line.Trim() }
+              if ($lines) { Write-Host "::error title=$f::$($lines -join '%0A')" }
+            }
+          }
+
+      - name: Keep the files (Actions tab)
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovaIPTV-Windows
+          path: |
+            dist/NovaIPTV-Windows-Setup.exe
+            dist/NovaIPTV-Windows-Portable.zip
+
+      - name: Publish on the Releases page
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-build-${{ github.run_number }}
+          name: Nova IPTV for Windows ${{ github.run_number }}
+          body: |
+            32-bit Windows version (Windows 7 SP1 to Windows 11).
+            - **NovaIPTV-Windows-Setup.exe**: installer with Start-menu and desktop shortcuts.
+            - **NovaIPTV-Windows-Portable.zip**: unzip anywhere (even a USB stick) and run Nova.exe; settings stay in its data folder.
+          files: |
+            dist/NovaIPTV-Windows-Setup.exe
+            dist/NovaIPTV-Windows-Portable.zip
+          make_latest: false

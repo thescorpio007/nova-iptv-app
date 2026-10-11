@@ -1,0 +1,159 @@
+<UserControl x:Class="Nova.App.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto" Focusable="False" PreviewKeyDown="OnScrollKey">
+        <StackPanel Margin="40,10,40,48" MaxWidth="820" HorizontalAlignment="Left" Width="820">
+
+            <!-- Accounts -->
+            <TextBlock Text="Accounts" Style="{StaticResource SectionTitle}"/>
+            <ItemsControl x:Name="AccountList" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="{StaticResource Surface}" CornerRadius="9" Padding="16,12" Margin="0,0,0,8">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Style="{StaticResource NovaButton}" Content="Edit" Margin="0,0,8,0" Click="OnEditAccount" Tag="{Binding Account}"/>
+                                    <Button Style="{StaticResource NovaButton}" Content="Remove" Click="OnRemoveAccount" Tag="{Binding Account}"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Server}" Foreground="{StaticResource DimText}" FontSize="13" Margin="0,2,0,0"/>
+                                    <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" FontSize="13" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Button x:Name="AddAccountBtn" Style="{StaticResource AccentButton}" Content="+  Add account" HorizontalAlignment="Left" Margin="0,4,0,0" Click="OnAddAccount"/>
+
+            <!-- Playback -->
+            <TextBlock Text="Playback" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Text="Live channel format" Foreground="{StaticResource SubText}" Margin="0,4,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="FmtTs" GroupName="fmt" Style="{StaticResource ChoiceButton}" Content="MPEG-TS (recommended: buffer, rewind, recording)" Checked="OnChanged"/>
+                <RadioButton x:Name="FmtHls" GroupName="fmt" Style="{StaticResource ChoiceButton}" Content="HLS (m3u8)" Checked="OnChanged"/>
+            </StackPanel>
+            <!-- Disk buffer -->
+            <TextBlock Text="Disk buffer &amp; watchdog" Style="{StaticResource SectionTitle}"/>
+            <CheckBox x:Name="DiskBuffer" Content="Download every stream to the disk first, then play it from there (recommended)" Checked="OnChanged" Unchecked="OnChanged"/>
+            <TextBlock Text="Buffer folder" Foreground="{StaticResource SubText}" Margin="0,10,0,6"/>
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Style="{StaticResource NovaButton}" Content="Change…" Margin="8,0,0,0" Click="OnPickBuffer"/>
+                    <Button Style="{StaticResource NovaButton}" Content="Open" Margin="8,0,0,0" Click="OnOpenBuffer"/>
+                    <Button Style="{StaticResource NovaButton}" Content="Default" Margin="8,0,0,0" Click="OnDefaultBuffer"/>
+                </StackPanel>
+                <TextBlock x:Name="BufferPath" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+            <TextBlock Text="Live TV buffer (how far back you can pause / rewind a channel)" Foreground="{StaticResource SubText}" Margin="0,14,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="Live300" GroupName="lb" Style="{StaticResource ChoiceButton}" Content="300 MB" Checked="OnChanged"/>
+                <RadioButton x:Name="Live600" GroupName="lb" Style="{StaticResource ChoiceButton}" Content="600 MB (≈15 min HD)" Checked="OnChanged"/>
+                <RadioButton x:Name="Live1000" GroupName="lb" Style="{StaticResource ChoiceButton}" Content="1 GB" Checked="OnChanged"/>
+                <RadioButton x:Name="Live2000" GroupName="lb" Style="{StaticResource ChoiceButton}" Content="2 GB" Checked="OnChanged"/>
+            </StackPanel>
+            <TextBlock Text="Films &amp; series buffer (oldest films are removed first)" Foreground="{StaticResource SubText}" Margin="0,14,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="Film1" GroupName="fb" Style="{StaticResource ChoiceButton}" Content="1 GB" Checked="OnChanged"/>
+                <RadioButton x:Name="Film2" GroupName="fb" Style="{StaticResource ChoiceButton}" Content="2 GB" Checked="OnChanged"/>
+                <RadioButton x:Name="Film4" GroupName="fb" Style="{StaticResource ChoiceButton}" Content="4 GB" Checked="OnChanged"/>
+                <RadioButton x:Name="Film8" GroupName="fb" Style="{StaticResource ChoiceButton}" Content="8 GB" Checked="OnChanged"/>
+            </StackPanel>
+            <TextBlock Text="Safety cushion before a channel starts (more = rides out longer drops, starts slower)" Foreground="{StaticResource SubText}" Margin="0,14,0,6" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="Cush3" GroupName="cu" Style="{StaticResource ChoiceButton}" Content="3 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Cush6" GroupName="cu" Style="{StaticResource ChoiceButton}" Content="6 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Cush10" GroupName="cu" Style="{StaticResource ChoiceButton}" Content="10 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Cush20" GroupName="cu" Style="{StaticResource ChoiceButton}" Content="20 s" Checked="OnChanged"/>
+            </StackPanel>
+            <TextBlock Text="Watchdog: reconnect a stream that sends nothing for" Foreground="{StaticResource SubText}" Margin="0,14,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="Stall6" GroupName="st" Style="{StaticResource ChoiceButton}" Content="6 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Stall10" GroupName="st" Style="{StaticResource ChoiceButton}" Content="10 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Stall20" GroupName="st" Style="{StaticResource ChoiceButton}" Content="20 s" Checked="OnChanged"/>
+            </StackPanel>
+            <CheckBox x:Name="AutoSkip" Content="Skip to the next channel when a channel sends no video at all" Margin="0,14,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
+            <StackPanel Orientation="Horizontal" Margin="40,2,0,0">
+                <TextBlock Text="…after" Foreground="{StaticResource SubText}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <RadioButton x:Name="Dead10" GroupName="dd" Style="{StaticResource ChoiceButton}" Content="10 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Dead15" GroupName="dd" Style="{StaticResource ChoiceButton}" Content="15 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Dead30" GroupName="dd" Style="{StaticResource ChoiceButton}" Content="30 s" Checked="OnChanged"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0"
+                       Text="The watchdog never gives up while you watch: it reconnects after 1 s, 2 s, 4 s … up to every 30 s. A channel that played and then dropped is always reconnected, never skipped."/>
+
+            <TextBlock Text="Downloads &amp; recordings folder" Foreground="{StaticResource SubText}" Margin="0,18,0,6"/>
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Style="{StaticResource NovaButton}" Content="Change…" Margin="8,0,0,0" Click="OnPickDownloads"/>
+                    <Button Style="{StaticResource NovaButton}" Content="Open" Margin="8,0,0,0" Click="OnOpenDownloads"/>
+                    <Button Style="{StaticResource NovaButton}" Content="Default" Margin="8,0,0,0" Click="OnDefaultDownloads"/>
+                </StackPanel>
+                <TextBlock x:Name="DownloadPath" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+
+            <TextBlock Text="Player" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Text="Network buffer (used only when the disk buffer is off)" Foreground="{StaticResource SubText}" Margin="0,4,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="Buf1" GroupName="buf" Style="{StaticResource ChoiceButton}" Content="1 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Buf3" GroupName="buf" Style="{StaticResource ChoiceButton}" Content="3 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Buf5" GroupName="buf" Style="{StaticResource ChoiceButton}" Content="5 s" Checked="OnChanged"/>
+                <RadioButton x:Name="Buf10" GroupName="buf" Style="{StaticResource ChoiceButton}" Content="10 s" Checked="OnChanged"/>
+            </StackPanel>
+            <CheckBox x:Name="HwDecode" Content="Use the graphics card to decode video (turn off if the picture is green, frozen or flickering)" Margin="0,14,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
+            <CheckBox x:Name="FullScreen" Content="Open the player in full screen" Checked="OnChanged" Unchecked="OnChanged"/>
+
+            <!-- Live TV -->
+            <TextBlock Text="Live TV" Style="{StaticResource SectionTitle}"/>
+            <CheckBox x:Name="Preview" Content="Preview box: Enter plays the channel in the small box, Enter again goes full screen" Checked="OnChanged" Unchecked="OnChanged"/>
+            <CheckBox x:Name="Logos" Content="Show channel logos" Checked="OnChanged" Unchecked="OnChanged"/>
+            <CheckBox x:Name="TvArrows" Content="TV-style arrows in the player: ▲ = next channel, ▼ = previous" Checked="OnChanged" Unchecked="OnChanged"/>
+            <CheckBox x:Name="OpenOnFocus" Content="Open a group as soon as it is highlighted with the arrows" Checked="OnChanged" Unchecked="OnChanged"/>
+
+            <!-- Films & series -->
+            <TextBlock Text="Films &amp; series" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Text="Poster size" Foreground="{StaticResource SubText}" Margin="0,4,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="PSmall" GroupName="ps" Style="{StaticResource ChoiceButton}" Content="Small" Checked="OnChanged"/>
+                <RadioButton x:Name="PMedium" GroupName="ps" Style="{StaticResource ChoiceButton}" Content="Medium" Checked="OnChanged"/>
+                <RadioButton x:Name="PLarge" GroupName="ps" Style="{StaticResource ChoiceButton}" Content="Large" Checked="OnChanged"/>
+            </StackPanel>
+            <CheckBox x:Name="PosterTitles" Content="Show titles under the posters" Margin="0,10,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
+
+            <!-- General -->
+            <TextBlock Text="General" Style="{StaticResource SectionTitle}"/>
+            <CheckBox x:Name="DoubleBack" Content="Press Back (Esc) twice on Live TV to close Nova" Checked="OnChanged" Unchecked="OnChanged"/>
+            <TextBlock Text="User agent (some providers need a particular one)" Foreground="{StaticResource SubText}" Margin="0,12,0,6"/>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource NovaButton}" Content="Reset" Margin="8,0,0,0" Click="OnResetAgent"/>
+                <TextBox x:Name="AgentBox" LostKeyboardFocus="OnAgentDone"/>
+            </DockPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                <Button Style="{StaticResource NovaButton}" Content="Clear picture cache" Margin="0,0,8,0" Click="OnClearImages"/>
+                <Button Style="{StaticResource NovaButton}" Content="Open data folder" Click="OnOpenData"/>
+            </StackPanel>
+
+            <!-- Keys -->
+            <TextBlock Text="Keyboard and remote" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Style="{StaticResource Hint}" FontSize="13.5" LineHeight="22">
+                <Run Text="Arrows: move  ·  Enter: open / play  ·  Esc or Backspace: back  ·  F: favorite  ·  F5: reload"/>
+                <LineBreak/>
+                <Run Text="Ctrl+1…6: Live TV, Films, Series, Search, Downloads, Settings  ·  Ctrl+F: search"/>
+                <LineBreak/>
+                <Run Text="Live TV list: R record  ·  Downloads tab: Enter play, Space pause/resume, Delete remove"/>
+                <LineBreak/>
+                <Run Text="Player, live: ▲ ▼ channel  ·  ← → 30 s back / forward  ·  L back to live  ·  Space pause  ·  R record"/>
+                <LineBreak/>
+                <Run Text="Player, films: ← → 10 s (Ctrl: 1 min)  ·  Space pause  ·  D download  ·  PgUp/PgDn episode"/>
+                <LineBreak/>
+                <Run Text="Everywhere in the player: A audio  ·  S subtitles  ·  Z picture  ·  F full screen  ·  M mute  ·  + − or wheel: volume"/>
+            </TextBlock>
+
+            <!-- About -->
+            <TextBlock Text="About" Style="{StaticResource SectionTitle}"/>
+            <TextBlock x:Name="About" Style="{StaticResource Hint}" FontSize="13.5" LineHeight="22"/>
+            <TextBlock Text="Designed by A.H" Foreground="{StaticResource Accent}" FontWeight="SemiBold" Margin="0,8,0,0"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -1,0 +1,15 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+out/
+
+# Windows app
+windows/**/bin/
+windows/**/obj/
+windows/.vs/
+windows/ndp48-web.exe
