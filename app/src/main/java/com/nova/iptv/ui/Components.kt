@@ -686,6 +686,26 @@ fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: ()
             latestDismiss()
             if (yes) latestYes()
         }
+        // Remote keys while nothing is highlighted yet (some boxes start the window in touch mode):
+        // OK = "No", ◀ / ▶ / ▲ / ▼ put the highlight on "No" first.
+        dialog.setOnKeyListener { _, code, event ->
+            val no = dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)
+            val yesBtn = dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+            val nothing = no?.isFocused != true && yesBtn?.isFocused != true
+            if (!nothing || event.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when (code) {
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                    android.util.Log.i("NovaTest", "HIDE ask: OK on No")
+                    dialog.dismiss(); true
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    no?.isFocusableInTouchMode = true
+                    no?.requestFocus(); true
+                }
+                else -> false
+            }
+        }
         dialog.setOnShowListener {
             dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)?.apply { isAllCaps = false; setTextColor(0xFFFF8A80.toInt()) }
             dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)?.apply {
