@@ -1241,7 +1241,7 @@ steps = [
     ("Restore backup from the welcome screen", restore_from_login),
     ("Accounts link and start-up check", accounts_link),
     ("Restore from a link with a password", restore_by_link),
-    ("Double OK hides a film", double_ok_hide),
+    ("Double OK hides a film", lambda: double_ok_hide()),
 ]
 
 def double_ok_hide():
