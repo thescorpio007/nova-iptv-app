@@ -732,3 +732,53 @@ fun HideAskDialog(name: String, image: String?, onYes: () -> Unit, onDismiss: ()
         }
     }
 }
+
+
+/** A Yes / No question drawn over the screen (same window, so the remote always reaches it). The remote starts on No. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+fun ConfirmOverlay(title: String, text: String, yesLabel: String, onYes: () -> Unit, onDismiss: () -> Unit) {
+    val no = remember { androidx.compose.ui.focus.FocusRequester() }
+    var noFocused by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler { onDismiss() }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        repeat(40) {
+            kotlinx.coroutines.delay(50)
+            if (noFocused) return@LaunchedEffect
+            runCatching { no.requestFocus() }
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xB3000000))
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+            .focusProperties { exit = { androidx.compose.ui.focus.FocusRequester.Cancel } }
+            .focusGroup(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .padding(20.dp)
+                .widthIn(max = 520.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(22.dp))
+                .pointerInput(Unit) { detectTapGestures { } }
+                .padding(20.dp),
+        ) {
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+            Spacer(Modifier.height(6.dp))
+            Text(text, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FocusBox(
+                    onClick = onDismiss,
+                    modifier = Modifier.focusRequester(no).onFocusChanged { noFocused = it.isFocused },
+                    shape = RoundedCornerShape(20.dp),
+                ) { Text("No", fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp)) }
+                FocusBox(onClick = { onDismiss(); onYes() }, shape = RoundedCornerShape(20.dp)) {
+                    Text(yesLabel, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                }
+            }
+        }
+    }
+}
