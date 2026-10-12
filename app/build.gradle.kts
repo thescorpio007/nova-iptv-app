@@ -14,8 +14,10 @@ android {
         applicationId = "com.nova.iptv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "2.0"
+        // The build number from GitHub is part of the version: "2.0 (build 25)".
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        versionCode = build ?: 1
+        versionName = if (build != null) "2.0 (build $build)" else "2.0"
     }
 
     signingConfigs {

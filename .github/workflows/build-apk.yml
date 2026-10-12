@@ -60,7 +60,7 @@ jobs:
           set -o pipefail
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
           mkdir -p out
-          cp app/build/outputs/apk/release/*.apk out/NovaIPTV.apk
+          cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-2.0-build-${{ github.run_number }}.apk"
 
       # When the build fails, report the important lines as annotations and keep the full
       # log on a "ci-logs" branch, so the errors can be read without the Actions log viewer.
@@ -87,13 +87,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NovaIPTV-apk
-          path: out/NovaIPTV.apk
+          path: out/NovaIPTV-*.apk
 
       - name: Publish the APK on the Releases page (direct download link)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Nova IPTV build ${{ github.run_number }}
-          body: Install NovaIPTV.apk on your phone or Android TV.
-          files: out/NovaIPTV.apk
+          body: Install NovaIPTV-2.0-build-${{ github.run_number }}.apk on your phone or Android TV.
+          files: out/NovaIPTV-*.apk
           make_latest: true
