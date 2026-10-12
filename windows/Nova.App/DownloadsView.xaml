@@ -38,7 +38,7 @@
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock Text="{Binding Title}" FontSize="15.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                             <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontSize="13" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
-                            <ProgressBar Style="{StaticResource ThinProgress}" Value="{Binding Progress}" Margin="0,7,0,0" MaxWidth="520"
+                            <ProgressBar Style="{StaticResource ThinProgress}" Value="{Binding Progress, Mode=OneWay}" Margin="0,7,0,0" MaxWidth="520"
                                          HorizontalAlignment="Stretch" Visibility="{Binding ProgressVisibility}"/>
                         </StackPanel>
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
