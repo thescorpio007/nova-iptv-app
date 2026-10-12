@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -152,6 +153,22 @@ namespace Nova.App
         public bool DownloadWatch { get; set; }
         /// <summary>A file on this PC (a recording), played as it is.</summary>
         public string LocalPath { get; set; }
+        /// <summary>Kind for the player choice: "live", "movie", "series", "catchup", "file", "link".</summary>
+        public string Kind { get; set; }
+        /// <summary>Extra request headers (links from websites).</summary>
+        public Dictionary<string, string> Headers { get; set; }
+        /// <summary>A link's live stream (M3U entry): played through the live buffer with this key.</summary>
+        public string LiveKey { get; set; }
+        /// <summary>An HLS link (played directly by VLC; downloads go part by part).</summary>
+        public bool Hls { get; set; }
+        /// <summary>Remembers where you stopped ("type_account_id"), or null.</summary>
+        public string ResumeKey { get; set; }
+        /// <summary>Saved in Recently watched when it starts.</summary>
+        public SavedItem Recent { get; set; }
+        public string Icon { get; set; }
+
+        /// <summary>Key for live overlays and "same channel" checks.</summary>
+        public string LiveId { get { return Channel != null ? Channel.Key : LiveKey; } }
 
         public static PlayItem Of(LiveChannel c)
         {
@@ -164,6 +181,9 @@ namespace Nova.App
                 IsLive = true,
                 Channel = c,
                 AccountId = c.AccountId,
+                Kind = "live",
+                Icon = c.Icon,
+                Recent = SavedItem.Of(c),
                 Subtitle = multi && acc != null ? acc.DisplayName : null,
             };
         }
@@ -178,6 +198,10 @@ namespace Nova.App
                 Ext = string.IsNullOrEmpty(m.Extension) ? "mp4" : m.Extension,
                 AccountId = m.AccountId,
                 Movie = m,
+                Kind = "movie",
+                Icon = m.Icon,
+                ResumeKey = Store.ResumeKey(ItemType.Movie, m.AccountId, m.StreamId),
+                Recent = SavedItem.Of(m),
                 Subtitle = App.Store.Accounts.Count > 1 && acc != null ? acc.DisplayName : null,
             };
         }
@@ -193,6 +217,24 @@ namespace Nova.App
                 AccountId = s.AccountId,
                 Series = s,
                 Episode = e,
+                Kind = "series",
+                Icon = e.Image ?? s.Cover,
+                ResumeKey = Store.ResumeKey(ItemType.Episode, s.AccountId, e.Id),
+                Recent = SavedItem.Of(s, e),
+            };
+        }
+
+        /// <summary>A file on this PC (recording, download, "Open with Nova").</summary>
+        public static PlayItem OfFile(string path, string title)
+        {
+            return new PlayItem
+            {
+                Title = title ?? System.IO.Path.GetFileNameWithoutExtension(path),
+                LocalPath = path,
+                Url = new Uri(path).AbsoluteUri,
+                Kind = "file",
+                Ext = System.IO.Path.GetExtension(path).TrimStart('.'),
+                ResumeKey = "file__" + path.ToLowerInvariant(),
             };
         }
 

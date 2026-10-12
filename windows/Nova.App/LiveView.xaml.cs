@@ -328,6 +328,7 @@ namespace Nova.App
         private async void StartPreview(LiveChannel ch)
         {
             if (_playerOpen) return;
+            if (!Vpn.Allow(Window.GetWindow(this))) return;
             if (!ConnectionGuard.Allow(ch.AccountId, ch.Key, Window.GetWindow(this))) return;
             await _stopping;
             // A different channel: close the old stream first (the account may allow one connection).
@@ -440,7 +441,7 @@ namespace Nova.App
             var resume = App.Store.Settings.LivePreview;
             _playerOpen = true;
             // The same channel keeps its stream: the player joins it (no new connection, no restart).
-            var handoff = _previewLease != null && _previewLease.Relay.Key == row.Channel.Key ? _previewLease : null;
+            var handoff = _previewLease != null && _previewLease.Relay.Key == row.Channel.Key && ExternalPlayers.ChosenFor("live") == null ? _previewLease : null;
             if (handoff != null) { handoff.Relay.Changed -= OnPreviewRelayChanged; _previewLease = null; }
             StopPreview();
             await _stopping;
