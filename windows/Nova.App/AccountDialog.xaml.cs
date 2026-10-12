@@ -17,13 +17,13 @@ namespace Nova.App
         {
             InitializeComponent();
             _account = existing != null ? existing.Copy() : new Account();
-            Heading.Text = existing != null ? "Edit account" : "Add account";
+            Heading.Text = existing != null && !string.IsNullOrEmpty(existing.Id) ? "Edit account" : "Add account";
             Title = Heading.Text;
             NameBox.Text = _account.Name ?? "";
             ServerBox.Text = _account.Server ?? "";
             UserBox.Text = _account.Username ?? "";
             PassBox.Text = _account.Password ?? "";
-            Loaded += (s, e) => { (existing == null ? ServerBox : NameBox).Focus(); };
+            Loaded += (s, e) => { (existing == null || string.IsNullOrEmpty(existing.Id) ? ServerBox : NameBox).Focus(); };
             Closed += (s, e) => { if (_cts != null) _cts.Cancel(); };
         }
 
@@ -33,6 +33,18 @@ namespace Nova.App
             var d = new AccountDialog(existing);
             if (owner != null && owner.IsVisible) d.Owner = owner;
             return d.ShowDialog() == true;
+        }
+
+        /// <summary>Paste button beside each box (handy with a remote / no keyboard shortcut).</summary>
+        private void OnPaste(object sender, RoutedEventArgs e)
+        {
+            string text = null;
+            try { if (Clipboard.ContainsText()) text = Clipboard.GetText(); } catch { }
+            if (string.IsNullOrWhiteSpace(text)) { SetStatus("The clipboard is empty — copy the text first.", true); return; }
+            var box = (System.Windows.Controls.TextBox)FindName((string)((FrameworkElement)sender).Tag);
+            box.Text = text.Trim();
+            box.CaretIndex = box.Text.Length;
+            box.Focus();
         }
 
         private void OnServerChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)

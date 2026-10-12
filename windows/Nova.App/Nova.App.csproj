@@ -14,10 +14,10 @@
     <AssemblyName>Nova</AssemblyName>
     <ApplicationIcon>Assets\nova.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.0.0</Version>
+    <Version>2.0.0</Version>
     <Product>Nova IPTV</Product>
-    <Company>A.H</Company>
-    <Copyright>Designed by A.H</Copyright>
+    <Company>A.Hamrouni</Company>
+    <Copyright>Designed by A.Hamrouni</Copyright>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <!-- Only the 32-bit VLC engine is needed. -->
     <VlcWindowsX64Enabled>false</VlcWindowsX64Enabled>

@@ -30,7 +30,17 @@ namespace Nova.App
 
         public string Title { get { return Item.Title; } }
         public string Icon { get { return Item.Icon; } }
-        public string KindIcon { get { return Item.Kind == "recording" ? "●" : Item.Kind == "episode" ? "▤" : "▶"; } }
+        public string KindIcon { get { return Item.Kind == "recording" ? "●" : Item.Kind == "episode" ? "▤" : Item.Kind == "link" ? "🔗" : "▶"; } }
+
+        /// <summary>"  ·  2.4 MB/s  ·  4 connections".</summary>
+        private static string Rate(DownloadItem i)
+        {
+            var t = "";
+            if (i.Speed > 0) t += "  ·  " + (i.Speed >= 1 << 20 ? (i.Speed / (1 << 20)).ToString("0.0") + " MB/s" : (i.Speed / 1024).ToString("0") + " KB/s");
+            if (i.Connections > 1) t += "  ·  " + i.Connections + " connections";
+            if (i.Hls) t += "  ·  HLS";
+            return t;
+        }
 
         public string StatusText
         {
@@ -42,7 +52,7 @@ namespace Nova.App
                     case DownloadStatus.Recording: return "● Recording  ·  " + Size(i.DoneBytes);
                     case DownloadStatus.Done: return "✓ Done  ·  " + Size(i.TotalBytes > 0 ? i.TotalBytes : i.DoneBytes) + (File.Exists(i.FinalPath) ? "" : "  ·  file missing");
                     case DownloadStatus.Downloading:
-                        return (i.Error != null ? "⟳ " + i.Error + " Reconnecting…  ·  " : "Downloading  ·  ") + Done(i);
+                        return (i.Error != null ? "⟳ " + i.Error + " Reconnecting…  ·  " : "Downloading  ·  ") + Done(i) + Rate(i);
                     case DownloadStatus.Waiting: return "Waiting — your account's only connection is in use  ·  " + Done(i);
                     case DownloadStatus.Paused: return "Paused  ·  " + Done(i);
                     case DownloadStatus.Finishing: return "Saving the file…";
@@ -224,12 +234,16 @@ namespace Nova.App
             if (i.IsDone || i.Kind == "recording")
             {
                 if (!File.Exists(i.FinalPath)) { App.Home.Toast("The file isn't there any more: " + i.FinalPath); return; }
-                item = new PlayItem { Title = i.Title, LocalPath = i.FinalPath, Ext = i.Ext };
+                item = new PlayItem { Title = i.Title, LocalPath = i.FinalPath, Ext = i.Ext, Kind = "file" };
             }
             else
             {
                 // Still downloading: Download & Watch on the same connection.
-                item = new PlayItem { Title = i.Title, Url = i.Url, Ext = i.Ext, AccountId = i.AccountId, DownloadWatch = true };
+                item = new PlayItem
+                {
+                    Title = i.Title, Url = i.Url, Ext = i.Ext, AccountId = i.AccountId, DownloadWatch = true,
+                    Hls = i.Hls, Headers = i.Headers, Kind = i.Kind == "link" ? "link" : i.Kind == "episode" ? "series" : "movie",
+                };
             }
             await PlayerWindow.Play(Window.GetWindow(this), new List<PlayItem> { item }, 0);
             FocusStart();
@@ -257,12 +271,16 @@ namespace Nova.App
             if (row == null || row.Item.Status == DownloadStatus.Recording) return;
             var i = row.Item;
             var hasFile = (i.IsDone && File.Exists(i.FinalPath)) || (i.PartsFolder != null && Directory.Exists(i.PartsFolder));
-            var answer = hasFile
-                ? MessageBox.Show(Window.GetWindow(this), "Remove \"" + i.Title + "\" from the list.\n\nAlso delete the video file from your PC?",
-                    "Nova IPTV", MessageBoxButton.YesNoCancel, MessageBoxImage.Question)
-                : MessageBoxResult.No;
-            if (answer == MessageBoxResult.Cancel) return;
-            App.Downloads.Remove(i.Id, answer == MessageBoxResult.Yes);
+            var w = Window.GetWindow(this);
+            if (!hasFile)
+            {
+                if (NovaDialog.Ask(w, "Remove from the list?", i.Title, "Yes, remove")) App.Downloads.Remove(i.Id, false);
+                return;
+            }
+            var c = NovaDialog.Choose(w, "Remove “" + i.Title + "”", "Remove it from the list. Also delete the video file from your PC?",
+                new[] { "Keep the file, remove from the list", "Delete the file too" }, 0);
+            if (c < 0) return;
+            App.Downloads.Remove(i.Id, c == 1);
         }
 
         private void OnOpenFolder(object sender, RoutedEventArgs e)

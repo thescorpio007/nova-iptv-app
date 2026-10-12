@@ -183,7 +183,8 @@ namespace Nova.Core
             var i = list.IndexOf(key);
             var j = i + delta;
             if (i < 0 || j < 0 || j >= list.Count) return list;
-            var t = list[i]; list[i] = list[j]; list[j] = t;
+            list.RemoveAt(i);
+            list.Insert(j, key);
             return list;
         }
 

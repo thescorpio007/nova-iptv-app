@@ -11,7 +11,7 @@ using Nova.Core;
 namespace Nova.App
 {
     /// <summary>Films or Series: groups on the left, a grid of posters on the right.</summary>
-    public partial class VodView : UserControl, IView, IReloadable
+    public partial class VodView : UserControl, IView, IReloadable, IBackHandler, IZoneActions
     {
         private readonly ContentType _type;
         private readonly ObservableCollection<PosterRow> _rows = new ObservableCollection<PosterRow>();
@@ -20,6 +20,13 @@ namespace Nova.App
         private int _loadId;
         private int _columns = 1;
         private bool _loaded;
+
+        private bool _edit;
+        private PosterItem _moving;
+        private List<Movie> _movies = new List<Movie>();
+        private List<Series> _series = new List<Series>();
+        private System.Windows.Threading.DispatcherTimer _clickTimer;
+        private PosterItem _clickItem;
 
         public VodView(ContentType type)
         {
@@ -30,11 +37,15 @@ namespace Nova.App
             Groups.Opened += OnGroupOpened;
             Groups.GoRight += FocusGrid;
             App.Store.FavoritesChanged += OnFavoritesChanged;
-            App.Store.SettingsChanged += () => { if (_group != null) Rebuild(null); };
+            App.Store.SettingsChanged += () => { UpdateSortText(); if (_group != null) Fill(null); };
+            App.Store.OrgChanged += () => Dispatcher.BeginInvoke(new Action(() => { if (!_edit) Groups.Build(); }));
+            UpdateSortText();
         }
 
         private string SavedType { get { return _type == ContentType.Movie ? ItemType.Movie : ItemType.Series; } }
         private string Noun { get { return _type == ContentType.Movie ? "film" : "series"; } }
+        private string Zone { get { return Organize.Zone(_type); } }
+        private string ZoneSort { get { return App.Store.Settings.SortFor(Zone); } }
 
         // ---------------------------------------------------------------- IView
 
@@ -57,6 +68,116 @@ namespace Nova.App
             if (_loaded) Groups.Load();
         }
 
+        public bool HandleBack()
+        {
+            if (_edit) { ToggleEdit(); return true; }
+            return false;
+        }
+
+        // ---------------------------------------------------------------- sort and edit
+
+        private void UpdateSortText()
+        {
+            SortText.Text = "⇅ " + Organize.SortLabel(Zone, ZoneSort);
+        }
+
+        public void ChooseSort()
+        {
+            var choices = Organize.SortChoices(Zone);
+            var current = choices.FindIndex(c => c.Item1 == ZoneSort);
+            var i = NovaDialog.Choose(Window.GetWindow(this), _type == ContentType.Movie ? "Sort films" : "Sort series",
+                "“My order” keeps the order you set with ✎ Edit.", choices.Select(c => c.Item2).ToList(), current);
+            if (i < 0) return;
+            var st = App.Store.Settings.Copy();
+            st.SetSort(Zone, choices[i].Item1);
+            App.Store.SaveSettings(st);
+        }
+
+        public void ToggleEdit()
+        {
+            if (!_edit && !PinGate.Unlock(Window.GetWindow(this), "Your PIN protects changes to the lists.")) return;
+            _edit = !_edit;
+            if (_moving != null) { _moving.Moving = false; _moving = null; }
+            EditText.Text = _edit ? "✓ Done" : "✎ Edit";
+            EditText.Foreground = (Brush)FindResource(_edit ? "StarBrush" : "SubText");
+            EditHint.Visibility = _edit ? Visibility.Visible : Visibility.Collapsed;
+            HideHint.Visibility = _edit ? Visibility.Collapsed : Visibility.Visible;
+            Groups.EditMode = _edit;
+            var f = FocusedItem();
+            if (_group != null) Fill(f != null ? f.Key : null);
+            App.Home.Toast(_edit ? "Edit: hide and reorder groups and posters — Esc when done" : "Changes saved");
+        }
+
+        private void OnSort(object sender, RoutedEventArgs e) { ChooseSort(); }
+        private void OnEdit(object sender, RoutedEventArgs e) { ToggleEdit(); }
+
+        private bool CanMove { get { return _group != null && (_group.Kind == GroupKind.Group || _group.Kind == GroupKind.Favorites); } }
+        private bool CanHide { get { return _group != null && (_group.Kind == GroupKind.Group || _group.Kind == GroupKind.New); } }
+
+        private void MovePoster(PosterItem item, int delta)
+        {
+            if (item == null || !CanMove) return;
+            var keys = _items.Select(p => p.Key).ToList();
+            List<string> moved;
+            if (delta == int.MinValue) moved = Nova.Core.Org.MoveTo(keys, item.Key, true);
+            else if (delta == int.MaxValue) moved = Nova.Core.Org.MoveTo(keys, item.Key, false);
+            else moved = Nova.Core.Org.Move(keys, item.Key, delta);
+            if (_group.Kind == GroupKind.Favorites)
+            {
+                var favs = App.Store.FavoritesOf(SavedType);
+                App.Store.ReorderFavorites(SavedType, moved.Select(k => favs.FirstOrDefault(f => f.Key == k)).Where(f => f != null).ToList());
+            }
+            else Organize.MoveItem(Zone, _group.Key, keys, item.Key, delta);
+            if (_group.Kind == GroupKind.Group && ZoneSort != "custom" && !_edit)
+                App.Home.Toast("Saved in “My order” (the list is sorted by " + Organize.SortLabel(Zone, ZoneSort) + ")");
+            Fill(item.Key);
+        }
+
+        private void TogglePosterHidden(PosterItem item)
+        {
+            if (item == null || !CanHide) return;
+            var hiding = !Organize.IsItemHidden(Zone, item.Key);
+            var index = _items.IndexOf(item);
+            Organize.ToggleItemHidden(Zone, item.Key, item.Title);
+            App.Home.Toast(hiding ? "Hidden: " + item.Title + "  (Settings › Hidden items to show it again)" : "Shown again: " + item.Title);
+            Fill(Organize.ShowsHidden(_edit) || !hiding ? item.Key : null, index);
+        }
+
+        /// <summary>Double Enter / double-click on a poster: “Hide this film?” — No is highlighted first.</summary>
+        private void AskHide(PosterItem item)
+        {
+            if (item == null) return;
+            if (!CanHide) { App.Home.Toast("Hide posters from their own group (not from Favorites)."); return; }
+            var hidden = Organize.IsItemHidden(Zone, item.Key);
+            var w = Window.GetWindow(this);
+            if (!NovaDialog.Ask(w, hidden ? "Show this " + Noun + " again?" : "Hide this " + Noun + "?",
+                item.Title + (hidden ? "" : "\n\nYou can show it again from Settings › Hidden items."), hidden ? "Yes, show it" : "Yes, hide it")) { FocusItem(item); return; }
+            if (!PinGate.Unlock(w, "Your PIN protects hiding " + (_type == ContentType.Movie ? "films." : "series."))) return;
+            TogglePosterHidden(item);
+        }
+
+        private void OnPosterMenu(object sender, ContextMenuEventArgs e)
+        {
+            var b = (FrameworkElement)sender;
+            var item = b.DataContext as PosterItem;
+            var menu = b.ContextMenu;
+            if (item == null || menu == null) { e.Handled = true; return; }
+            menu.Items.Clear();
+            var w = Window.GetWindow(this);
+            Action<string, Action> add = (text, act) => { var mi = new MenuItem { Header = text }; mi.Click += (s, a) => act(); menu.Items.Add(mi); };
+            add("Open", () => Open(item));
+            add(item.IsFavorite ? "Remove from favorites" : "Add to favorites", () => ToggleFavorite(item));
+            if (CanHide) add(Organize.IsItemHidden(Zone, item.Key) ? "Show again" : "Hide this " + Noun, () => { if (PinGate.Unlock(w, "Your PIN protects hiding.")) TogglePosterHidden(item); });
+            if (CanMove)
+            {
+                menu.Items.Add(new Separator());
+                add("Move left / up", () => { if (PinGate.Unlock(w, "Your PIN protects changes.")) MovePoster(item, -1); });
+                add("Move right / down", () => { if (PinGate.Unlock(w, "Your PIN protects changes.")) MovePoster(item, 1); });
+                add("Move to the start", () => { if (PinGate.Unlock(w, "Your PIN protects changes.")) MovePoster(item, int.MinValue); });
+                add("Move to the end", () => { if (PinGate.Unlock(w, "Your PIN protects changes.")) MovePoster(item, int.MaxValue); });
+            }
+        }
+
         // ---------------------------------------------------------------- loading
 
         private async void OnGroupOpened(GroupRow row)
@@ -65,28 +186,26 @@ namespace Nova.App
             var id = ++_loadId;
             _items = new List<PosterItem>();
             _rows.Clear();
+            if (_moving != null) { _moving = null; }
             var multi = App.Store.Accounts.Count > 1;
             GroupTitle.Text = row.Kind == GroupKind.Favorites ? "★ Favorites"
+                : row.Kind == GroupKind.New ? "🆕 Recently added"
                 : row.Category.Name + (multi ? "  ·  " + row.Account.DisplayName : "");
             Count.Text = "";
             SetStatus(_type == ContentType.Movie ? "Loading films…" : "Loading series…");
-            var favs = new HashSet<string>(App.Store.FavoritesOf(SavedType).Select(f => f.Key));
-            var list = new List<PosterItem>();
             try
             {
                 if (_type == ContentType.Movie)
                 {
-                    var movies = row.Kind == GroupKind.Favorites
-                        ? App.Store.FavoritesOf(ItemType.Movie).Select(f => f.ToMovie()).ToList()
+                    _movies = row.Kind == GroupKind.Favorites ? App.Store.FavoritesOf(ItemType.Movie).Select(f => f.ToMovie()).ToList()
+                        : row.Kind == GroupKind.New ? await App.Catalog.RecentlyAdded<Movie>(ContentType.Movie, 300)
                         : await App.Catalog.Movies(row.Category);
-                    foreach (var m in movies) list.Add(new PosterItem { Movie = m, IsFavorite = favs.Contains(m.Key), AccountTag = AccountTagFor(m.AccountId, multi) });
                 }
                 else
                 {
-                    var series = row.Kind == GroupKind.Favorites
-                        ? App.Store.FavoritesOf(ItemType.Series).Select(f => f.ToSeries()).ToList()
+                    _series = row.Kind == GroupKind.Favorites ? App.Store.FavoritesOf(ItemType.Series).Select(f => f.ToSeries()).ToList()
+                        : row.Kind == GroupKind.New ? await App.Catalog.RecentlyAdded<Series>(ContentType.Series, 300)
                         : await App.Catalog.SeriesOf(row.Category);
-                    foreach (var s in series) list.Add(new PosterItem { Series = s, IsFavorite = favs.Contains(s.Key), AccountTag = AccountTagFor(s.AccountId, multi) });
                 }
             }
             catch (Exception e)
@@ -95,10 +214,43 @@ namespace Nova.App
                 return;
             }
             if (id != _loadId) return;
+            Fill(null);
+        }
+
+        /// <summary>Builds the posters from the loaded list: your order or the sort, hidden ones only in edit mode.</summary>
+        private void Fill(string keepKey, int keepIndex = -1)
+        {
+            if (_group == null) return;
+            var multi = App.Store.Accounts.Count > 1;
+            var favs = new HashSet<string>(App.Store.FavoritesOf(SavedType).Select(f => f.Key));
+            var gk = _group.Key;
+            var movingKey = _moving != null ? _moving.Key : null;
+            var list = new List<PosterItem>();
+            int total;
+            if (_type == ContentType.Movie)
+            {
+                total = _movies.Count;
+                foreach (var m in Organize.Items(Zone, gk, _movies, x => x.Key, _edit, ZoneSort, Organize.Info))
+                    list.Add(new PosterItem { Movie = m, IsFavorite = favs.Contains(m.Key), AccountTag = AccountTagFor(m.AccountId, multi), Hidden = Organize.IsItemHidden(Zone, m.Key) });
+            }
+            else
+            {
+                total = _series.Count;
+                foreach (var s in Organize.Items(Zone, gk, _series, x => x.Key, _edit, ZoneSort, Organize.Info))
+                    list.Add(new PosterItem { Series = s, IsFavorite = favs.Contains(s.Key), AccountTag = AccountTagFor(s.AccountId, multi), Hidden = Organize.IsItemHidden(Zone, s.Key) });
+            }
+            if (_group.Kind == GroupKind.Favorites) list.ForEach(p => p.Hidden = false);
+            _moving = null;
+            if (movingKey != null) { _moving = list.FirstOrDefault(p => p.Key == movingKey); if (_moving != null) _moving.Moving = true; }
             _items = list;
-            Count.Text = list.Count + " " + (_type == ContentType.Movie ? (list.Count == 1 ? "film" : "films") : "series");
-            SetStatus(list.Count == 0 ? (row.Kind == GroupKind.Favorites ? "No favorite " + Noun + " yet. Press F on a poster to add it." : "Nothing in this group.") : null);
-            Rebuild(null);
+            var hidden = total - list.Count(p => !p.Hidden);
+            var noun = _type == ContentType.Movie ? (list.Count == 1 ? "film" : "films") : "series";
+            Count.Text = list.Count(p => !p.Hidden) + " " + noun + (hidden > 0 && _group.Kind == GroupKind.Group ? "  ·  " + hidden + " hidden" : "");
+            SetStatus(list.Count == 0 ? (_group.Kind == GroupKind.Favorites ? "No favorite " + Noun + " yet. Press F on a poster to add it."
+                : _group.Kind == GroupKind.New ? "Nothing new yet (open a few groups first; new " + (_type == ContentType.Movie ? "films" : "series") + " show here)." : "Nothing in this group.") : null);
+            PosterItem keep = keepKey == null ? null : list.FirstOrDefault(p => p.Key == keepKey);
+            if (keep == null && keepIndex >= 0 && list.Count > 0) keep = list[Math.Min(keepIndex, list.Count - 1)];
+            Rebuild(keep);
         }
 
         private static string AccountTagFor(string accountId, bool multi)
@@ -130,9 +282,11 @@ namespace Nova.App
         /// <summary>Lays the posters out in rows that fit the window width.</summary>
         private void Rebuild(PosterItem keepFocus)
         {
-            var tile = TileWidth;
             var width = Math.Max(200, GridHost.ActualWidth - 30);
-            _columns = Math.Max(1, (int)(width / (tile + 12)));
+            var tile = TileWidth;
+            var fixedCols = App.Store.Settings.PosterColumns;
+            if (fixedCols > 0) { _columns = fixedCols; tile = Math.Max(70, width / fixedCols - 12); }
+            else _columns = Math.Max(1, (int)(width / (tile + 12)));
             var titles = App.Store.Settings.PosterTitles ? Visibility.Visible : Visibility.Collapsed;
             foreach (var p in _items) { p.TileWidth = tile; p.TitleVisibility = titles; }
             _rows.Clear();
@@ -145,7 +299,7 @@ namespace Nova.App
         {
             if (_items.Count == 0 || Math.Abs(e.NewSize.Width - e.PreviousSize.Width) < 1) return;
             var cols = Math.Max(1, (int)(Math.Max(200, GridHost.ActualWidth - 30) / (TileWidth + 12)));
-            if (cols == _columns) return;
+            if (cols == _columns && App.Store.Settings.PosterColumns <= 0) return;
             var focused = FocusedItem();
             Rebuild(focused);
         }
@@ -218,13 +372,12 @@ namespace Nova.App
             if (item == null) return;
             var index = _items.IndexOf(item);
             if (index < 0) return;
+            if (_edit && HandleEditKey(item, index, e)) { e.Handled = true; return; }
             switch (e.Key)
             {
                 case Key.F:
                     e.Handled = true;
-                    var now = App.Store.ToggleFavorite(item.Saved);
-                    item.IsFavorite = now;
-                    App.Home.Toast(now ? "Added to favorites: " + item.Title : "Removed from favorites: " + item.Title);
+                    ToggleFavorite(item);
                     break;
                 case Key.Left:
                     if (index % _columns == 0) { e.Handled = true; Groups.FocusList(); }
@@ -263,10 +416,74 @@ namespace Nova.App
             }
         }
 
+        /// <summary>Edit mode: Enter picks a poster up / puts it down, arrows move it, H hides, Home / End.</summary>
+        private bool HandleEditKey(PosterItem item, int index, KeyEventArgs e)
+        {
+            switch (e.Key)
+            {
+                case Key.Enter:
+                    if (!CanMove) { if (CanHide) TogglePosterHidden(item); return true; }
+                    if (_moving == item) { item.Moving = false; _moving = null; }
+                    else { if (_moving != null) _moving.Moving = false; _moving = item; item.Moving = true; }
+                    return true;
+                case Key.H:
+                    TogglePosterHidden(item);
+                    return true;
+            }
+            if (_moving != item) return false;
+            switch (e.Key)
+            {
+                case Key.Left: if (index > 0) MovePoster(item, -1); return true;
+                case Key.Right: if (index + 1 < _items.Count) MovePoster(item, 1); return true;
+                case Key.Up: if (index - _columns >= 0) MovePoster(item, -_columns); return true;
+                case Key.Down: if (index + _columns < _items.Count) MovePoster(item, Math.Min(_columns, _items.Count - 1 - index)); return true;
+                case Key.Home: MovePoster(item, int.MinValue); return true;
+                case Key.End: MovePoster(item, int.MaxValue); return true;
+            }
+            return false;
+        }
+
+        private void ToggleFavorite(PosterItem item)
+        {
+            var now = App.Store.ToggleFavorite(item.Saved);
+            item.IsFavorite = now;
+            App.Home.Toast(now ? "Added to favorites: " + item.Title : "Removed from favorites: " + item.Title);
+        }
+
+        /// <summary>
+        /// One Enter / click opens the poster; a second one within 350 ms asks to hide it instead (as on the box).
+        /// In edit mode Enter is handled by the keys above.
+        /// </summary>
         private void OnPosterClick(object sender, RoutedEventArgs e)
         {
             var item = ((FrameworkElement)sender).DataContext as PosterItem;
             if (item == null) return;
+            if (_edit)
+            {
+                // Mouse click in edit mode: pick up / put down.
+                if (!CanMove) return;
+                if (_moving == item) { item.Moving = false; _moving = null; }
+                else { if (_moving != null) _moving.Moving = false; _moving = item; item.Moving = true; }
+                return;
+            }
+            if (_clickTimer != null && _clickTimer.IsEnabled && _clickItem == item)
+            {
+                _clickTimer.Stop();
+                AskHide(item);
+                return;
+            }
+            if (_clickTimer == null)
+            {
+                _clickTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                _clickTimer.Tick += (s, a) => { _clickTimer.Stop(); if (_clickItem != null) Open(_clickItem); };
+            }
+            _clickTimer.Stop();
+            _clickItem = item;
+            _clickTimer.Start();
+        }
+
+        private void Open(PosterItem item)
+        {
             if (item.Movie != null) App.Home.PushPage(new MovieDetailView(item.Movie));
             else App.Home.PushPage(new SeriesDetailView(item.Series));
         }
@@ -275,13 +492,13 @@ namespace Nova.App
         {
             Groups.RefreshFavorites();
             var favs = new HashSet<string>(App.Store.FavoritesOf(SavedType).Select(f => f.Key));
-            foreach (var p in _items) p.IsFavorite = favs.Contains(p.Movie != null ? p.Movie.Key : p.Series.Key);
+            foreach (var p in _items) p.IsFavorite = favs.Contains(p.Key);
             if (_group != null && _group.Kind == GroupKind.Favorites)
             {
                 var keep = FocusedItem();
-                _items = _items.Where(p => p.IsFavorite).ToList();
-                Count.Text = _items.Count + " " + (_type == ContentType.Movie ? (_items.Count == 1 ? "film" : "films") : "series");
-                Rebuild(keep != null && keep.IsFavorite ? keep : null);
+                if (_type == ContentType.Movie) _movies = App.Store.FavoritesOf(ItemType.Movie).Select(f => f.ToMovie()).ToList();
+                else _series = App.Store.FavoritesOf(ItemType.Series).Select(f => f.ToSeries()).ToList();
+                Fill(keep != null && keep.IsFavorite ? keep.Key : null);
             }
         }
     }

@@ -381,6 +381,9 @@ namespace Nova.App
 
         public static event Action Changed;
 
+        /// <summary>Opens the lock without asking (just after the PIN was typed to set it).</summary>
+        public static void Grant() { _until = DateTime.UtcNow.AddMinutes(5); var h = Changed; if (h != null) h(); }
+
         /// <summary>Asks for the PIN when needed. True when changes are allowed.</summary>
         public static bool Unlock(Window owner, string why)
         {
@@ -401,33 +404,49 @@ namespace Nova.App
     {
         public static readonly string[] Extensions = { ".mp4", ".mkv", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".m3u", ".m3u8", ".3gp" };
 
+        private const string Sub = @"\shell\NovaIPTV";
+
         public static void Add(string exe)
         {
             foreach (var ext in Extensions)
             {
-                using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\SystemFileAssociations\" + ext + @"\shell\NovaIPTV"))
+                using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\SystemFileAssociations\" + ext + Sub))
                 {
                     k.SetValue("", "Open with Nova");
                     k.SetValue("Icon", "\"" + exe + "\",0");
+                    try { k.DeleteValue("LegacyDisable", false); } catch { }
                     using (var c = k.CreateSubKey("command")) c.SetValue("", "\"" + exe + "\" \"%1\"");
                 }
             }
         }
 
+        /// <summary>Removes it for this user; when the installer added it for everyone, it is switched off for this user.</summary>
         public static void Remove()
         {
             foreach (var ext in Extensions)
             {
-                try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\SystemFileAssociations\" + ext + @"\shell\NovaIPTV", false); } catch { }
+                try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\SystemFileAssociations\" + ext + Sub, false); } catch { }
+                try
+                {
+                    using (var m = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Classes\SystemFileAssociations\" + ext + Sub))
+                        if (m != null)
+                            using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\SystemFileAssociations\" + ext + Sub))
+                                k.SetValue("LegacyDisable", "");
+                }
+                catch { }
             }
         }
 
         public static bool IsAdded()
         {
-            using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Classes\SystemFileAssociations\.mp4\shell\NovaIPTV"))
-                if (k != null) return true;
-            using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Classes\SystemFileAssociations\.mp4\shell\NovaIPTV"))
-                return k != null;
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Classes\SystemFileAssociations\.mp4" + Sub))
+                    if (k != null) return k.GetValue("LegacyDisable") == null;
+                using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Classes\SystemFileAssociations\.mp4" + Sub))
+                    return k != null;
+            }
+            catch { return false; }
         }
     }
 }

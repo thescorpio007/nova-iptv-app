@@ -15,10 +15,24 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <DockPanel Margin="10,12,18,4">
-                <TextBlock x:Name="Count" DockPanel.Dock="Right" Foreground="{StaticResource DimText}" FontSize="13" VerticalAlignment="Bottom"/>
-                <TextBlock x:Name="GroupTitle" FontSize="17" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
-            </DockPanel>
+            <StackPanel Margin="10,12,18,4">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <TextBlock x:Name="Count" Foreground="{StaticResource DimText}" FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <Button x:Name="SortBtn" Style="{StaticResource FlatButton}" Click="OnSort" ToolTip="How this list is sorted (Ctrl+S)">
+                            <TextBlock x:Name="SortText" Foreground="{StaticResource SubText}" FontSize="13"/>
+                        </Button>
+                        <Button x:Name="EditBtn" Style="{StaticResource FlatButton}" Click="OnEdit" ToolTip="Hide and reorder groups and posters (Ctrl+E)">
+                            <TextBlock x:Name="EditText" Text="✎ Edit" Foreground="{StaticResource SubText}" FontSize="13"/>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock x:Name="GroupTitle" FontSize="17" FontWeight="Bold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                </DockPanel>
+                <TextBlock x:Name="EditHint" Visibility="Collapsed" Foreground="{StaticResource StarBrush}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"
+                           Text="EDIT: Enter picks a poster up / puts it down · arrows move it · H hide / show · Home / End first / last · Esc done"/>
+                <TextBlock x:Name="HideHint" Style="{StaticResource Hint}" FontSize="12" Margin="0,2,0,0"
+                           Text="Tip: press Enter twice quickly (or double-click) on a poster to hide it."/>
+            </StackPanel>
 
             <Border x:Name="GridHost" Grid.Row="1" SizeChanged="OnGridSize" Margin="0,0,0,20">
                 <ItemsControl x:Name="Posters" Focusable="False" PreviewKeyDown="OnGridKeyDown"
@@ -48,7 +62,10 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate DataType="{x:Type local:PosterItem}">
-                                        <Button Style="{StaticResource PosterButton}" Width="{Binding TileWidth}" Click="OnPosterClick" ToolTip="{Binding Title}">
+                                        <Button Style="{StaticResource PosterButton}" Width="{Binding TileWidth}" Click="OnPosterClick" ToolTip="{Binding Title}"
+                                                Opacity="{Binding Opacity}" ContextMenuOpening="OnPosterMenu">
+                                            <Button.ContextMenu><ContextMenu/></Button.ContextMenu>
+                                            <Border BorderThickness="3" BorderBrush="{Binding MoveBrush}" CornerRadius="4">
                                             <Grid>
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="Auto"/>
@@ -75,6 +92,7 @@
                                                 <TextBlock Grid.Row="1" Text="{Binding Title}" Visibility="{Binding TitleVisibility}" Margin="8,6,8,8"
                                                            FontSize="13" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="36"/>
                                             </Grid>
+                                            </Border>
                                         </Button>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>

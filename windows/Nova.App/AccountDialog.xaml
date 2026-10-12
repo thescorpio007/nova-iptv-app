@@ -11,13 +11,25 @@
                    Text="Tip: paste your full M3U / Xtream link into Server and the other fields fill in by themselves."/>
 
         <TextBlock Text="Name (optional)" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
-        <TextBox x:Name="NameBox" Margin="0,0,0,12"/>
+        <DockPanel Margin="0,0,0,12">
+            <Button DockPanel.Dock="Right" Style="{StaticResource NovaButton}" Content="Paste" Margin="8,0,0,0" Tag="NameBox" Click="OnPaste" Focusable="True"/>
+            <TextBox x:Name="NameBox"/>
+        </DockPanel>
         <TextBlock Text="Server, e.g. http://example.com:8080" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
-        <TextBox x:Name="ServerBox" Margin="0,0,0,12" TextChanged="OnServerChanged"/>
+        <DockPanel Margin="0,0,0,12">
+            <Button DockPanel.Dock="Right" Style="{StaticResource NovaButton}" Content="Paste" Margin="8,0,0,0" Tag="ServerBox" Click="OnPaste" Focusable="True"/>
+            <TextBox x:Name="ServerBox" TextChanged="OnServerChanged"/>
+        </DockPanel>
         <TextBlock Text="Username" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
-        <TextBox x:Name="UserBox" Margin="0,0,0,12"/>
+        <DockPanel Margin="0,0,0,12">
+            <Button DockPanel.Dock="Right" Style="{StaticResource NovaButton}" Content="Paste" Margin="8,0,0,0" Tag="UserBox" Click="OnPaste" Focusable="True"/>
+            <TextBox x:Name="UserBox"/>
+        </DockPanel>
         <TextBlock Text="Password" Foreground="{StaticResource SubText}" Margin="0,0,0,5"/>
-        <TextBox x:Name="PassBox" Margin="0,0,0,8"/>
+        <DockPanel Margin="0,0,0,8">
+            <Button DockPanel.Dock="Right" Style="{StaticResource NovaButton}" Content="Paste" Margin="8,0,0,0" Tag="PassBox" Click="OnPaste" Focusable="True"/>
+            <TextBox x:Name="PassBox"/>
+        </DockPanel>
 
         <TextBlock x:Name="Status" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="14"/>
 

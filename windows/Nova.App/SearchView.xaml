@@ -26,19 +26,25 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <Grid MaxWidth="760" HorizontalAlignment="Left" Width="760">
-            <TextBox x:Name="Box" FontSize="18" TextChanged="OnTextChanged" PreviewKeyDown="OnBoxKey"/>
-            <TextBlock x:Name="Placeholder" Text="Search channels, films and series in every account…" Foreground="{StaticResource DimText}"
-                       FontSize="17" Margin="14,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
-        </Grid>
+        <DockPanel>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="12,0,0,0">
+                <Button x:Name="KindBtn" Style="{StaticResource NovaButton}" Click="OnKind" Margin="0,0,8,0" ToolTip="What to search"/>
+                <Button x:Name="AccountBtn" Style="{StaticResource NovaButton}" Click="OnAccount" ToolTip="Which server to search"/>
+            </StackPanel>
+            <Grid MaxWidth="760" HorizontalAlignment="Left" Width="760">
+                <TextBox x:Name="Box" FontSize="18" TextChanged="OnTextChanged" PreviewKeyDown="OnBoxKey"/>
+                <TextBlock x:Name="Placeholder" Text="Search channels, films and series…" Foreground="{StaticResource DimText}"
+                           FontSize="17" Margin="14,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+            </Grid>
+        </DockPanel>
         <TextBlock x:Name="Status" Grid.Row="1" Style="{StaticResource Hint}" FontSize="13.5" Margin="2,10,0,6"
                    Text="Type at least 2 letters. The first search downloads the full lists of every account, so it can take a moment."/>
 
         <Grid Grid.Row="2" Margin="0,6,0,0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition x:Name="ChCol" Width="*"/>
+                <ColumnDefinition x:Name="FilmCol" Width="*"/>
+                <ColumnDefinition x:Name="SeriesCol" Width="*"/>
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>

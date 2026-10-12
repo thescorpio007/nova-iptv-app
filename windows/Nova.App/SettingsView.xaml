@@ -3,6 +3,13 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto" Focusable="False" PreviewKeyDown="OnScrollKey">
         <StackPanel Margin="40,10,40,48" MaxWidth="820" HorizontalAlignment="Left" Width="820">
+            <Border x:Name="LockBar" Background="{StaticResource Surface}" CornerRadius="9" Padding="16,12" Margin="0,10,0,0" Visibility="Collapsed">
+                <DockPanel>
+                    <Button x:Name="UnlockBtn" DockPanel.Dock="Right" Style="{StaticResource AccentButton}" Content="Unlock" Click="OnUnlock"/>
+                    <TextBlock Text="🔒  Settings are locked by your parental PIN." VerticalAlignment="Center" FontSize="15"/>
+                </DockPanel>
+            </Border>
+            <StackPanel x:Name="Body">
 
             <!-- Accounts -->
             <TextBlock Text="Accounts" Style="{StaticResource SectionTitle}"/>
@@ -26,6 +33,36 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
             <Button x:Name="AddAccountBtn" Style="{StaticResource AccentButton}" Content="+  Add account" HorizontalAlignment="Left" Margin="0,4,0,0" Click="OnAddAccount"/>
+
+            <TextBlock Text="Accounts link" Foreground="{StaticResource SubText}" Margin="0,18,0,6"/>
+            <TextBlock x:Name="LinkStatus" Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <WrapPanel>
+                <Button x:Name="LinkConnectBtn" Style="{StaticResource NovaButton}" Content="Connect an accounts link…" Margin="0,0,8,8" Click="OnLinkConnect"/>
+                <Button x:Name="LinkSyncBtn" Style="{StaticResource NovaButton}" Content="Check now" Margin="0,0,8,8" Click="OnLinkSync"/>
+                <Button x:Name="LinkStopBtn" Style="{StaticResource NovaButton}" Content="Stop using the link" Margin="0,0,8,8" Click="OnLinkStop"/>
+                <Button Style="{StaticResource NovaButton}" Content="Save accounts list…" Margin="0,0,8,8" Click="OnSaveList"/>
+            </WrapPanel>
+
+            <!-- Backup -->
+            <TextBlock Text="Backup &amp; restore" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,8"
+                       Text="Same .bak file as the Android app: a backup made on the box restores here, and the other way round. Backups are saved in Downloads\NovaIPTV\Backups."/>
+            <WrapPanel>
+                <Button Style="{StaticResource AccentButton}" Content="Save backup…" Margin="0,0,8,8" Click="OnBackup"/>
+                <Button Style="{StaticResource NovaButton}" Content="Restore…" Margin="0,0,8,8" Click="OnRestore"/>
+                <Button Style="{StaticResource NovaButton}" Content="Open backups folder" Margin="0,0,8,8" Click="OnOpenBackups"/>
+            </WrapPanel>
+
+            <!-- PIN and hidden -->
+            <TextBlock Text="Parental PIN &amp; hidden items" Style="{StaticResource SectionTitle}"/>
+            <TextBlock x:Name="PinStatus" Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <WrapPanel>
+                <Button x:Name="PinSetBtn" Style="{StaticResource NovaButton}" Content="Set a PIN…" Margin="0,0,8,8" Click="OnPinSet"/>
+                <Button x:Name="PinRemoveBtn" Style="{StaticResource NovaButton}" Content="Remove the PIN" Margin="0,0,8,8" Click="OnPinRemove"/>
+                <Button x:Name="PinLockBtn" Style="{StaticResource NovaButton}" Content="Lock now" Margin="0,0,8,8" Click="OnPinLock"/>
+            </WrapPanel>
+            <TextBlock x:Name="HiddenTitle" Foreground="{StaticResource SubText}" Margin="0,10,0,6"/>
+            <StackPanel x:Name="HiddenList"/>
 
             <!-- Playback -->
             <TextBlock Text="Playback" Style="{StaticResource SectionTitle}"/>
@@ -82,6 +119,7 @@
             </StackPanel>
             <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0"
                        Text="The watchdog never gives up while you watch: it reconnects after 1 s, 2 s, 4 s … up to every 30 s. A channel that played and then dropped is always reconnected, never skipped."/>
+            <StackPanel x:Name="WatchdogRows" Margin="0,10,0,0"/>
 
             <TextBlock Text="Downloads &amp; recordings folder" Foreground="{StaticResource SubText}" Margin="0,18,0,6"/>
             <DockPanel>
@@ -93,6 +131,10 @@
                 <TextBlock x:Name="DownloadPath" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             </DockPanel>
 
+            <TextBlock Text="Download speed" Foreground="{StaticResource SubText}" Margin="0,18,0,4"/>
+            <StackPanel x:Name="DownloadRows"/>
+            <TextBlock x:Name="ConnHint" Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+
             <TextBlock Text="Player" Style="{StaticResource SectionTitle}"/>
             <TextBlock Text="Network buffer (used only when the disk buffer is off)" Foreground="{StaticResource SubText}" Margin="0,4,0,6"/>
             <StackPanel Orientation="Horizontal">
@@ -103,6 +145,16 @@
             </StackPanel>
             <CheckBox x:Name="HwDecode" Content="Use the graphics card to decode video (turn off if the picture is green, frozen or flickering)" Margin="0,14,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
             <CheckBox x:Name="FullScreen" Content="Open the player in full screen" Checked="OnChanged" Unchecked="OnChanged"/>
+            <CheckBox x:Name="NumberKeys" Content="Type a channel number in the live player to jump to it" Checked="OnChanged" Unchecked="OnChanged"/>
+            <CheckBox x:Name="AutoPlayLast" Content="When Nova starts, play the last channel I watched" Checked="OnChanged" Unchecked="OnChanged"/>
+
+            <TextBlock Text="Which player plays what" Foreground="{StaticResource SubText}" Margin="0,16,0,4"/>
+            <StackPanel x:Name="PlayerRows"/>
+            <CheckBox x:Name="ExternalOnError" Content="When Nova's player can't play something, open it in the external player" Margin="0,8,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
+
+            <TextBlock Text="Subtitles" Foreground="{StaticResource SubText}" Margin="0,16,0,4"/>
+            <StackPanel x:Name="SubtitleRows"/>
+            <CheckBox x:Name="SubBackground" Content="Dark box behind the subtitles" Margin="0,8,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
 
             <!-- Live TV -->
             <TextBlock Text="Live TV" Style="{StaticResource SectionTitle}"/>
@@ -110,6 +162,8 @@
             <CheckBox x:Name="Logos" Content="Show channel logos" Checked="OnChanged" Unchecked="OnChanged"/>
             <CheckBox x:Name="TvArrows" Content="TV-style arrows in the player: ▲ = next channel, ▼ = previous" Checked="OnChanged" Unchecked="OnChanged"/>
             <CheckBox x:Name="OpenOnFocus" Content="Open a group as soon as it is highlighted with the arrows" Checked="OnChanged" Unchecked="OnChanged"/>
+            <CheckBox x:Name="NowLine" Content="Show the programme on air under each channel" Checked="OnChanged" Unchecked="OnChanged"/>
+            <StackPanel x:Name="LiveRows" Margin="0,8,0,0"/>
 
             <!-- Films & series -->
             <TextBlock Text="Films &amp; series" Style="{StaticResource SectionTitle}"/>
@@ -120,6 +174,15 @@
                 <RadioButton x:Name="PLarge" GroupName="ps" Style="{StaticResource ChoiceButton}" Content="Large" Checked="OnChanged"/>
             </StackPanel>
             <CheckBox x:Name="PosterTitles" Content="Show titles under the posters" Margin="0,10,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
+            <StackPanel x:Name="VodRows" Margin="0,8,0,0"/>
+
+            <!-- VPN -->
+            <TextBlock Text="VPN" Style="{StaticResource SectionTitle}"/>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource NovaButton}" Content="Check" Click="OnVpnCheck"/>
+                <TextBlock x:Name="VpnStatus" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            </DockPanel>
+            <CheckBox x:Name="RequireVpn" Content="Only play when a VPN is connected" Margin="0,10,0,0" Checked="OnChanged" Unchecked="OnChanged"/>
 
             <!-- General -->
             <TextBlock Text="General" Style="{StaticResource SectionTitle}"/>
@@ -129,31 +192,28 @@
                 <Button DockPanel.Dock="Right" Style="{StaticResource NovaButton}" Content="Reset" Margin="8,0,0,0" Click="OnResetAgent"/>
                 <TextBox x:Name="AgentBox" LostKeyboardFocus="OnAgentDone"/>
             </DockPanel>
+            <CheckBox x:Name="ShellMenuBox" Content="Add “Open with Nova” to the right-click menu of video files (your default player stays)" Margin="0,12,0,0"
+                      Checked="OnShellMenu" Unchecked="OnShellMenu"/>
             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                 <Button Style="{StaticResource NovaButton}" Content="Clear picture cache" Margin="0,0,8,0" Click="OnClearImages"/>
                 <Button Style="{StaticResource NovaButton}" Content="Open data folder" Click="OnOpenData"/>
             </StackPanel>
 
             <!-- Keys -->
-            <TextBlock Text="Keyboard and remote" Style="{StaticResource SectionTitle}"/>
-            <TextBlock Style="{StaticResource Hint}" FontSize="13.5" LineHeight="22">
-                <Run Text="Arrows: move  ·  Enter: open / play  ·  Esc or Backspace: back  ·  F: favorite  ·  F5: reload"/>
-                <LineBreak/>
-                <Run Text="Ctrl+1…6: Live TV, Films, Series, Search, Downloads, Settings  ·  Ctrl+F: search"/>
-                <LineBreak/>
-                <Run Text="Live TV list: R record  ·  Downloads tab: Enter play, Space pause/resume, Delete remove"/>
-                <LineBreak/>
-                <Run Text="Player, live: ▲ ▼ channel  ·  ← → 30 s back / forward  ·  L back to live  ·  Space pause  ·  R record"/>
-                <LineBreak/>
-                <Run Text="Player, films: ← → 10 s (Ctrl: 1 min)  ·  Space pause  ·  D download  ·  PgUp/PgDn episode"/>
-                <LineBreak/>
-                <Run Text="Everywhere in the player: A audio  ·  S subtitles  ·  Z picture  ·  F full screen  ·  M mute  ·  + − or wheel: volume"/>
-            </TextBlock>
+            <TextBlock Text="Remote control &amp; keyboard" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,8"
+                       Text="Choose which button does what. Select an action, press “Add a button”, then press the button on your remote or keyboard."/>
+            <WrapPanel>
+                <Button x:Name="KeysToggle" Style="{StaticResource NovaButton}" Content="Show the buttons ▾" Margin="0,0,8,8" Click="OnKeysToggle"/>
+                <Button Style="{StaticResource NovaButton}" Content="Reset all buttons" Margin="0,0,8,8" Click="OnKeysReset"/>
+            </WrapPanel>
+            <StackPanel x:Name="KeyRows" Visibility="Collapsed"/>
 
             <!-- About -->
             <TextBlock Text="About" Style="{StaticResource SectionTitle}"/>
             <TextBlock x:Name="About" Style="{StaticResource Hint}" FontSize="13.5" LineHeight="22"/>
-            <TextBlock Text="Designed by A.H" Foreground="{StaticResource Accent}" FontWeight="SemiBold" Margin="0,8,0,0"/>
+            <TextBlock x:Name="Signature" Foreground="{StaticResource Accent}" FontWeight="SemiBold" Margin="0,8,0,0"/>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

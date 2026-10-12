@@ -33,9 +33,58 @@ namespace Nova.App
         {
             InitializeComponent();
             _typing.Tick += (s, e) => { _typing.Stop(); Run(); };
+            FillFilters();
         }
 
-        public void OnShown() { }
+        public void OnShown() { FillFilters(); }
+
+        // ---------------------------------------------------------------- filters (remembered, as on the box)
+
+        private static readonly string[] Kinds = { "all", "live", "movie", "series" };
+        private static readonly string[] KindNames = { "All", "Channels", "Films", "Series" };
+
+        private void FillFilters()
+        {
+            var st = App.Store.State;
+            var k = Array.IndexOf(Kinds, st.SearchKind);
+            KindBtn.Content = "Show: " + KindNames[k < 0 ? 0 : k] + "  ▾";
+            var a = st.SearchAccount == null ? null : App.Store.Account(st.SearchAccount);
+            if (a == null) st.SearchAccount = null;
+            AccountBtn.Content = "In: " + (a == null ? "All servers" : a.DisplayName) + "  ▾";
+            AccountBtn.Visibility = App.Store.Accounts.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+            var kind = st.SearchKind ?? "all";
+            ChList.Visibility = ChTitle.Visibility = kind == "all" || kind == "live" ? Visibility.Visible : Visibility.Collapsed;
+            FilmList.Visibility = FilmTitle.Visibility = kind == "all" || kind == "movie" ? Visibility.Visible : Visibility.Collapsed;
+            SeriesList.Visibility = SeriesTitle.Visibility = kind == "all" || kind == "series" ? Visibility.Visible : Visibility.Collapsed;
+            ChCol.Width = new GridLength(ChList.Visibility == Visibility.Visible ? 1 : 0, GridUnitType.Star);
+            FilmCol.Width = new GridLength(FilmList.Visibility == Visibility.Visible ? 1 : 0, GridUnitType.Star);
+            SeriesCol.Width = new GridLength(SeriesList.Visibility == Visibility.Visible ? 1 : 0, GridUnitType.Star);
+        }
+
+        private void OnKind(object sender, RoutedEventArgs e)
+        {
+            var st = App.Store.State;
+            var i = NovaDialog.Choose(Window.GetWindow(this), "Search in", null, KindNames, Math.Max(0, Array.IndexOf(Kinds, st.SearchKind)));
+            if (i < 0) return;
+            st.SearchKind = Kinds[i];
+            App.Store.SaveState();
+            FillFilters();
+            Run();
+        }
+
+        private void OnAccount(object sender, RoutedEventArgs e)
+        {
+            var st = App.Store.State;
+            var accounts = App.Store.Accounts.ToList();
+            var names = new List<string> { "All servers" };
+            names.AddRange(accounts.Select(a => a.DisplayName));
+            var i = NovaDialog.Choose(Window.GetWindow(this), "Search on", null, names, st.SearchAccount == null ? 0 : accounts.FindIndex(a => a.Id == st.SearchAccount) + 1);
+            if (i < 0) return;
+            st.SearchAccount = i == 0 ? null : accounts[i - 1].Id;
+            App.Store.SaveState();
+            FillFilters();
+            Run();
+        }
         public void OnHidden() { }
 
         public void FocusStart()
@@ -72,7 +121,7 @@ namespace Nova.App
             SearchResults res;
             try
             {
-                res = await App.Catalog.Search(q, MaxPerType, cts.Token);
+                res = await App.Catalog.Search(q, MaxPerType, App.Store.State.SearchKind, App.Store.State.SearchAccount, cts.Token);
             }
             catch (OperationCanceledException) { return; }
             catch (Exception e)
@@ -149,7 +198,7 @@ namespace Nova.App
             else if (e.Key == Key.Down)
             {
                 e.Handled = true;
-                var first = new[] { ChList, FilmList, SeriesList }.FirstOrDefault(l => l.Items.Count > 0);
+                var first = new[] { ChList, FilmList, SeriesList }.FirstOrDefault(l => l.Items.Count > 0 && l.Visibility == Visibility.Visible);
                 if (first != null) FocusList(first);
             }
         }
@@ -174,7 +223,7 @@ namespace Nova.App
                 var i = Array.IndexOf(lists, list);
                 for (int j = i + (e.Key == Key.Right ? 1 : -1); j >= 0 && j < lists.Length; j += e.Key == Key.Right ? 1 : -1)
                 {
-                    if (lists[j].Items.Count > 0) { FocusList(lists[j]); break; }
+                    if (lists[j].Items.Count > 0 && lists[j].Visibility == Visibility.Visible) { FocusList(lists[j]); break; }
                 }
             }
         }
