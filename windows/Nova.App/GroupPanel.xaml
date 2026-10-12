@@ -8,14 +8,18 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock x:Name="Heading" Text="Groups" FontSize="13" Foreground="{StaticResource DimText}" Margin="16,12,12,6"/>
+            <TextBlock x:Name="Heading" Text="Groups" FontSize="13" Foreground="{StaticResource DimText}" Margin="16,12,12,6" TextWrapping="Wrap"/>
             <ListBox x:Name="GroupList" Grid.Row="1" Style="{StaticResource NovaList}" Margin="6,0,4,8"
                      SelectionChanged="OnSelectionChanged" PreviewKeyDown="OnListKeyDown"
                      PreviewMouseLeftButtonUp="OnMouseUp">
                 <ListBox.ItemTemplate>
                     <DataTemplate DataType="{x:Type local:GroupRow}">
-                        <TextBlock Text="{Binding Text}" FontWeight="{Binding Weight}" Foreground="{Binding Foreground}"
-                                   Margin="{Binding Indent}" TextTrimming="CharacterEllipsis" FontSize="14.5"/>
+                        <Border BorderBrush="{Binding MoveBrush}" BorderThickness="2" CornerRadius="5" Margin="-6,-4" Padding="4,2">
+                            <TextBlock FontWeight="{Binding Weight}" Foreground="{Binding Foreground}" Opacity="{Binding Opacity}"
+                                       Margin="{Binding Indent}" TextTrimming="CharacterEllipsis" FontSize="14.5">
+                                <Run Text="{Binding Text, Mode=OneWay}"/><Run Text="{Binding HiddenMark, Mode=OneWay}" Foreground="{StaticResource DimText}"/>
+                            </TextBlock>
+                        </Border>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>

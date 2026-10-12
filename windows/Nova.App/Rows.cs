@@ -19,7 +19,7 @@ namespace Nova.App
         }
     }
 
-    public enum GroupKind { Header, Group, Favorites, Info }
+    public enum GroupKind { Header, Group, Favorites, New, Info }
 
     /// <summary>One line of the group list: an account header, a group, the Favorites group or a message.</summary>
     public class GroupRow : Notify
@@ -36,6 +36,7 @@ namespace Nova.App
             get
             {
                 if (Kind == GroupKind.Favorites) return Catalog.FavKey;
+                if (Kind == GroupKind.New) return Organize.NewKey;
                 if (Kind == GroupKind.Group) return Category.Key;
                 return null;
             }
@@ -49,13 +50,24 @@ namespace Nova.App
                 {
                     case GroupKind.Header: return (Closed ? "▸  " : "▾  ") + Account.DisplayName;
                     case GroupKind.Favorites: return "★  Favorites";
+                    case GroupKind.New: return "🆕  Recently added";
                     case GroupKind.Info: return Message;
                     default: return Category.Name;
                 }
             }
         }
 
-        public FontWeight Weight { get { return Kind == GroupKind.Header || Kind == GroupKind.Favorites ? FontWeights.Bold : FontWeights.Normal; } }
+        public FontWeight Weight { get { return Kind == GroupKind.Header || Kind == GroupKind.Favorites || Kind == GroupKind.New ? FontWeights.Bold : FontWeights.Normal; } }
+
+        /// <summary>Hidden (shown faded in edit mode).</summary>
+        public bool Hidden { get; set; }
+        public double Opacity { get { return Hidden ? 0.4 : 1.0; } }
+        public string HiddenMark { get { return Hidden ? "  (hidden)" : ""; } }
+
+        private bool _moving;
+        /// <summary>Being moved with the arrows (edit mode).</summary>
+        public bool Moving { get { return _moving; } set { _moving = value; Changed(); Changed("MoveBrush"); } }
+        public Brush MoveBrush { get { return _moving ? (Brush)Application.Current.Resources["StarBrush"] : Brushes.Transparent; } }
 
         public Brush Foreground
         {
@@ -65,6 +77,7 @@ namespace Nova.App
                 {
                     case GroupKind.Header: return (Brush)Application.Current.Resources["Accent"];
                     case GroupKind.Favorites: return (Brush)Application.Current.Resources["FavBrush"];
+                    case GroupKind.New: return (Brush)Application.Current.Resources["StarBrush"];
                     case GroupKind.Info: return (Brush)Application.Current.Resources["ErrorBrush"];
                     default: return (Brush)Application.Current.Resources["TextBrush"];
                 }
@@ -97,6 +110,20 @@ namespace Nova.App
 
         public Visibility TagVisibility { get { return string.IsNullOrEmpty(AccountTag) ? Visibility.Collapsed : Visibility.Visible; } }
 
+        public bool Hidden { get; set; }
+        public double Opacity { get { return Hidden ? 0.4 : 1.0; } }
+        private bool _moving;
+        public bool Moving { get { return _moving; } set { _moving = value; Changed(); Changed("MoveBrush"); } }
+        public Brush MoveBrush { get { return _moving ? (Brush)Application.Current.Resources["StarBrush"] : Brushes.Transparent; } }
+        public double RowHeight { get; set; }
+        public double LogoHeight { get { return Math.Max(24, RowHeight - 6); } }
+        public bool HasArchive { get { return Channel.HasArchive; } }
+        public Visibility ArchiveVisibility { get { return Channel.HasArchive ? Visibility.Visible : Visibility.Collapsed; } }
+        private string _now;
+        /// <summary>Programme on air (Settings › Live TV view).</summary>
+        public string NowText { get { return _now; } set { _now = value; Changed(); Changed("NowVisibility"); } }
+        public Visibility NowVisibility { get { return string.IsNullOrEmpty(_now) ? Visibility.Collapsed : Visibility.Visible; } }
+
         private bool _rec;
         public bool IsRecording { get { return _rec; } set { _rec = value; Changed(); Changed("RecVisibility"); } }
         public Visibility RecVisibility { get { return _rec ? Visibility.Visible : Visibility.Collapsed; } }
@@ -124,6 +151,12 @@ namespace Nova.App
         public Visibility FavVisibility { get { return _fav ? Visibility.Visible : Visibility.Collapsed; } }
 
         public SavedItem Saved { get { return Movie != null ? SavedItem.Of(Movie) : SavedItem.Of(Series); } }
+        public string Key { get { return Movie != null ? Movie.Key : Series.Key; } }
+        public bool Hidden { get; set; }
+        public double Opacity { get { return Hidden ? 0.4 : 1.0; } }
+        private bool _moving;
+        public bool Moving { get { return _moving; } set { _moving = value; Changed(); Changed("MoveBrush"); } }
+        public Brush MoveBrush { get { return _moving ? (Brush)Application.Current.Resources["StarBrush"] : Brushes.Transparent; } }
     }
 
     /// <summary>One row of posters (the grid is a virtualized list of rows, so huge lists stay fast).</summary>

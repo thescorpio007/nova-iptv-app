@@ -11,21 +11,25 @@ using Nova.Core;
 namespace Nova.App
 {
     /// <summary>
-    /// The group list on the left of every zone: ★ Favorites, then the groups of each account
-    /// in its own section (▾ open / ▸ closed), like the Android app.
+    /// The group list on the left of every zone: ★ Favorites, 🆕 Recently added (films, series), then the groups of
+    /// each account in its own section (▾ open / ▸ closed), in your order, hidden groups left out — like the Android app.
+    /// In edit mode: Enter picks a group up (▲ ▼ move it, Enter drops it), H hides / shows, Home / End = top / bottom.
     /// </summary>
     public partial class GroupPanel : UserControl
     {
         private readonly ObservableCollection<GroupRow> _rows = new ObservableCollection<GroupRow>();
-        private readonly HashSet<string> _closed = new HashSet<string>();
         private readonly DispatcherTimer _focusTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
         private List<GroupSection> _sections = new List<GroupSection>();
+        private List<Category> _ordered = new List<Category>();
         private string _openKey;
         private int _loadId;
+        private bool _edit;
+        private GroupRow _moving;
 
         public ContentType Type { get; set; }
+        private string Zone { get { return Organize.Zone(Type); } }
 
-        /// <summary>A group (or Favorites) was opened.</summary>
+        /// <summary>A group (or Favorites / Recently added) was opened.</summary>
         public event Action<GroupRow> Opened;
         /// <summary>Right arrow or Enter on a group: the owner moves the focus to its list.</summary>
         public event Action GoRight;
@@ -38,8 +42,10 @@ namespace Nova.App
             {
                 _focusTimer.Stop();
                 var row = GroupList.SelectedItem as GroupRow;
-                if (row != null && row.Key != null && row.Key != _openKey) Open(row);
+                if (row != null && row.Key != null && row.Key != _openKey && !_edit) Open(row);
             };
+            GroupList.ContextMenuOpening += OnContextMenu;
+            GroupList.ContextMenu = new ContextMenu();
         }
 
         public string OpenKey { get { return _openKey; } }
@@ -47,6 +53,20 @@ namespace Nova.App
         private string SavedType
         {
             get { return Type == ContentType.Live ? ItemType.Live : Type == ContentType.Movie ? ItemType.Movie : ItemType.Series; }
+        }
+
+        /// <summary>Edit mode: hidden groups shown faded (when no PIN), groups can be moved and hidden.</summary>
+        public bool EditMode
+        {
+            get { return _edit; }
+            set
+            {
+                _edit = value;
+                if (_moving != null) { _moving.Moving = false; _moving = null; }
+                Heading.Text = _edit ? "Groups — EDIT: Enter pick up / drop · ▲ ▼ move · H hide / show · Home / End top / bottom" : "Groups";
+                Heading.Foreground = (System.Windows.Media.Brush)FindResource(_edit ? "StarBrush" : "DimText");
+                Build();
+            }
         }
 
         /// <summary>Downloads the groups of every account (or uses the copy in memory).</summary>
@@ -88,29 +108,43 @@ namespace Nova.App
             }
         }
 
-        private void Build()
+        /// <summary>Builds the lines again (after an order / hide / fold change).</summary>
+        public void Build()
         {
             var selectedKey = GroupList.SelectedItem is GroupRow ? ((GroupRow)GroupList.SelectedItem).Key : null;
+            var selectedHeader = GroupList.SelectedItem is GroupRow && ((GroupRow)GroupList.SelectedItem).Kind == GroupKind.Header
+                ? ((GroupRow)GroupList.SelectedItem).Account.Id : null;
+            var movingKey = _moving != null ? _moving.Key : null;
             _rows.Clear();
+            _ordered = Organize.OrderedGroups(Zone, _sections);
             var multi = _sections.Count > 1;
-            if (App.Store.FavoritesOf(SavedType).Count > 0)
-                _rows.Add(new GroupRow { Kind = GroupKind.Favorites });
+            var showHidden = Organize.ShowsHidden(_edit);
+            if (App.Store.FavoritesOf(SavedType).Count > 0) _rows.Add(new GroupRow { Kind = GroupKind.Favorites });
+            if (Type != ContentType.Live) _rows.Add(new GroupRow { Kind = GroupKind.New });
+            var anyGroup = false;
             foreach (var s in _sections)
             {
-                var closed = _closed.Contains(s.Account.Id);
+                var closed = Organize.IsClosed(Zone, s.Account.Id);
                 if (multi) _rows.Add(new GroupRow { Kind = GroupKind.Header, Account = s.Account, Closed = closed });
                 if (multi && closed) continue;
-                foreach (var c in s.Groups)
-                    _rows.Add(new GroupRow { Kind = GroupKind.Group, Category = c, Account = s.Account, ShowSections = multi });
+                foreach (var c in Organize.Groups(Zone, _ordered, s.Account.Id, showHidden))
+                {
+                    _rows.Add(new GroupRow { Kind = GroupKind.Group, Category = c, Account = s.Account, ShowSections = multi, Hidden = Organize.IsGroupHidden(Zone, c.Key) });
+                    anyGroup = true;
+                }
                 if (s.Error != null)
                     _rows.Add(new GroupRow { Kind = GroupKind.Info, Account = s.Account, Message = "Couldn't load: " + s.Error + "  (Enter = retry)" });
-                else if (s.Groups.Count == 0 && !multi)
-                    ShowStatus("This account has no groups here.");
             }
-            if (selectedKey != null)
+            if (!anyGroup && !multi && _sections.Count == 1 && _sections[0].Error == null && _sections[0].Groups.Count == 0)
+                ShowStatus("This account has no groups here.");
+            GroupRow again = null;
+            if (selectedKey != null) again = _rows.FirstOrDefault(r => r.Key == selectedKey);
+            if (again == null && selectedHeader != null) again = _rows.FirstOrDefault(r => r.Kind == GroupKind.Header && r.Account.Id == selectedHeader);
+            if (again != null) GroupList.SelectedItem = again;
+            if (movingKey != null)
             {
-                var again = _rows.FirstOrDefault(r => r.Key == selectedKey);
-                if (again != null) GroupList.SelectedItem = again;
+                _moving = _rows.FirstOrDefault(r => r.Key == movingKey);
+                if (_moving != null) _moving.Moving = true;
             }
         }
 
@@ -148,7 +182,7 @@ namespace Nova.App
 
         private void Toggle(GroupRow header)
         {
-            if (_closed.Contains(header.Account.Id)) _closed.Remove(header.Account.Id); else _closed.Add(header.Account.Id);
+            Organize.SetClosed(Zone, header.Account.Id, !Organize.IsClosed(Zone, header.Account.Id));
             Build();
             var again = _rows.FirstOrDefault(r => r.Kind == GroupKind.Header && r.Account.Id == header.Account.Id);
             if (again != null)
@@ -171,16 +205,48 @@ namespace Nova.App
                     Load();
                     break;
                 default:
+                    if (_edit && row.Kind == GroupKind.Group && fromKeyboard)
+                    {
+                        // Edit: Enter picks the group up / puts it down.
+                        if (_moving == row) { row.Moving = false; _moving = null; }
+                        else { if (_moving != null) _moving.Moving = false; _moving = row; row.Moving = true; }
+                        return;
+                    }
                     if (row.Key != _openKey) Open(row);
                     if (fromKeyboard) { var h = GoRight; if (h != null) h(); }
                     break;
             }
         }
 
+        private void Move(GroupRow row, int delta)
+        {
+            if (row == null || row.Kind != GroupKind.Group) return;
+            if (!PinGate.Unlock(Window.GetWindow(this), "Your PIN protects changes to the lists.")) return;
+            Organize.MoveGroup(Zone, _ordered, row.Category, delta);
+            Build();
+            var again = _rows.FirstOrDefault(r => r.Key == row.Key);
+            if (again != null) { GroupList.SelectedItem = again; FocusRow(again); }
+        }
+
+        private void ToggleHidden(GroupRow row)
+        {
+            if (row == null || row.Kind != GroupKind.Group) return;
+            if (!PinGate.Unlock(Window.GetWindow(this), "Your PIN protects hiding and showing groups.")) return;
+            var hiding = !Organize.IsGroupHidden(Zone, row.Category.Key);
+            var label = row.Category.Name + (_sections.Count > 1 ? "  ·  " + row.Account.DisplayName : "");
+            var index = _rows.IndexOf(row);
+            Organize.ToggleGroupHidden(Zone, row.Category, label);
+            App.Home.Toast(hiding ? "Hidden: " + row.Category.Name + (App.Store.HasPin ? " (show it again in Settings › Hidden items)" : "") : "Shown again: " + row.Category.Name);
+            Build();
+            // The highlight goes to the line that is now in its place.
+            var target = _rows.FirstOrDefault(r => r.Key == row.Key) ?? (index < _rows.Count ? _rows[Math.Max(0, index)] : _rows.LastOrDefault());
+            if (target != null) { GroupList.SelectedItem = target; FocusRow(target); }
+        }
+
         private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             var row = GroupList.SelectedItem as GroupRow;
-            if (row == null || row.Key == null || row.Key == _openKey) { _focusTimer.Stop(); return; }
+            if (row == null || row.Key == null || row.Key == _openKey || _edit) { _focusTimer.Stop(); return; }
             // Arrow keys: open after a short pause, so moving through the list stays quick.
             if (App.Store.Settings.OpenGroupOnFocus && GroupList.IsKeyboardFocusWithin)
             {
@@ -193,12 +259,21 @@ namespace Nova.App
         {
             var item = ItemsControl.ContainerFromElement(GroupList, e.OriginalSource as DependencyObject) as ListBoxItem;
             if (item == null) return;
-            Activate(item.DataContext as GroupRow, false);
+            var row = item.DataContext as GroupRow;
+            if (_edit && row != null && row.Kind == GroupKind.Group) { if (row.Key != _openKey) Open(row); return; }
+            Activate(row, false);
         }
 
         private void OnListKeyDown(object sender, KeyEventArgs e)
         {
             var row = GroupList.SelectedItem as GroupRow;
+            if (_edit && _moving != null && row == _moving)
+            {
+                if (e.Key == Key.Up || e.Key == Key.Down) { e.Handled = true; Move(row, e.Key == Key.Up ? -1 : 1); return; }
+                if (e.Key == Key.Home || e.Key == Key.End) { e.Handled = true; Move(row, e.Key == Key.Home ? int.MinValue : int.MaxValue); return; }
+                if (e.Key == Key.Left || e.Key == Key.Right) { e.Handled = true; return; } // a line being moved keeps the remote
+            }
+            if (_edit && (e.Key == Key.H || e.Key == Key.Delete)) { e.Handled = true; ToggleHidden(row); return; }
             if (e.Key == Key.Enter)
             {
                 e.Handled = true;
@@ -216,6 +291,20 @@ namespace Nova.App
                 e.Handled = true;
                 Toggle(row);
             }
+        }
+
+        private void OnContextMenu(object sender, ContextMenuEventArgs e)
+        {
+            var row = GroupList.SelectedItem as GroupRow;
+            var menu = GroupList.ContextMenu;
+            menu.Items.Clear();
+            if (row == null || row.Kind != GroupKind.Group) { e.Handled = true; return; }
+            Action<string, Action> add = (text, act) => { var mi = new MenuItem { Header = text }; mi.Click += (s, a) => act(); menu.Items.Add(mi); };
+            add(Organize.IsGroupHidden(Zone, row.Category.Key) ? "Show again" : "Hide this group", () => ToggleHidden(row));
+            add("Move up", () => Move(row, -1));
+            add("Move down", () => Move(row, 1));
+            add("Move to the top", () => Move(row, int.MinValue));
+            add("Move to the bottom", () => Move(row, int.MaxValue));
         }
 
         /// <summary>Puts the keyboard focus on the selected group (or the first line).</summary>

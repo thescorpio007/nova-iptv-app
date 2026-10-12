@@ -32,7 +32,7 @@ namespace Nova.App
         {
             List<string> order;
             App.Store.Org.GroupOrder.TryGetValue(zone, out order);
-            return Org.ApplyOrder(sections.SelectMany(s => s.Groups).ToList(), order, c => c.Key);
+            return Nova.Core.Org.ApplyOrder(sections.SelectMany(s => s.Groups).ToList(), order, c => c.Key);
         }
 
         /// <summary>The groups of one account section, in order, hidden ones only when showHidden.</summary>
@@ -72,9 +72,9 @@ namespace Nova.App
             var full = allOrdered.Select(x => x.Key).ToList();
             var section = full.Where(k => k.StartsWith(c.AccountId + "|")).ToList();
             List<string> moved;
-            if (delta == int.MinValue) moved = Org.MoveTo(section, c.Key, true);
-            else if (delta == int.MaxValue) moved = Org.MoveTo(section, c.Key, false);
-            else moved = Org.Move(section, c.Key, delta);
+            if (delta == int.MinValue) moved = Nova.Core.Org.MoveTo(section, c.Key, true);
+            else if (delta == int.MaxValue) moved = Nova.Core.Org.MoveTo(section, c.Key, false);
+            else moved = Nova.Core.Org.Move(section, c.Key, delta);
             var i = 0;
             var merged = full.Select(k => k.StartsWith(c.AccountId + "|") ? moved[i++] : k).ToList();
             App.Store.UpdateOrg(o => o.GroupOrder[zone] = merged);
@@ -84,9 +84,9 @@ namespace Nova.App
         public static void MoveItem(string zone, string groupKey, List<string> keys, string key, int delta)
         {
             List<string> moved;
-            if (delta == int.MinValue) moved = Org.MoveTo(keys, key, true);
-            else if (delta == int.MaxValue) moved = Org.MoveTo(keys, key, false);
-            else moved = Org.Move(keys, key, delta);
+            if (delta == int.MinValue) moved = Nova.Core.Org.MoveTo(keys, key, true);
+            else if (delta == int.MaxValue) moved = Nova.Core.Org.MoveTo(keys, key, false);
+            else moved = Nova.Core.Org.Move(keys, key, delta);
             App.Store.UpdateOrg(o => o.ItemOrder[zone + "|" + groupKey] = moved);
         }
 
@@ -100,7 +100,7 @@ namespace Nova.App
             {
                 List<string> order;
                 App.Store.Org.ItemOrder.TryGetValue(zone + "|" + groupKey, out order);
-                var ordered = Org.ApplyOrder(list, order, key);
+                var ordered = Nova.Core.Org.ApplyOrder(list, order, key);
                 shown = ShowsHidden(edit) ? ordered : ordered.Where(x => !IsItemHidden(zone, key(x))).ToList();
             }
             if (edit || groupKey == NewKey || sort == "custom" || string.IsNullOrEmpty(sort)) return shown;

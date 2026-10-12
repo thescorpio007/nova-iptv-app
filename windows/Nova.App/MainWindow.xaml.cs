@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -17,7 +18,13 @@ namespace Nova.App
         void FocusStart();
     }
 
-    public enum Tab { Live, Films, Series, Search, Downloads, Settings }
+    public enum Tab { Live, Films, Series, Search, Link, Recent, Downloads, Settings }
+
+    /// <summary>A screen that uses Back itself first (edit mode, preview…). True = handled.</summary>
+    public interface IBackHandler
+    {
+        bool HandleBack();
+    }
 
     public partial class MainWindow : Window
     {
@@ -28,6 +35,7 @@ namespace Nova.App
         private Tab _tab = Tab.Live;
         private DateTime _lastBack = DateTime.MinValue;
         private bool _switching;
+        private readonly DispatcherTimer _vpnTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
 
         public MainWindow()
         {
@@ -42,14 +50,88 @@ namespace Nova.App
             _clock.Start();
 
             App.Store.AccountsChanged += OnAccountsChanged;
+            Title = "Nova IPTV " + Brand.Version;
+            SignatureText.Text = Brand.Signature;
+            WelcomeVersion.Text = "Nova IPTV for Windows " + Brand.Version + "  ·  " + Brand.Signature;
+            _vpnTimer.Tick += (o, e) => UpdateVpnBadge();
+            _vpnTimer.Start();
+            UpdateVpnBadge();
+            App.Recordings.Changed += () => Dispatcher.BeginInvoke(new Action(UpdateRecBadge));
+        }
+
+        private void UpdateVpnBadge()
+        {
+            var vpn = Vpn.Active();
+            VpnBadge.Visibility = vpn != null ? Visibility.Visible : Visibility.Collapsed;
+            VpnBadge.ToolTip = vpn != null ? "VPN on: " + vpn : null;
+        }
+
+        private void UpdateRecBadge()
+        {
+            var keys = App.Recordings.RecordingKeys;
+            RecBadge.Visibility = keys.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            RecBadgeText.Text = keys.Count == 1 ? "● REC " + App.Recordings.NameOf(keys[0]) : "● REC " + keys.Count;
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
             ShowTab(Tab.Live);
             UpdateWelcome();
-            if (App.Store.Accounts.Count == 0)
-                Dispatcher.BeginInvoke(new Action(() => OnWelcomeAdd(null, null)), DispatcherPriority.ApplicationIdle);
+            Dispatcher.BeginInvoke(new Action(App.AfterStart), DispatcherPriority.ApplicationIdle);
+        }
+
+        // ---------------------------------------------------------------- from outside: drag & drop, "Open with Nova"
+
+        /// <summary>A file or link given to Nova (command line, "Open with Nova", a second start, drag &amp; drop).</summary>
+        public async void OpenFromOutside(string arg)
+        {
+            if (string.IsNullOrWhiteSpace(arg)) return;
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+            var a = arg.Trim().Trim('"');
+            if (System.IO.File.Exists(a))
+            {
+                var ext = System.IO.Path.GetExtension(a).ToLowerInvariant();
+                if (ext == ".bak") { BackupUi.RestoreFromFile(this, a); return; }
+                if (ext == ".m3u" || ext == ".m3u8")
+                {
+                    var entries = M3uPlaylist.Parse(System.IO.File.ReadAllText(a), new Uri(a).AbsoluteUri);
+                    if (entries.Count > 0 && entries.Any(x => x.Url.StartsWith("http", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        ShowTab(Tab.Link);
+                        var v = ViewFor(Tab.Link) as OpenLinkView;
+                        if (v != null) v.OpenFromOutside(entries[0].Url);
+                        return;
+                    }
+                }
+                await PlayerWindow.Play(this, new List<PlayItem> { PlayItem.OfFile(a, null) }, 0);
+                return;
+            }
+            if (a.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || a.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowTab(Tab.Link);
+                var v = ViewFor(Tab.Link) as OpenLinkView;
+                if (v != null) v.OpenFromOutside(a);
+            }
+        }
+
+        private void OnDragOver(object sender, DragEventArgs e)
+        {
+            e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.Text) || e.Data.GetDataPresent(DataFormats.UnicodeText)
+                ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+        }
+
+        private void OnDrop(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                if (files != null && files.Length > 0) OpenFromOutside(files[0]);
+                return;
+            }
+            var text = (e.Data.GetData(DataFormats.UnicodeText) ?? e.Data.GetData(DataFormats.Text)) as string;
+            if (!string.IsNullOrWhiteSpace(text)) OpenFromOutside(text.Trim().Split('\n')[0]);
         }
 
         private void UpdateClock()
@@ -69,6 +151,8 @@ namespace Nova.App
                 case Tab.Films: v = new VodView(ContentType.Movie); break;
                 case Tab.Series: v = new VodView(ContentType.Series); break;
                 case Tab.Search: v = new SearchView(); break;
+                case Tab.Link: v = new OpenLinkView(); break;
+                case Tab.Recent: v = new RecentView(); break;
                 case Tab.Downloads: v = new DownloadsView(); break;
                 default: v = new SettingsView(); break;
             }
@@ -102,6 +186,8 @@ namespace Nova.App
                 case Tab.Films: return TabFilms;
                 case Tab.Series: return TabSeries;
                 case Tab.Search: return TabSearch;
+                case Tab.Link: return TabLink;
+                case Tab.Recent: return TabRecent;
                 case Tab.Downloads: return TabDownloads;
                 case Tab.Settings: return TabSettings;
                 default: return TabLive;
@@ -112,6 +198,7 @@ namespace Nova.App
         {
             if (_switching || !IsLoaded) return;
             var t = sender == TabFilms ? Tab.Films : sender == TabSeries ? Tab.Series : sender == TabSearch ? Tab.Search
+                : sender == TabLink ? Tab.Link : sender == TabRecent ? Tab.Recent
                 : sender == TabDownloads ? Tab.Downloads : sender == TabSettings ? Tab.Settings : Tab.Live;
             if (t != _tab || _pages.Count > 0) ShowTab(t);
         }
@@ -183,19 +270,40 @@ namespace Nova.App
                 Back();
                 return;
             }
-            if (e.Key == Key.F5) { e.Handled = true; OnReload(null, null); return; }
-            if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; ShowTab(Tab.Search); return; }
-            if (Keyboard.Modifiers == ModifierKeys.Control)
+            var action = KeyMap.ActionFor(KeyArea.Lists, e);
+            if (action == null) return;
+            if (inText && Keyboard.Modifiers == ModifierKeys.None && !(e.Key >= Key.F1 && e.Key <= Key.F12)) return;
+            e.Handled = true;
+            switch (action)
             {
-                Tab? t = null;
-                if (e.Key == Key.D1) t = Tab.Live;
-                else if (e.Key == Key.D2) t = Tab.Films;
-                else if (e.Key == Key.D3) t = Tab.Series;
-                else if (e.Key == Key.D4) t = Tab.Search;
-                else if (e.Key == Key.D5) t = Tab.Downloads;
-                else if (e.Key == Key.D6) t = Tab.Settings;
-                if (t.HasValue) { e.Handled = true; ShowTab(t.Value); }
+                case "list_live": ShowTab(Tab.Live); break;
+                case "list_films": ShowTab(Tab.Films); break;
+                case "list_series": ShowTab(Tab.Series); break;
+                case "list_search": ShowTab(Tab.Search); break;
+                case "list_link": ShowTab(Tab.Link); break;
+                case "list_recent": ShowTab(Tab.Recent); break;
+                case "list_downloads": ShowTab(Tab.Downloads); break;
+                case "list_settings": ShowTab(Tab.Settings); break;
+                case "list_reload": OnReload(null, null); break;
+                case "list_last": PlayLastChannel(); break;
+                default:
+                    {
+                        // Edit / sort belong to the zone on screen.
+                        var zone = (_pages.Count > 0 ? null : TabHost.Content) as IZoneActions;
+                        if (zone == null) { e.Handled = false; break; }
+                        if (action == "list_edit") zone.ToggleEdit(); else if (action == "list_sort") zone.ChooseSort();
+                        break;
+                    }
             }
+        }
+
+        /// <summary>Plays the last channel you watched.</summary>
+        public async void PlayLastChannel()
+        {
+            var last = App.Store.Recent.FirstOrDefault(r => r.Type == ItemType.Live);
+            if (last == null) { Toast("No channel watched yet"); return; }
+            var channels = App.Store.Recent.Where(r => r.Type == ItemType.Live).Select(r => PlayItem.Of(r.ToChannel())).ToList();
+            await PlayerWindow.Play(this, channels, 0);
         }
 
         /// <summary>
@@ -238,10 +346,10 @@ namespace Nova.App
         /// <summary>Back: closes a page, then returns to Live TV, then (twice) closes Nova.</summary>
         public void Back()
         {
+            var page = (_pages.Count > 0 ? _pages.Peek().Item1 : TabHost.Content) as IBackHandler;
+            if (page != null && page.HandleBack()) return;
             if (_pages.Count > 0) { PopPage(true); return; }
             if (_tab != Tab.Live) { ShowTab(Tab.Live); return; }
-            var live = TabHost.Content as LiveView;
-            if (live != null && live.HandleBack()) return;
             if (!App.Store.Settings.DoubleBackExit) return;
             if ((DateTime.Now - _lastBack).TotalSeconds < 2) { Close(); return; }
             _lastBack = DateTime.Now;
@@ -253,6 +361,22 @@ namespace Nova.App
         private void OnWelcomeAdd(object sender, RoutedEventArgs e)
         {
             AccountDialog.Edit(this, null);
+        }
+
+        private void OnWelcomeRestore(object sender, RoutedEventArgs e)
+        {
+            BackupUi.Restore(this);
+        }
+
+        private void OnWelcomeLink(object sender, RoutedEventArgs e)
+        {
+            BackupUi.ConnectAccountsLink(this);
+        }
+
+        public void ShowWelcomeIfEmpty()
+        {
+            UpdateWelcome();
+            if (App.Store.Accounts.Count == 0) WelcomeAdd.Focus();
         }
 
         private void OnAccountsChanged()
@@ -307,6 +431,13 @@ namespace Nova.App
                 if (v != null) v.OnHidden();
             }
         }
+    }
+
+    /// <summary>A zone with edit mode and sorting (Live TV, Films, Series).</summary>
+    public interface IZoneActions
+    {
+        void ToggleEdit();
+        void ChooseSort();
     }
 
     /// <summary>A screen that downloads its lists again after an account change or Reload.</summary>

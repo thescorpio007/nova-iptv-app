@@ -15,7 +15,7 @@ using Nova.Core.Streaming;
 namespace Nova.App
 {
     /// <summary>Live TV: groups | channels | preview with programme guide (TiviMate style).</summary>
-    public partial class LiveView : UserControl, IView, IReloadable
+    public partial class LiveView : UserControl, IView, IReloadable, IBackHandler, IZoneActions
     {
         private readonly ObservableCollection<ChannelRow> _rows = new ObservableCollection<ChannelRow>();
         private readonly DispatcherTimer _epgTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
@@ -32,6 +32,10 @@ namespace Nova.App
         private Task _stopping = Task.FromResult(0);
         private LiveLease _previewLease;
         private int _previewRetries;
+        private bool _edit;
+        private ChannelRow _moving;
+        private List<LiveChannel> _groupList = new List<LiveChannel>();
+        private CancellationTokenSource _nowCts;
 
         public LiveView()
         {
@@ -45,7 +49,156 @@ namespace Nova.App
             App.Store.FavoritesChanged += OnFavoritesChanged;
             App.Store.SettingsChanged += OnSettingsChanged;
             App.Recordings.Changed += OnRecordingsChanged;
+            App.Store.OrgChanged += () => Dispatcher.BeginInvoke(new Action(() => { if (!_edit) Groups.Build(); }));
             UpdatePreviewHint();
+            UpdateSortText();
+            Channels.ContextMenu = new ContextMenu();
+            Channels.ContextMenuOpening += OnChannelMenu;
+        }
+
+        // ---------------------------------------------------------------- sort and edit
+
+        private void UpdateSortText()
+        {
+            SortText.Text = "⇅ " + Organize.SortLabel("live", App.Store.Settings.SortLive);
+        }
+
+        public void ChooseSort()
+        {
+            var choices = Organize.SortChoices("live");
+            var current = choices.FindIndex(c => c.Item1 == App.Store.Settings.SortLive);
+            var i = NovaDialog.Choose(Window.GetWindow(this), "Sort Live TV", "“My order” keeps the order you set with ✎ Edit.", choices.Select(c => c.Item2).ToList(), current);
+            if (i < 0) return;
+            var st = App.Store.Settings.Copy();
+            st.SortLive = choices[i].Item1;
+            App.Store.SaveSettings(st);
+            UpdateSortText();
+            if (_group != null) Fill(_group, null);
+        }
+
+        public void ToggleEdit()
+        {
+            if (!_edit && !PinGate.Unlock(Window.GetWindow(this), "Your PIN protects changes to the lists.")) return;
+            _edit = !_edit;
+            if (_moving != null) { _moving.Moving = false; _moving = null; }
+            EditText.Text = _edit ? "✓ Done" : "✎ Edit";
+            EditText.Foreground = (System.Windows.Media.Brush)FindResource(_edit ? "StarBrush" : "SubText");
+            EditHint.Visibility = _edit ? Visibility.Visible : Visibility.Collapsed;
+            Groups.EditMode = _edit;
+            if (_group != null) Fill(_group, Channels.SelectedItem is ChannelRow ? ((ChannelRow)Channels.SelectedItem).Channel.Key : null);
+            App.Home.Toast(_edit ? "Edit: hide and reorder groups and channels — Esc when done" : "Changes saved");
+        }
+
+        private void OnSort(object sender, RoutedEventArgs e) { ChooseSort(); }
+        private void OnEdit(object sender, RoutedEventArgs e) { ToggleEdit(); }
+
+        private void MoveChannel(ChannelRow row, int delta)
+        {
+            if (row == null || _group == null) return;
+            if (_group.Kind == GroupKind.Favorites)
+            {
+                // Favorites keep their own order.
+                var favs = App.Store.FavoritesOf(ItemType.Live);
+                var keys = favs.Select(f => f.Key).ToList();
+                var moved = delta == int.MinValue ? Nova.Core.Org.MoveTo(keys, row.Channel.Key, true) : delta == int.MaxValue ? Nova.Core.Org.MoveTo(keys, row.Channel.Key, false) : Nova.Core.Org.Move(keys, row.Channel.Key, delta);
+                App.Store.ReorderFavorites(ItemType.Live, moved.Select(k => favs.First(f => f.Key == k)).ToList());
+            }
+            else if (_group.Kind == GroupKind.Group)
+            {
+                Organize.MoveItem("live", _group.Key, _rows.Select(r => r.Channel.Key).ToList(), row.Channel.Key, delta);
+            }
+            else return;
+            Fill(_group, row.Channel.Key);
+        }
+
+        private void ToggleChannelHidden(ChannelRow row)
+        {
+            if (row == null || _group == null || _group.Kind != GroupKind.Group) return;
+            var hiding = !Organize.IsItemHidden("live", row.Channel.Key);
+            var index = _rows.IndexOf(row);
+            Organize.ToggleItemHidden("live", row.Channel.Key, row.Name);
+            App.Home.Toast(hiding ? "Hidden: " + row.Name : "Shown again: " + row.Name);
+            Fill(_group, Organize.ShowsHidden(_edit) ? row.Channel.Key : null, index);
+        }
+
+        private void OnChannelMenu(object sender, ContextMenuEventArgs e)
+        {
+            var row = Channels.SelectedItem as ChannelRow;
+            var menu = Channels.ContextMenu;
+            menu.Items.Clear();
+            if (row == null) { e.Handled = true; return; }
+            Action<string, Action> add = (text, act) => { var mi = new MenuItem { Header = text }; mi.Click += (s, a) => act(); menu.Items.Add(mi); };
+            add("▶ Play full screen", () => OpenFull(row));
+            add(row.IsFavorite ? "Remove from favorites" : "Add to favorites", () => ToggleFavorite(row));
+            add(App.Recordings.IsRecording(row.Channel.Key) ? "■ Stop recording" : "● Record", () => ToggleRecord(row));
+            if (row.Channel.HasArchive) add("⟲ Catch-up", () => ShowCatchup(row));
+            if (_edit || PinGate.IsUnlocked)
+            {
+                menu.Items.Add(new Separator());
+                if (_group != null && _group.Kind == GroupKind.Group) add(Organize.IsItemHidden("live", row.Channel.Key) ? "Show again" : "Hide this channel", () => { if (PinGate.Unlock(Window.GetWindow(this), "Your PIN protects hiding channels.")) ToggleChannelHidden(row); });
+                if (_group != null && _group.Kind != GroupKind.New)
+                {
+                    add("Move up", () => { if (PinGate.Unlock(Window.GetWindow(this), "Your PIN protects changes.")) MoveChannel(row, -1); });
+                    add("Move down", () => { if (PinGate.Unlock(Window.GetWindow(this), "Your PIN protects changes.")) MoveChannel(row, 1); });
+                    add("Move to the top", () => { if (PinGate.Unlock(Window.GetWindow(this), "Your PIN protects changes.")) MoveChannel(row, int.MinValue); });
+                    add("Move to the bottom", () => { if (PinGate.Unlock(Window.GetWindow(this), "Your PIN protects changes.")) MoveChannel(row, int.MaxValue); });
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------- catch-up
+
+        private void OnCatchupClick(object sender, RoutedEventArgs e) { ShowCatchup(Channels.SelectedItem as ChannelRow); }
+
+        private async void ShowCatchup(ChannelRow row)
+        {
+            if (row == null) return;
+            if (!row.Channel.HasArchive) { App.Home.Toast("This channel has no catch-up on your server."); return; }
+            App.Home.Toast("Loading past programmes…");
+            List<CatchupEntry> list;
+            try { list = await App.Catalog.Catchup(row.Channel, CancellationToken.None); }
+            catch (Exception ex) { App.Home.Toast("Couldn't load catch-up: " + ex.Message); return; }
+            if (list.Count == 0) { NovaDialog.Info(Window.GetWindow(this), "Catch-up · " + row.Name, "No past programmes are available for this channel."); return; }
+            var shown = list.Take(60).ToList();
+            var i = NovaDialog.Choose(Window.GetWindow(this), "Catch-up · " + row.Name, "Past programmes the server keeps (newest first).",
+                shown.Select(x => x.When + "   " + x.Title).ToList(), 0);
+            if (i < 0) return;
+            var entry = shown[i];
+            StopPreview();
+            await _stopping;
+            var item = new PlayItem
+            {
+                Title = row.Name + "  ·  " + entry.Title,
+                Subtitle = entry.When,
+                Url = App.Catalog.CatchupUrl(row.Channel, entry),
+                AccountId = row.Channel.AccountId,
+                Kind = "catchup",
+                Ext = "ts",
+            };
+            await PlayerWindow.Play(Window.GetWindow(this), new List<PlayItem> { item }, 0);
+            FocusChannels();
+        }
+
+        // ---------------------------------------------------------------- programme on air under each channel
+
+        private async void FillNowLines(List<ChannelRow> rows)
+        {
+            if (_nowCts != null) _nowCts.Cancel();
+            if (!App.Store.Settings.LiveNowLine) return;
+            var cts = new CancellationTokenSource();
+            _nowCts = cts;
+            foreach (var r in rows.Take(80))
+            {
+                if (cts.IsCancellationRequested) return;
+                try
+                {
+                    var list = App.Catalog.EpgIfLoaded(r.Channel) ?? await App.Catalog.Epg(r.Channel, cts.Token);
+                    EpgEntry now, next;
+                    XtreamApi.NowNext(list, XtreamApi.NowMs(), out now, out next);
+                    if (now != null) r.NowText = now.Title;
+                }
+                catch { }
+            }
         }
 
         // ---------------------------------------------------------------- IView
@@ -77,6 +230,7 @@ namespace Nova.App
         /// <summary>Back on Live TV first stops the preview; returns false when there was nothing to stop.</summary>
         public bool HandleBack()
         {
+            if (_edit) { ToggleEdit(); return true; }
             if (_previewRow != null || _previewChannel != null) { StopPreview(); return true; }
             return false;
         }
@@ -107,11 +261,24 @@ namespace Nova.App
                 return;
             }
             if (id != _groupLoadId) return;
+            _groupList = list;
+            Fill(row, null);
+        }
 
+        /// <summary>Shows the group's channels in your order / sort, hidden ones only in edit mode.</summary>
+        private void Fill(GroupRow row, string keepKey, int keepIndex = -1)
+        {
+            if (row.Kind == GroupKind.Favorites) _groupList = App.Store.FavoritesOf(ItemType.Live).Select(f => f.ToChannel()).ToList();
+            var multi = App.Store.Accounts.Count > 1;
+            var shown = Organize.Items("live", row.Key, _groupList, c => c.Key, _edit, App.Store.Settings.SortLive, Organize.Info);
             var favs = new HashSet<string>(App.Store.FavoritesOf(ItemType.Live).Select(f => f.Key));
             var logos = App.Store.Settings.LiveLogos ? Visibility.Visible : Visibility.Collapsed;
             var recording = new HashSet<string>(App.Recordings.RecordingKeys);
-            foreach (var c in list)
+            var size = App.Store.Settings.LiveRowSize;
+            var height = size == "compact" ? 30 : size == "large" ? 54 : 40;
+            var movingKey = _moving != null ? _moving.Channel.Key : null;
+            _rows.Clear();
+            foreach (var c in shown)
             {
                 var acc = multi ? App.Store.Account(c.AccountId) : null;
                 _rows.Add(new ChannelRow
@@ -122,15 +289,26 @@ namespace Nova.App
                     IsFavorite = favs.Contains(c.Key),
                     IsPlaying = _previewChannel != null && _previewChannel.Key == c.Key,
                     IsRecording = recording.Contains(c.Key),
+                    Hidden = Organize.IsItemHidden("live", c.Key),
+                    RowHeight = height,
+                    Moving = movingKey == c.Key,
                 });
             }
-            Count.Text = list.Count + (list.Count == 1 ? " channel" : " channels");
-            SetStatus(list.Count == 0 ? (row.Kind == GroupKind.Favorites ? "No favorite channels yet. Press F on a channel to add it." : "No channels in this group.") : null);
+            _moving = _rows.FirstOrDefault(r => r.Moving);
+            var hiddenCount = _groupList.Count - shown.Count;
+            Count.Text = shown.Count + (shown.Count == 1 ? " channel" : " channels") + (hiddenCount > 0 && !_edit ? "  ·  " + hiddenCount + " hidden" : "");
+            SetStatus(shown.Count == 0 ? (row.Kind == GroupKind.Favorites ? "No favorite channels yet. Press F on a channel to add it." : "No channels in this group.") : null);
             if (_rows.Count > 0)
             {
-                Channels.SelectedIndex = 0;
-                Channels.ScrollIntoView(_rows[0]);
+                var target = keepKey != null ? _rows.FirstOrDefault(r => r.Channel.Key == keepKey) : null;
+                if (target == null && keepIndex >= 0) target = _rows[Math.Min(keepIndex, _rows.Count - 1)];
+                if (target == null) target = _rows[0];
+                var hadFocus = Channels.IsKeyboardFocusWithin;
+                Channels.SelectedItem = target;
+                Channels.ScrollIntoView(target);
+                if (hadFocus || keepKey != null || keepIndex >= 0) Dispatcher.BeginInvoke(new Action(FocusChannels), DispatcherPriority.Loaded);
             }
+            FillNowLines(_rows.ToList());
         }
 
         private void SetStatus(string text)
@@ -159,11 +337,33 @@ namespace Nova.App
         private void OnChannelKeyDown(object sender, KeyEventArgs e)
         {
             var row = Channels.SelectedItem as ChannelRow;
+            if (_edit && row != null)
+            {
+                if (_moving == row)
+                {
+                    if (e.Key == Key.Up || e.Key == Key.Down) { e.Handled = true; MoveChannel(row, e.Key == Key.Up ? -1 : 1); return; }
+                    if (e.Key == Key.Home || e.Key == Key.End) { e.Handled = true; MoveChannel(row, e.Key == Key.Home ? int.MinValue : int.MaxValue); return; }
+                    if (e.Key == Key.Left || e.Key == Key.Right) { e.Handled = true; return; }
+                }
+                if (e.Key == Key.Enter)
+                {
+                    e.Handled = true;
+                    if (_group == null || _group.Kind == GroupKind.New) return;
+                    if (_moving == row) { row.Moving = false; _moving = null; }
+                    else { if (_moving != null) _moving.Moving = false; _moving = row; row.Moving = true; }
+                    return;
+                }
+                if (e.Key == Key.H || e.Key == Key.Delete) { e.Handled = true; ToggleChannelHidden(row); return; }
+            }
             switch (e.Key)
             {
                 case Key.Enter:
                     e.Handled = true;
                     Activate(row);
+                    break;
+                case Key.C:
+                    e.Handled = true;
+                    ShowCatchup(row);
                     break;
                 case Key.F:
                     e.Handled = true;
@@ -207,18 +407,13 @@ namespace Nova.App
             var favs = new HashSet<string>(App.Store.FavoritesOf(ItemType.Live).Select(f => f.Key));
             foreach (var r in _rows) r.IsFavorite = favs.Contains(r.Channel.Key);
             if (_group != null && _group.Kind == GroupKind.Favorites)
-            {
-                // Keep the Favorites list in step (a channel was removed or added elsewhere).
-                var gone = _rows.Where(r => !r.IsFavorite).ToList();
-                foreach (var r in gone) _rows.Remove(r);
-                Count.Text = _rows.Count + (_rows.Count == 1 ? " channel" : " channels");
-            }
+                Fill(_group, Channels.SelectedItem is ChannelRow ? ((ChannelRow)Channels.SelectedItem).Channel.Key : null);
         }
 
         private void OnSettingsChanged()
         {
-            var logos = App.Store.Settings.LiveLogos ? Visibility.Visible : Visibility.Collapsed;
-            if (_rows.Count > 0 && _rows[0].LogoVisibility != logos && _group != null) OnGroupOpened(_group);
+            UpdateSortText();
+            if (_group != null && !Channels.IsKeyboardFocusWithin) Fill(_group, Channels.SelectedItem is ChannelRow ? ((ChannelRow)Channels.SelectedItem).Channel.Key : null);
             UpdatePreviewHint();
             if (!App.Store.Settings.LivePreview) StopPreview();
         }
@@ -231,10 +426,12 @@ namespace Nova.App
             if (row == null)
             {
                 ChName.Text = ""; NowTitle.Text = ""; NowDesc.Text = ""; NowBar.Visibility = Visibility.Collapsed; Upcoming.ItemsSource = null;
+                CatchupBtn.Visibility = Visibility.Collapsed;
                 return;
             }
             var ch = row.Channel;
             ChName.Text = row.Name;
+            CatchupBtn.Visibility = ch.HasArchive ? Visibility.Visible : Visibility.Collapsed;
             var cts = new CancellationTokenSource();
             _epgCts = cts;
             var cached = App.Catalog.EpgIfLoaded(ch);

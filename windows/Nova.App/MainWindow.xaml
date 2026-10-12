@@ -7,7 +7,8 @@
         Width="1280" Height="760" MinWidth="820" MinHeight="520"
         WindowStartupLocation="CenterScreen"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
-        PreviewKeyDown="OnPreviewKeyDown" Closing="OnClosing" Loaded="OnLoaded">
+        PreviewKeyDown="OnPreviewKeyDown" Closing="OnClosing" Loaded="OnLoaded"
+        AllowDrop="True" PreviewDragOver="OnDragOver" Drop="OnDrop">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -25,10 +26,19 @@
                     <RadioButton x:Name="TabFilms" GroupName="tabs" Style="{StaticResource TabButton}" Content="Films" Checked="OnTabChecked"/>
                     <RadioButton x:Name="TabSeries" GroupName="tabs" Style="{StaticResource TabButton}" Content="Series" Checked="OnTabChecked"/>
                     <RadioButton x:Name="TabSearch" GroupName="tabs" Style="{StaticResource TabButton}" Content="Search" Checked="OnTabChecked"/>
+                    <RadioButton x:Name="TabLink" GroupName="tabs" Style="{StaticResource TabButton}" Content="Open link" Checked="OnTabChecked"/>
+                    <RadioButton x:Name="TabRecent" GroupName="tabs" Style="{StaticResource TabButton}" Content="Recent" Checked="OnTabChecked"/>
                     <RadioButton x:Name="TabDownloads" GroupName="tabs" Style="{StaticResource TabButton}" Content="Downloads" Checked="OnTabChecked"/>
                     <RadioButton x:Name="TabSettings" GroupName="tabs" Style="{StaticResource TabButton}" Content="Settings" Checked="OnTabChecked"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Border x:Name="VpnBadge" CornerRadius="6" Padding="8,3" Margin="0,0,8,0" VerticalAlignment="Center" Background="#1F2EE66B" Visibility="Collapsed"
+                            ToolTip="A VPN connection is on">
+                        <TextBlock Text="🔒 VPN" Foreground="{StaticResource Accent}" FontSize="13" FontWeight="SemiBold"/>
+                    </Border>
+                    <Border x:Name="RecBadge" CornerRadius="6" Padding="8,3" Margin="0,0,8,0" VerticalAlignment="Center" Background="#B3261E" Visibility="Collapsed">
+                        <TextBlock x:Name="RecBadgeText" Foreground="White" FontSize="13" FontWeight="SemiBold"/>
+                    </Border>
                     <Button x:Name="ReloadButton" Style="{StaticResource FlatButton}" Click="OnReload" ToolTip="Download the lists again (F5)">
                         <TextBlock Text="↻  Reload" Foreground="{StaticResource SubText}"/>
                     </Button>
@@ -50,14 +60,27 @@
                     <TextBlock Text="Add your Xtream Codes account to see your channels, films and series."
                                Style="{StaticResource Hint}" FontSize="15" TextAlignment="Center" Margin="0,10,0,22"/>
                     <Button x:Name="WelcomeAdd" Style="{StaticResource AccentButton}" Content="Add account" HorizontalAlignment="Center"
-                            Padding="26,10" FontSize="16" Click="OnWelcomeAdd"/>
+                            Padding="26,10" FontSize="16" Click="OnWelcomeAdd" MinWidth="300"/>
+                    <Button Style="{StaticResource NovaButton}" HorizontalAlignment="Center" Padding="22,9" Margin="0,10,0,0" MinWidth="300" Click="OnWelcomeRestore">
+                        <StackPanel>
+                            <TextBlock Text="Restore a backup" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                            <TextBlock Text="A .bak file from Nova (PC or box), or any web link" FontSize="12" Foreground="{StaticResource DimText}" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource NovaButton}" HorizontalAlignment="Center" Padding="22,9" Margin="0,10,0,0" MinWidth="300" Click="OnWelcomeLink">
+                        <StackPanel>
+                            <TextBlock Text="Use an accounts link" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                            <TextBlock Text="Your accounts list on OneDrive, Google Drive, Dropbox… — kept up to date every day" FontSize="12" Foreground="{StaticResource DimText}" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <TextBlock x:Name="WelcomeVersion" Style="{StaticResource Hint}" HorizontalAlignment="Center" Margin="0,18,0,0"/>
                 </StackPanel>
             </Border>
 
             <!-- The designer's signature, on every page -->
             <Border VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,3" Padding="7,1"
                     Background="#66000000" CornerRadius="6" IsHitTestVisible="False">
-                <TextBlock Text="Designed by A.H" FontSize="10.5" Foreground="#80FFFFFF"/>
+                <TextBlock x:Name="SignatureText" FontSize="10.5" Foreground="#80FFFFFF"/>
             </Border>
 
             <!-- Short messages -->
