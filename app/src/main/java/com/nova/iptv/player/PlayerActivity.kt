@@ -2132,15 +2132,19 @@ class PlayerActivity : ComponentActivity() {
                         else -> 0.0
                     }
                     vod.diskFraction = frac.toFloat()
-                    vod.seekLimitMs = if (dur > 0) maxOf(0L, (frac * dur).toLong() - 5_000) else null
+                    // Pieces (several connections): jumping anywhere moves the download there.
+                    val inPieces = com.nova.iptv.download.PieceMap.of(d) != null
+                    vod.seekLimitMs = if (inPieces) null else if (dur > 0) maxOf(0L, (frac * dur).toLong() - 5_000) else null
                     val state = when (d.status) {
                         com.nova.iptv.data.DownloadStatus.PAUSED -> "paused"
                         com.nova.iptv.data.DownloadStatus.QUEUED -> "waiting"
                         com.nova.iptv.data.DownloadStatus.FAILED -> "failed"
                         else -> "downloading"
                     }
-                    vod.diskStatus = "⬇ Downloaded ${(frac * 100).toInt()} % ($state)" +
-                        (if (dur > 0) " · ready up to " + formatDuration((frac * dur).toLong()) else "")
+                    val conn = if (d.connections > 1) " · ${d.connections} connections" else ""
+                    val speed = if (d.speed > 0) " · %.1f MB/s".format(d.speed / 1048576.0) else ""
+                    vod.diskStatus = "⬇ Downloaded ${(frac * 100).toInt()} % ($state)$conn$speed" +
+                        (if (dur > 0 && !inPieces) " · ready up to " + formatDuration((frac * dur).toLong()) else "")
                 }
             }
             else -> { vod.diskStatus = null; vod.seekLimitMs = null; vod.diskFraction = null }

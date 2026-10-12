@@ -166,10 +166,16 @@ class GrowingFileDataSource(
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
         val file = raf ?: throw IOException("Not open")
         while (true) {
-            val have = file.length()
             val d0 = item()
+            // Downloaded in pieces (several connections): only the pieces already saved count, and the
+            // download is told where we read so it fetches from here.
+            val pieces = com.nova.iptv.download.PieceMap.of(d0)
+            val have = if (pieces != null) {
+                pieces.wantPos = pos
+                pos + pieces.contiguousFrom(pos)
+            } else file.length()
             // HLS downloads are joined parts: there is nothing to fetch "on the side", just wait for them.
-            if (pos >= have + SIDE_GAP && d0.status != DownloadStatus.DONE && d0.parts == 0) {
+            if (pieces == null && pos >= have + SIDE_GAP && d0.status != DownloadStatus.DONE && d0.parts == 0) {
                 return readSide(buffer, offset, length)
             }
             if (sideStream != null || pausedForSide) closeSide(resume = true)

@@ -129,6 +129,7 @@ fun SettingsScreen(vm: MainViewModel) {
         BackupSettings(vm)
         ParentalSettings(vm)
         PlayerSettings(vm)
+        DownloadSettings(vm)
         WatchdogSettings(vm)
         VpnSettings(vm)
         DisplaySettings(vm)

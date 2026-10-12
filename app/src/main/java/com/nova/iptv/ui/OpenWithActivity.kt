@@ -27,8 +27,27 @@ import java.io.File
  */
 class OpenWithActivity : ComponentActivity() {
 
+    /**
+     * Site details passed along with the link, the way apps hand them to MX Player ("headers": name, value, …)
+     * or as a Bundle (android.media.intent.extra.HTTP_HEADERS). Remembered for that site.
+     */
+    private fun keepHeaders(link: String?) {
+        val host = link?.let { runCatching { Uri.parse(it).host }.getOrNull() } ?: return
+        val found = LinkedHashMap<String, String>()
+        intent?.getStringArrayExtra("headers")?.toList()?.chunked(2)?.forEach { if (it.size == 2) found[it[0]] = it[1] }
+        intent?.getBundleExtra("android.media.intent.extra.HTTP_HEADERS")?.let { b -> b.keySet().forEach { k -> b.getString(k)?.let { found[k] = it } } }
+        listOf("referer" to "Referer", "user-agent" to "User-Agent", "User-Agent" to "User-Agent", "Referer" to "Referer").forEach { (extra, name) ->
+            intent?.getStringExtra(extra)?.takeIf { it.isNotBlank() }?.let { found[name] = it }
+        }
+        if (found.isEmpty()) return
+        val st = (application as NovaApp).storage
+        st.setLinkHeaders(host, st.linkHeaders(host) + found)
+        Log.i("NovaTest", "LINK headers received for $host: ${found.keys.joinToString()}")
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        keepHeaders(intent?.data?.toString() ?: LinkActions.findLink(intent?.getStringExtra(Intent.EXTRA_TEXT)))
         if (intent?.action == Intent.ACTION_SEND) {
             shared()
             return

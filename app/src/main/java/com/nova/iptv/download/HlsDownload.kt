@@ -23,6 +23,9 @@ import javax.crypto.spec.SecretKeySpec
 class HlsDownload(
     private val app: NovaApp,
     private val start: DownloadItem,
+    /** Parts fetched at the same time (they are still written in order). */
+    private val connections: Int,
+    private val limit: SpeedLimit,
     private val progress: (title: String, total: Long, done: Long) -> Unit,
 ) {
     companion object {
@@ -42,7 +45,9 @@ class HlsDownload(
         val req = Request.Builder().url(url).header("User-Agent", app.storage.userAgent).build()
         app.http.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw IOException("Server returned HTTP ${r.code}")
-            return r.body?.bytes() ?: throw IOException("Empty response")
+            val bytes = r.body?.bytes() ?: throw IOException("Empty response")
+            limit.take(bytes.size)
+            return bytes
         }
     }
 
@@ -133,10 +138,24 @@ class HlsDownload(
                         progressFile.writeText("0 $length")
                     }
                     var lastUi = 0L
+                    var lastLen = length
+                    // Several parts are fetched at once, then written strictly in order.
+                    val pool = java.util.concurrent.Executors.newFixedThreadPool(connections.coerceIn(1, 16))
+                    val ahead = java.util.LinkedHashMap<Int, java.util.concurrent.Future<ByteArray>>()
+                    DownloadCenter.update(id, persist = false) { it.copy(connections = connections.coerceIn(1, 16)) }
+                    try {
                     while (next < parts.size) {
                         if (!running()) return
-                        val part = parts[next]
-                        val bytes = decrypt(get(part.url), part)
+                        var k = next
+                        while (ahead.size < connections.coerceIn(1, 16) && k < parts.size) {
+                            if (!ahead.containsKey(k)) { val p = parts[k]; ahead[k] = pool.submit<ByteArray> { decrypt(get(p.url), p) } }
+                            k++
+                        }
+                        val bytes = try {
+                            ahead.remove(next)!!.get()
+                        } catch (e: java.util.concurrent.ExecutionException) {
+                            throw (e.cause as? Exception) ?: e
+                        }
                         out.write(bytes); out.flush()
                         length += bytes.size
                         next++
@@ -144,13 +163,19 @@ class HlsDownload(
                         attempt = 0
                         val now = System.currentTimeMillis()
                         if (now - lastUi > 1000 || next == parts.size) {
+                            val speedNow = if (lastUi > 0) (length - lastLen) * 1000 / (now - lastUi).coerceAtLeast(1) else 0
                             lastUi = now
+                            lastLen = length
                             val estimate = length * parts.size / next
                             DownloadCenter.update(id, persist = next % 20 == 0) {
-                                it.copy(doneBytes = length, parts = parts.size, partsDone = next, error = null)
+                                it.copy(doneBytes = length, parts = parts.size, partsDone = next, speed = speedNow, error = null)
                             }
                             progress(start.title, estimate, length)
                         }
+                    }
+                    } finally {
+                        ahead.values.forEach { it.cancel(true) }
+                        pool.shutdownNow()
                     }
                 }
                 progressFile.delete()

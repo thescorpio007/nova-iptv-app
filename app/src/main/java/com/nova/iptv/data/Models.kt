@@ -203,6 +203,10 @@ data class DownloadItem(
     /** HLS links (.m3u8): number of parts, and parts already saved (0 = a normal single file). */
     val parts: Int = 0,
     val partsDone: Int = 0,
+    /** Connections in use (0 = not started), speed now (bytes/s), and a passing note ("The website refused…"). */
+    val connections: Int = 0,
+    val speed: Long = 0L,
+    val note: String? = null,
 )
 
 object DownloadStatus {

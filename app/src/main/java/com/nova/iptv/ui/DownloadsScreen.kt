@@ -99,8 +99,20 @@ private fun DownloadRow(
     }
     val statusLabel = when (d.status) {
         DownloadStatus.DONE -> "Ready · $mb MB"
-        DownloadStatus.DOWNLOADING ->
-            if (totalMb > 0) "Downloading · $mb / $totalMb MB (${((progress ?: 0f) * 100).toInt()}%)" else "Downloading · $mb MB"
+        DownloadStatus.DOWNLOADING -> {
+            val conn = when {
+                d.connections > 1 -> " · ${d.connections} connections"
+                d.connections == 1 -> " · 1 connection"
+                else -> ""
+            }
+            val speed = if (d.speed > 0) " · %.1f MB/s".format(d.speed / 1048576.0) else ""
+            val left = if (d.speed > 0 && totalMb > 0) {
+                val sec = ((totalMb * 1048576L - d.doneBytes) / d.speed).coerceAtLeast(0)
+                " · " + (if (sec >= 3600) "${sec / 3600} h ${sec % 3600 / 60} min" else if (sec >= 60) "${sec / 60} min" else "$sec s") + " left"
+            } else ""
+            val parts = if (d.parts > 0) " · ${d.partsDone} / ${d.parts} parts" else ""
+            (if (totalMb > 0) "Downloading · $mb / $totalMb MB (${((progress ?: 0f) * 100).toInt()}%)" else "Downloading · $mb MB") + parts + conn + speed + left
+        }
         DownloadStatus.QUEUED -> "Waiting…"
         DownloadStatus.PAUSED -> "Paused · $mb MB"
         DownloadStatus.FAILED -> "Failed: ${d.error ?: "unknown error"}"
@@ -120,6 +132,7 @@ private fun DownloadRow(
             Column(Modifier.padding(start = 12.dp).weight(1f)) {
                 Text(d.title, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text("$kindLabel · $statusLabel", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                d.note?.let { Text(it, fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFFFD27A), maxLines = 2) }
                 val err = d.error
                 if (err != null && d.status == DownloadStatus.DOWNLOADING) {
                     Text(err, fontSize = 12.sp, color = MaterialTheme.colorScheme.error, maxLines = 1)

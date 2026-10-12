@@ -287,6 +287,38 @@ class Storage(context: Context) {
         get() = prefs.getString("watchdog_mode", "live") ?: "live"
         set(value) = prefs.edit().putString("watchdog_mode", value).apply()
 
+    /** Downloads: connections (1–16) and speed limit (MB/s, 0 = none), for your IPTV servers and for other links. */
+    var dlConnServers: Int
+        get() = prefs.getInt("dl_conn_servers", 1)
+        set(value) = prefs.edit().putInt("dl_conn_servers", value).apply()
+    var dlConnLinks: Int
+        get() = prefs.getInt("dl_conn_links", 4)
+        set(value) = prefs.edit().putInt("dl_conn_links", value).apply()
+    var dlSpeedServers: Int
+        get() = prefs.getInt("dl_speed_servers", 0)
+        set(value) = prefs.edit().putInt("dl_speed_servers", value).apply()
+    var dlSpeedLinks: Int
+        get() = prefs.getInt("dl_speed_links", 0)
+        set(value) = prefs.edit().putInt("dl_speed_links", value).apply()
+
+    /** How many connections each account allows (from the provider; 0 = unknown). */
+    fun maxConnections(accountId: String): Int = prefs.getInt("maxconn_$accountId", 0)
+    fun setMaxConnections(accountId: String, n: Int) = prefs.edit().putInt("maxconn_$accountId", n).apply()
+
+    /** Extra details a website needs (Referer, User-Agent…), per site. */
+    fun linkHeaders(host: String): Map<String, String> =
+        prefs.getString("hdr_$host", null)?.lineSequence()?.mapNotNull { l ->
+            val k = l.substringBefore(':', "").trim(); val v = l.substringAfter(':', "").trim()
+            if (k.isEmpty() || v.isEmpty()) null else k to v
+        }?.toMap().orEmpty()
+
+    fun setLinkHeaders(host: String, headers: Map<String, String>) {
+        val clean = headers.filter { it.key.isNotBlank() && it.value.isNotBlank() }
+        prefs.edit().apply {
+            if (clean.isEmpty()) remove("hdr_$host") else putString("hdr_$host", clean.entries.joinToString("\n") { "${it.key}: ${it.value}" })
+        }.apply()
+    }
+
     /** "Open link" tab: the last links opened (newest first), each "time|url". */
     var recentLinks: List<String>
         get() = prefs.getString("recent_links", null)?.split('\n')?.filter { it.isNotBlank() }.orEmpty()

@@ -27,6 +27,7 @@ class NovaApp : Application() {
             .retryOnConnectionFailure(true)
             .followRedirects(true)
             .followSslRedirects(true)
+            .addInterceptor(com.nova.iptv.data.LinkHeadersInterceptor { if (::storage.isInitialized) storage else null })
             .build()
     }
 

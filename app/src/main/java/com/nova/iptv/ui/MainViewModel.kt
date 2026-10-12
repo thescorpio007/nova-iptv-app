@@ -291,6 +291,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             accountProblems.value = problems.associate { it.first.id to it.second }
             expiryNotes.value = results.mapNotNull { (a, c) -> c.note?.let { a.id to it } }.toMap()
             results.forEach { (a, c) -> if (c.info != null) userInfos.value = userInfos.value + (a.id to c.info) }
+            // Downloads never use more connections than the provider allows.
+            results.forEach { (a, c) -> c.info?.maxConnections?.trim()?.toIntOrNull()?.let { storage.setMaxConnections(a.id, it) } }
             val wait = 1200 - (System.currentTimeMillis() - t0)
             if (wait > 0) delay(wait)
             android.util.Log.i("NovaTest", "STARTUP ${accs.size} accounts, ${problems.size} with problems")
@@ -1151,7 +1153,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val o = org.value
         search.value = search.value.copy(loading = true, error = null)
         searchJob = viewModelScope.launch {
-            delay(500)
+            delay(if (accs.all { com.nova.iptv.data.SearchIndex.get(it.id) != null }) 200 else 500)
             try {
                 val lives = mutableListOf<LiveChannel>()
                 val movies = mutableListOf<Movie>()
@@ -1159,9 +1161,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val failures = mutableListOf<String>()
                 accs.forEach { a ->
                     try {
-                        if (kind == "all" || kind == "live") lives += allOf(live, a)
-                        if (kind == "all" || kind == "movie") movies += allOf(films, a)
-                        if (kind == "all" || kind == "series") seriesList += allOf(series, a)
+                        // The search index answers at once; without it (first start), the lists are fetched.
+                        val idx = com.nova.iptv.data.SearchIndex.get(a.id)
+                        if (kind == "all" || kind == "live") lives += idx?.live ?: allOf(live, a)
+                        if (kind == "all" || kind == "movie") movies += idx?.movies ?: allOf(films, a)
+                        if (kind == "all" || kind == "series") seriesList += idx?.series ?: allOf(series, a)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -1673,14 +1677,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val RECENTLY_ADDED_COUNT = 300
     }
 
+    // ================================================================ search index
+
+    private var indexJob: Job? = null
+
+    /** Loads the saved index, then quietly updates the accounts whose index is missing or older than a day. */
+    fun refreshIndex(force: Boolean = false) {
+        if (indexJob?.isActive == true) return
+        indexJob = viewModelScope.launch(Dispatchers.IO) {
+            val accs = accounts.value
+            com.nova.iptv.data.SearchIndex.load(nova, accs)
+            val todo = accs.filter { force || com.nova.iptv.data.SearchIndex.needsUpdate(it) }
+            if (todo.isEmpty()) return@launch
+            com.nova.iptv.data.SearchIndex.busy.value = true
+            try {
+                todo.forEach { com.nova.iptv.data.SearchIndex.update(nova, nova.http, { storage.userAgent }, it) }
+            } finally {
+                com.nova.iptv.data.SearchIndex.busy.value = false
+            }
+            if (query.value.trim().length >= 2) withContext(Dispatchers.Main) { setQuery(query.value) }
+        }
+    }
+
     // Runs last, once every property above exists (the start-up check uses them).
     init {
         if (accounts.value.isNotEmpty()) reloadEverything()
         runStartup()
+        // Search index: load at start (and when accounts change), update quietly when older than a day.
+        viewModelScope.launch {
+            delay(4000)
+            accounts.collect { refreshIndex() }
+        }
         // Accounts link: re-read once a day while Nova is open.
         viewModelScope.launch {
             while (true) {
                 delay(60 * 60_000L)
+                refreshIndex()
                 if (storage.accountsLink != null && System.currentTimeMillis() - storage.accountsLinkCheckedAt > 24 * 3600_000L) {
                     runCatching { syncAccountsLink() }
                 }

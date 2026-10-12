@@ -74,11 +74,41 @@ class DownloadService : Service() {
         }
     }
 
+    /** The account (IPTV server) a download comes from, or null for other links. */
+    private fun accountOf(app: NovaApp, url: String): com.nova.iptv.data.Account? {
+        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: return null
+        return app.storage.accounts.firstOrNull { a ->
+            runCatching { java.net.URI(com.nova.iptv.data.XtreamApi.normalizeServer(a.server)).host }.getOrNull() == host
+        }
+    }
+
+    /** Connections for this download: your choice, but never more than the provider allows (one is kept for watching). */
+    private fun connectionsFor(app: NovaApp, url: String): Int {
+        val s = app.storage
+        val acc = accountOf(app, url) ?: return s.dlConnLinks.coerceIn(1, 16)
+        val allowed = s.maxConnections(acc.id)
+        val cap = if (allowed > 1) allowed - 1 else 1
+        return s.dlConnServers.coerceIn(1, 16).coerceAtMost(cap)
+    }
+
+    private fun speedFor(app: NovaApp, url: String): SpeedLimit {
+        val mb = if (accountOf(app, url) != null) app.storage.dlSpeedServers else app.storage.dlSpeedLinks
+        return SpeedLimit(mb * 1024L * 1024L)
+    }
+
     private fun download(app: NovaApp, start: DownloadItem) {
+        val conns = connectionsFor(app, start.url)
+        val limit = speedFor(app, start.url)
         if (HlsDownload.isHls(start.url)) {
-            HlsDownload(app, start) { title, total, done -> notifyProgress(title, total, done) }.run()
+            HlsDownload(app, start, conns, limit) { title, total, done -> notifyProgress(title, total, done) }.run()
             return
         }
+        // Several connections: pieces in watching order (falls back to one connection if the server refuses).
+        val inPieces = File(start.path + ".pieces").exists()
+        if ((inPieces || (conns > 1 && start.connections != 1)) &&
+            PieceDownload(app, start, conns, limit) { title, total, done -> notifyProgress(title, total, done) }.run()
+        ) return
+        DownloadCenter.update(start.id, persist = false) { it.copy(connections = 1) }
         val id = start.id
         val file = File(start.path)
         file.parentFile?.mkdirs()
@@ -112,17 +142,21 @@ class DownloadService : Service() {
                         val input = body.byteStream()
                         val buf = ByteArray(128 * 1024)
                         var lastUi = 0L
+                        var lastDone = done
                         while (true) {
                             val n = input.read(buf)
                             if (n < 0) break
+                            limit.take(n)
                             out.write(buf, 0, n)
                             done += n
                             val now = System.currentTimeMillis()
                             if (now - lastUi > 1000) {
                                 lastUi = now
                                 if (DownloadCenter.get(id)?.status != DownloadStatus.DOWNLOADING) return
+                                val speedNow = done - lastDone
+                                lastDone = done
                                 DownloadCenter.update(id, persist = false) {
-                                    it.copy(doneBytes = done, totalBytes = total, error = null)
+                                    it.copy(doneBytes = done, totalBytes = total, speed = speedNow, error = null)
                                 }
                                 notifyProgress(start.title, total, done)
                             }

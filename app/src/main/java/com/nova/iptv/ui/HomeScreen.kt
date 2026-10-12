@@ -1233,6 +1233,16 @@ private fun SearchScreen(vm: MainViewModel, onPlay: PlayFn) {
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) { inServers() }
             }
+            // Search index: how fresh each server's index is, and "Update now".
+            val idxStatus by com.nova.iptv.data.SearchIndex.status.collectAsStateWithLifecycle()
+            val idxBusy by com.nova.iptv.data.SearchIndex.busy.collectAsStateWithLifecycle()
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "🗂 Index · " + accounts.joinToString("  ·  ") { a -> "${a.name}: ${idxStatus[a.id] ?: "not built yet"}" },
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 2,
+                )
+                if (!idxBusy) SmallButton("⟳ Update now", { vm.refreshIndex(force = true) })
+            }
             val err = res.error
             if (err != null && !res.loading) {
                 Text(err, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
