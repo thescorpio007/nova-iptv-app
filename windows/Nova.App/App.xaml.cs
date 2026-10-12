@@ -134,6 +134,7 @@ namespace Nova.App
         {
             var w = Home;
             if (w == null) return;
+            if (_args.Length > 0 && _args[0] == "--smoke") { Smoke(w); return; }
             if (_args.Length > 0 && _args[0].Trim().Length > 0) { w.OpenFromOutside(_args[0]); _args = new string[0]; }
             else if (Store.Accounts.Count == 0) { w.ShowWelcomeIfEmpty(); }
             else if (Store.Settings.AutoPlayLast) w.PlayLastChannel();
@@ -158,6 +159,30 @@ namespace Nova.App
 
             // The search index is refreshed quietly once a day.
             try { await Catalog.RefreshIndex(System.Threading.CancellationToken.None); } catch { }
+
+            // Nova may stay open for days: look again every hour (the link itself is read once a day).
+            var daily = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
+            daily.Tick += async (s, e) =>
+            {
+                if (Store.State.AccountsLink == null ||
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - Store.State.AccountsLinkChecked < 24L * 3600 * 1000) return;
+                var note = await BackupUi.SyncAccountsLink();
+                if (note != null && note != "Up to date" && Home != null) Home.Toast("Accounts link: " + note);
+            };
+            daily.Start();
+        }
+
+        private static int _uiErrors;
+
+        /// <summary>Build check: opens every tab once, then closes with exit code 0 (fine) or 1 (an error happened).</summary>
+        private static async void Smoke(MainWindow w)
+        {
+            foreach (Tab t in Enum.GetValues(typeof(Tab)))
+            {
+                try { w.ShowTab(t); } catch (Exception e) { Log(e); _uiErrors++; }
+                await Task.Delay(1200);
+            }
+            Current.Shutdown(_uiErrors == 0 ? 0 : 1);
         }
 
         protected override void OnExit(ExitEventArgs e)
@@ -171,6 +196,7 @@ namespace Nova.App
 
         private void OnUiError(object sender, DispatcherUnhandledExceptionEventArgs e)
         {
+            _uiErrors++;
             Log(e.Exception);
             e.Handled = true;
             var w = MainWindow as MainWindow;

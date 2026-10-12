@@ -69,6 +69,23 @@ jobs:
           Set-Content "$stage\portable.txt" "This file makes Nova keep its settings in the 'data' folder next to Nova.exe (portable mode). Delete it to use your Windows user folder instead."
           Compress-Archive -Path $stage -DestinationPath dist\NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Portable.zip -CompressionLevel Optimal
 
+      - name: Start-up check (opens every tab once)
+        run: |
+          $p = Start-Process -FilePath "dist\NovaIPTV\Nova.exe" -ArgumentList "--smoke" -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Host "::error title=Start-up check::Nova did not close by itself"; exit 1 }
+          $code = $p.ExitCode
+          $log = Get-ChildItem dist\NovaIPTV -Recurse -Filter error.log -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($log) {
+            $t = Get-Content $log.FullName -Raw
+            $t = $t.Substring(0, [Math]::Min(3000, $t.Length)) -replace "`r?`n", '%0A'
+            $level = if ($code -ne 0) { 'error' } else { 'warning' }
+            Write-Host "::$level title=Start-up check log::$t"
+          }
+          if ($code -ne 0) { Write-Host "::error title=Start-up check::exit code $code"; exit 1 }
+          Write-Host "::notice title=Start-up check::every tab opened without errors"
+          Remove-Item dist\NovaIPTV -Recurse -Force
+
       - name: Get the .NET 4.8 web installer (for old PCs that don't have it)
         continue-on-error: true
         run: |
