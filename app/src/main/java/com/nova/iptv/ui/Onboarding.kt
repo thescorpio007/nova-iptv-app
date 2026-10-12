@@ -168,7 +168,7 @@ fun WelcomeScreen(vm: MainViewModel, isTv: Boolean) {
         }
         val footer: @Composable () -> Unit = {
             Row(Modifier.fillMaxWidth()) {
-                Text("Nova IPTV · version 1.0", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, modifier = Modifier.weight(1f))
+                Text("Nova IPTV · version 2.0", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, modifier = Modifier.weight(1f))
                 Text("Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
             }
         }

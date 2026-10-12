@@ -290,7 +290,7 @@ fun SettingsScreen(vm: MainViewModel) {
             )
         }
 
-        Text("Nova IPTV 1.0", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Text("Nova IPTV 2.0", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
     }
     }
 
