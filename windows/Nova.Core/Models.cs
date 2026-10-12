@@ -13,6 +13,8 @@ namespace Nova.Core
         [JsonProperty("server")] public string Server { get; set; }
         [JsonProperty("username")] public string Username { get; set; }
         [JsonProperty("password")] public string Password { get; set; }
+        /// <summary>Comes from your accounts link (kept up to date from it).</summary>
+        [JsonProperty("fromList")] public bool FromList { get; set; }
 
         [JsonIgnore]
         public string DisplayName
@@ -28,7 +30,7 @@ namespace Nova.Core
 
         public Account Copy()
         {
-            return new Account { Id = Id, Name = Name, Server = Server, Username = Username, Password = Password };
+            return new Account { Id = Id, Name = Name, Server = Server, Username = Username, Password = Password, FromList = FromList };
         }
     }
 
@@ -182,6 +184,20 @@ namespace Nova.Core
         }
     }
 
+    /// <summary>A past programme that can be replayed (catch-up / timeshift).</summary>
+    public class CatchupEntry
+    {
+        public string Title { get; set; }
+        public string Description { get; set; }
+        public long Start { get; set; }
+        public long End { get; set; }
+        /// <summary>Start as the server writes it, "yyyy-MM-dd:HH-mm", used in the timeshift address.</summary>
+        public string ServerStart { get; set; }
+        public int DurationMinutes { get; set; }
+        public DateTime StartLocal { get { return DateTimeOffset.FromUnixTimeMilliseconds(Start).LocalDateTime; } }
+        public string When { get { return StartLocal.ToString("ddd d MMM  HH:mm") + " – " + DateTimeOffset.FromUnixTimeMilliseconds(End).LocalDateTime.ToString("HH:mm"); } }
+    }
+
     public static class ItemType
     {
         public const string Live = "live";
@@ -202,6 +218,20 @@ namespace Nova.Core
         [JsonProperty("accountId")] public string AccountId { get; set; }
 
         [JsonIgnore] public string Key { get { return AccountId + "|" + Id; } }
+        [JsonIgnore] public string ResumeKey { get { return Type + "_" + AccountId + "_" + Id; } }
+
+        /// <summary>Episodes: the series they belong to (kept with the item so the series page can open).</summary>
+        [JsonProperty("seriesId", NullValueHandling = NullValueHandling.Ignore)] public string SeriesId { get; set; }
+
+        public static SavedItem Of(Series s, Episode e)
+        {
+            return new SavedItem
+            {
+                Type = ItemType.Episode, Id = e.Id, AccountId = s.AccountId, Extension = e.Extension, SeriesId = s.SeriesId,
+                Name = s.Name + " · S" + e.Season + " E" + Math.Max(1, e.EpisodeNum) + (string.IsNullOrWhiteSpace(e.Title) ? "" : " · " + e.Title),
+                Icon = e.Image ?? s.Cover,
+            };
+        }
 
         public bool SameAs(SavedItem other)
         {

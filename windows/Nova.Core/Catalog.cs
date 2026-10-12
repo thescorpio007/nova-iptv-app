@@ -154,9 +154,107 @@ namespace Nova.Core
         }
 
         /// <summary>Every channel / film / series of one account (used by search).</summary>
-        public Task<List<LiveChannel>> AllChannels(Account a) { return Cached("all|live|" + a.Id, () => _api.LiveStreams(a, null)); }
-        public Task<List<Movie>> AllMovies(Account a) { return Cached("all|movie|" + a.Id, () => _api.Movies(a, null)); }
-        public Task<List<Series>> AllSeries(Account a) { return Cached("all|series|" + a.Id, () => _api.SeriesList(a, null)); }
+        /// <summary>Every channel / film / series of one account: from the search index on disk when it is
+        /// less than a day old, otherwise downloaded (and the index saved).</summary>
+        public Task<List<LiveChannel>> AllChannels(Account a) { return Cached("all|live|" + a.Id, () => Indexed(a, "live", () => _api.LiveStreams(a, null))); }
+        public Task<List<Movie>> AllMovies(Account a) { return Cached("all|movie|" + a.Id, () => Indexed(a, "movie", () => _api.Movies(a, null))); }
+        public Task<List<Series>> AllSeries(Account a) { return Cached("all|series|" + a.Id, () => Indexed(a, "series", () => _api.SeriesList(a, null))); }
+
+        /// <summary>Folder of the search index (Downloads\NovaIPTV\Index). Holds names and pictures only, never passwords.</summary>
+        public Func<string> IndexFolder = () => null;
+
+        private string IndexPath(Account a, string kind)
+        {
+            var f = IndexFolder();
+            return f == null ? null : System.IO.Path.Combine(f, a.Id + "-" + kind + ".json");
+        }
+
+        private async Task<List<T>> Indexed<T>(Account a, string kind, Func<Task<List<T>>> download) where T : class
+        {
+            var path = IndexPath(a, kind);
+            if (path != null)
+            {
+                try
+                {
+                    var fi = new System.IO.FileInfo(path);
+                    if (fi.Exists && (DateTime.UtcNow - fi.LastWriteTimeUtc).TotalHours < 24)
+                    {
+                        var text = System.IO.File.ReadAllText(path);
+                        var list = Newtonsoft.Json.JsonConvert.DeserializeObject<List<T>>(text);
+                        if (list != null) return list;
+                    }
+                }
+                catch { }
+            }
+            var fresh = await download().ConfigureAwait(false);
+            SaveIndex(path, fresh);
+            return fresh;
+        }
+
+        private static void SaveIndex<T>(string path, List<T> list)
+        {
+            if (path == null) return;
+            try
+            {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                var tmp = path + ".tmp";
+                System.IO.File.WriteAllText(tmp, Newtonsoft.Json.JsonConvert.SerializeObject(list));
+                if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+                System.IO.File.Move(tmp, path);
+            }
+            catch { }
+        }
+
+        /// <summary>Quietly refreshes the search index of every account when it is older than a day.</summary>
+        public async Task RefreshIndex(CancellationToken ct)
+        {
+            foreach (var a in _store.Accounts.ToList())
+            {
+                foreach (var kind in new[] { "live", "movie", "series" })
+                {
+                    if (ct.IsCancellationRequested) return;
+                    var path = IndexPath(a, kind);
+                    if (path == null) return;
+                    var fi = new System.IO.FileInfo(path);
+                    if (fi.Exists && (DateTime.UtcNow - fi.LastWriteTimeUtc).TotalHours < 24) continue;
+                    try
+                    {
+                        if (kind == "live") SaveIndex(path, await _api.LiveStreams(a, null, ct).ConfigureAwait(false));
+                        else if (kind == "movie") SaveIndex(path, await _api.Movies(a, null, ct).ConfigureAwait(false));
+                        else SaveIndex(path, await _api.SeriesList(a, null, ct).ConfigureAwait(false));
+                    }
+                    catch { }
+                    Forget("all|" + kind + "|" + a.Id);
+                }
+            }
+        }
+
+        /// <summary>The newest films or series of every account (the 🆕 Recently added group).</summary>
+        public async Task<List<T>> RecentlyAdded<T>(ContentType type, int max) where T : class
+        {
+            var all = new List<T>();
+            foreach (var a in _store.Accounts.ToList())
+            {
+                try
+                {
+                    if (type == ContentType.Movie) all.AddRange((await AllMovies(a).ConfigureAwait(false)).OrderByDescending(m => m.Added).Take(max).Cast<T>());
+                    else all.AddRange((await AllSeries(a).ConfigureAwait(false)).OrderByDescending(m => m.Added).Take(max).Cast<T>());
+                }
+                catch { }
+            }
+            if (type == ContentType.Movie) return all.Cast<Movie>().OrderByDescending(m => m.Added).Take(max).Cast<T>().ToList();
+            return all.Cast<Series>().OrderByDescending(m => m.Added).Take(max).Cast<T>().ToList();
+        }
+
+        public Task<List<CatchupEntry>> Catchup(LiveChannel ch, CancellationToken ct)
+        {
+            return _api.Catchup(Need(ch.AccountId), ch.StreamId, ct);
+        }
+
+        public string CatchupUrl(LiveChannel ch, CatchupEntry e)
+        {
+            return XtreamApi.CatchupUrl(Need(ch.AccountId), ch.StreamId, e);
+        }
 
         public Task<SeriesInfo> SeriesInfo(Series s)
         {
@@ -206,7 +304,13 @@ namespace Nova.Core
         /// Searches the names of every account at once. The first search downloads the full
         /// lists of each account, so it can take a moment.
         /// </summary>
-        public async Task<SearchResults> Search(string query, int maxPerType, CancellationToken ct)
+        public Task<SearchResults> Search(string query, int maxPerType, CancellationToken ct)
+        {
+            return Search(query, maxPerType, "all", null, ct);
+        }
+
+        /// <summary>kind: "all", "live", "movie", "series"; accountId: one server, or null for all.</summary>
+        public async Task<SearchResults> Search(string query, int maxPerType, string kind, string accountId, CancellationToken ct)
         {
             var res = new SearchResults();
             var q = (query ?? "").Trim();
@@ -219,18 +323,31 @@ namespace Nova.Core
                 return true;
             };
 
+            var wantLive = kind == null || kind == "all" || kind == "live";
+            var wantFilms = kind == null || kind == "all" || kind == "movie";
+            var wantSeries = kind == null || kind == "all" || kind == "series";
             foreach (var a in _store.Accounts.ToList())
             {
                 ct.ThrowIfCancellationRequested();
-                var live = AllChannels(a);
-                var films = AllMovies(a);
-                var series = AllSeries(a);
-                try { res.Channels.AddRange((await live.ConfigureAwait(false)).Where(x => match(x.Name))); }
-                catch (Exception e) { res.Errors.Add(a.DisplayName + " (channels): " + e.Message); }
-                try { res.Movies.AddRange((await films.ConfigureAwait(false)).Where(x => match(x.Name))); }
-                catch (Exception e) { res.Errors.Add(a.DisplayName + " (films): " + e.Message); }
-                try { res.Series.AddRange((await series.ConfigureAwait(false)).Where(x => match(x.Name))); }
-                catch (Exception e) { res.Errors.Add(a.DisplayName + " (series): " + e.Message); }
+                if (accountId != null && a.Id != accountId) continue;
+                var live = wantLive ? AllChannels(a) : null;
+                var films = wantFilms ? AllMovies(a) : null;
+                var series = wantSeries ? AllSeries(a) : null;
+                if (live != null)
+                {
+                    try { res.Channels.AddRange((await live.ConfigureAwait(false)).Where(x => match(x.Name))); }
+                    catch (Exception e) { res.Errors.Add(a.DisplayName + " (channels): " + e.Message); }
+                }
+                if (films != null)
+                {
+                    try { res.Movies.AddRange((await films.ConfigureAwait(false)).Where(x => match(x.Name))); }
+                    catch (Exception e) { res.Errors.Add(a.DisplayName + " (films): " + e.Message); }
+                }
+                if (series != null)
+                {
+                    try { res.Series.AddRange((await series.ConfigureAwait(false)).Where(x => match(x.Name))); }
+                    catch (Exception e) { res.Errors.Add(a.DisplayName + " (series): " + e.Message); }
+                }
             }
             ct.ThrowIfCancellationRequested();
             // Names that start with the search come first.

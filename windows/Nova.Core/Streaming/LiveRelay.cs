@@ -47,6 +47,8 @@ namespace Nova.Core.Streaming
 
         public string Key { get; private set; }
         public string Url { get { return _url; } }
+        /// <summary>Extra request headers for links from websites (null for your IPTV servers).</summary>
+        public Dictionary<string, string> Headers { get; set; }
         public RelayState State { get; private set; }
         /// <summary>Why the stream isn't playing (shown on screen), or null.</summary>
         public string Message { get; private set; }
@@ -108,7 +110,7 @@ namespace Nova.Core.Streaming
                 var gotData = false;
                 try
                 {
-                    var resp = RawHttp.Open(_url, _userAgent(), -1, 12000, _stallMs);
+                    var resp = HttpPolicy.Open(_url, -1, 12000, _stallMs, Headers);
                     lock (_lock) _current = resp;
                     if (_stopped) { resp.Dispose(); break; }
                     if (resp.Status >= 400)

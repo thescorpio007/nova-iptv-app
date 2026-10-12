@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -10,12 +11,12 @@ namespace Nova.Core.Streaming
     public enum VodState { Probing, Downloading, Waiting, Reconnecting, Complete, Failed, Stopped }
 
     /// <summary>
-    /// A film or episode stored on disk in 4 MB pieces, downloaded over ONE connection.
-    /// The player reads from the pieces; when it jumps (an MKV/MP4 index at the end of the file,
-    /// or a seek), the single download moves to that spot, then comes back — so files whose
-    /// index is at the end start normally, without a second connection.
-    /// Cache mode downloads ahead of the player up to a limit; full mode downloads the whole file
-    /// (Download / Download &amp; Watch). Progress is saved, so a download resumes after a restart.
+    /// A film or episode stored on disk in 4 MB pieces.
+    /// Watching (cache mode) uses ONE connection that downloads ahead of the player; when the player jumps
+    /// (an MKV/MP4 index at the end of the file, or a seek) the download moves there, then comes back.
+    /// Downloading (full mode) can use several connections, each fetching other pieces, in watching order,
+    /// with an optional speed limit. Progress is saved, so a download resumes after a restart.
+    /// A server without byte ranges can still be downloaded in full mode, from the start in one go.
     /// </summary>
     public sealed class VodFile : IDisposable
     {
@@ -23,21 +24,23 @@ namespace Nova.Core.Streaming
 
         private readonly object _lock = new object();
         private readonly string _url;
-        private readonly Func<string> _userAgent;
         private readonly string _folder;
         private readonly int _stallMs;
-        private long _readAhead;
+        private readonly long _readAhead;
         private bool _full;
         private long _length = -1;
         private int[] _filled;
+        private int[] _claimed;
         private int _chunks;
         private int _focus;
-        private int _writingChunk = -1;
-        private Thread _thread;
+        private bool _plain;
+        private int _connections = 1;
+        private readonly List<Thread> _workers = new List<Thread>();
+        private readonly Dictionary<int, RawResponse> _open = new Dictionary<int, RawResponse>();
         private volatile bool _stopped;
-        private RawResponse _current;
         private bool _completeReported;
         private DateTime _lastMetaSave = DateTime.MinValue;
+        private Thread _main;
 
         public string Key { get; private set; }
         /// <summary>Account the file comes from (connection limits), or null.</summary>
@@ -46,6 +49,10 @@ namespace Nova.Core.Streaming
         public string Message { get; private set; }
         public int Attempt { get; private set; }
         public int Readers;
+        /// <summary>Extra request headers for links from websites.</summary>
+        public Dictionary<string, string> Headers { get; set; }
+        /// <summary>Speed limit for downloads (not applied while someone watches).</summary>
+        public Throttle Throttle { get; set; }
 
         public event Action<VodFile> Changed;
         /// <summary>Every byte is on disk (called once, on a background thread).</summary>
@@ -55,7 +62,6 @@ namespace Nova.Core.Streaming
         {
             Key = key;
             _url = url;
-            _userAgent = userAgent;
             _folder = folder;
             _full = full;
             _readAhead = Math.Max(ChunkSize * 2L, readAheadBytes);
@@ -75,6 +81,18 @@ namespace Nova.Core.Streaming
             set { lock (_lock) { _full = value; Monitor.PulseAll(_lock); } }
         }
 
+        /// <summary>Connections used in full mode (1–16). Watching alone always uses one.</summary>
+        public int Connections
+        {
+            get { lock (_lock) return _connections; }
+            set { lock (_lock) { _connections = Math.Max(1, Math.Min(16, value)); Monitor.PulseAll(_lock); } }
+        }
+
+        private int ActiveWanted
+        {
+            get { return _full && !_plain ? _connections : 1; }
+        }
+
         public long Downloaded
         {
             get
@@ -91,23 +109,22 @@ namespace Nova.Core.Streaming
 
         public bool IsComplete
         {
-            get
-            {
-                lock (_lock)
-                {
-                    if (_filled == null) return false;
-                    for (int i = 0; i < _chunks; i++) if (_filled[i] < ChunkLen(i)) return false;
-                    return true;
-                }
-            }
+            get { lock (_lock) return CompleteLocked(); }
+        }
+
+        private bool CompleteLocked()
+        {
+            if (_filled == null || _length <= 0) return false;
+            for (int i = 0; i < _chunks; i++) if (_filled[i] < ChunkLen(i)) return false;
+            return true;
         }
 
         public void Begin()
         {
-            if (_thread != null) return;
+            if (_main != null) return;
             State = _length > 0 ? VodState.Downloading : VodState.Probing;
-            _thread = new Thread(Run) { IsBackground = true, Name = "Nova file " + Key };
-            _thread.Start();
+            _main = new Thread(Run) { IsBackground = true, Name = "Nova file " + Key };
+            _main.Start();
         }
 
         /// <summary>Waits until the size is known (true) or the file can't be used this way (false).</summary>
@@ -116,11 +133,11 @@ namespace Nova.Core.Streaming
             var until = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             while (DateTime.UtcNow < until)
             {
-                if (Length > 0) return true;
-                if (State == VodState.Failed || _stopped) return false;
+                if (Length > 0 && !_plain) return true;
+                if (State == VodState.Failed || _stopped || _plain) return false;
                 Thread.Sleep(50);
             }
-            return Length > 0;
+            return Length > 0 && !_plain;
         }
 
         private int ChunkLen(int i)
@@ -141,159 +158,197 @@ namespace Nova.Core.Streaming
             if (h != null) try { h(this); } catch { }
         }
 
-        // ------------------------------------------------------------------ download loop
+        // ------------------------------------------------------------------ main loop
 
         private void Run()
         {
             var backoff = 1000;
-            RawResponse probe = null;
-            while (!_stopped)
+            while (!_stopped && Length <= 0)
             {
                 try
                 {
-                    if (Length <= 0)
+                    SetState(VodState.Probing, null);
+                    var probe = HttpPolicy.Open(_url, 0, 15000, _stallMs, Headers);
+                    if (probe.Status >= 400) { var st = probe.Status; probe.Dispose(); throw new NovaException(HttpPolicy.StatusMessage(st)); }
+                    var total = probe.TotalLength;
+                    if (probe.Status != 206 || total <= 0)
                     {
-                        SetState(VodState.Probing, null);
-                        probe = RawHttp.Open(_url, _userAgent(), 0, 15000, _stallMs);
-                        lock (_lock) _current = probe;
-                        if (probe.Status >= 400) { var st = probe.Status; probe.Dispose(); probe = null; throw new IOException("The server refused the file (HTTP " + st + ")"); }
-                        var total = probe.TotalLength;
-                        if (probe.Status != 206 || total <= 0)
-                        {
-                            // No byte ranges or unknown size: this file can't be cached in pieces.
-                            probe.Dispose();
-                            SetState(VodState.Failed, "The server doesn't allow reading this file in parts.");
-                            return;
-                        }
-                        lock (_lock)
-                        {
-                            _length = total;
-                            _chunks = (int)((total + ChunkSize - 1) / ChunkSize);
-                            _filled = new int[_chunks];
-                        }
-                        SaveMeta(true);
+                        if (_full) { RunPlain(probe); return; }
+                        // No byte ranges: this file can't be cached in pieces (the player plays it directly).
+                        probe.Dispose();
+                        SetState(VodState.Failed, "The server doesn't allow reading this file in parts.");
+                        return;
                     }
-
-                    int target;
+                    probe.Dispose();
                     lock (_lock)
                     {
-                        target = NextTarget();
-                        if (target < 0)
-                        {
-                            if (probe != null) { probe.Dispose(); probe = null; }
-                            _current = null;
-                        }
+                        _length = total;
+                        _chunks = (int)((total + ChunkSize - 1) / ChunkSize);
+                        _filled = new int[_chunks];
+                        _claimed = Enumerable.Repeat(-1, _chunks).ToArray();
                     }
+                    SaveMeta(true);
+                }
+                catch (Exception e)
+                {
+                    if (_stopped) return;
+                    Attempt++;
+                    var msg = e is NovaException ? e.Message : LiveRelay.Describe(e, false);
+                    SetState(VodState.Reconnecting, msg);
+                    if (e is NovaException && Attempt >= 3) { SetState(VodState.Failed, msg); return; }
+                    var until = DateTime.UtcNow.AddMilliseconds(backoff);
+                    while (!_stopped && DateTime.UtcNow < until) Thread.Sleep(100);
+                    backoff = Math.Min(30000, backoff * 2);
+                }
+            }
+            if (_stopped) return;
+            lock (_lock) if (_claimed == null) _claimed = Enumerable.Repeat(-1, _chunks).ToArray();
+            SetState(VodState.Downloading, null);
+            // Start the workers (more are added if the number of connections goes up).
+            while (!_stopped)
+            {
+                int wanted;
+                lock (_lock)
+                {
+                    wanted = ActiveWanted;
+                    while (_workers.Count < wanted)
+                    {
+                        var id = _workers.Count;
+                        var t = new Thread(() => Worker(id)) { IsBackground = true, Name = "Nova file " + Key + " #" + id };
+                        _workers.Add(t);
+                        t.Start();
+                    }
+                }
+                ReportCompleteIfDone();
+                lock (_lock) { if (!_stopped) Monitor.Wait(_lock, 1000); }
+            }
+        }
+
+        private void ReportCompleteIfDone()
+        {
+            if (_completeReported || !IsComplete) return;
+            _completeReported = true;
+            SaveMeta(true);
+            SetState(VodState.Complete, null);
+            var c = Completed;
+            if (c != null) try { c(this); } catch { }
+        }
+
+        // ------------------------------------------------------------------ workers
+
+        private void Worker(int id)
+        {
+            var backoff = 1000;
+            while (!_stopped)
+            {
+                int target;
+                lock (_lock)
+                {
+                    target = id < ActiveWanted ? NextTarget(id) : -1;
                     if (target < 0)
                     {
-                        if (IsComplete)
-                        {
-                            if (!_completeReported)
-                            {
-                                _completeReported = true;
-                                SaveMeta(true);
-                                SetState(VodState.Complete, null);
-                                var c = Completed;
-                                if (c != null) try { c(this); } catch { }
-                            }
-                        }
-                        else if (State != VodState.Waiting) SetState(VodState.Waiting, null);
-                        lock (_lock) { if (!_stopped) Monitor.Wait(_lock, 1000); }
+                        if (!_stopped) Monitor.Wait(_lock, 700);
                         continue;
                     }
-
+                    _claimed[target] = id;
+                }
+                try
+                {
                     long startAt;
                     lock (_lock) startAt = (long)target * ChunkSize + _filled[target];
-                    RawResponse resp;
-                    if (probe != null && startAt == 0) { resp = probe; probe = null; }
-                    else
-                    {
-                        if (probe != null) { probe.Dispose(); probe = null; }
-                        resp = RawHttp.Open(_url, _userAgent(), startAt, 15000, _stallMs);
-                    }
-                    lock (_lock) _current = resp;
+                    var resp = HttpPolicy.Open(_url, startAt, 15000, _stallMs, Headers);
+                    lock (_lock) _open[id] = resp;
                     using (resp)
                     {
-                        if (resp.Status >= 400) throw new IOException("The server refused the file (HTTP " + resp.Status + ")");
+                        if (resp.Status == 403 || resp.Status == 429 || resp.Status == 503)
+                        {
+                            // A website that refuses several connections: go back to one by itself.
+                            if (Connections > 1) { Connections = 1; Message = "The website allows only one connection: continuing with one."; }
+                            throw new NovaException(HttpPolicy.StatusMessage(resp.Status));
+                        }
+                        if (resp.Status >= 400) throw new NovaException(HttpPolicy.StatusMessage(resp.Status));
                         if (resp.Status != 206 || resp.RangeStart != startAt)
                         {
                             if (!(startAt == 0 && (resp.Status == 206 || resp.Status == 200)))
                                 throw new IOException("The server answered from the wrong place.");
                         }
-                        if (State != VodState.Downloading || Attempt > 0) { Attempt = 0; SetState(VodState.Downloading, null); }
-                        var got = Pump(resp, target);
-                        if (got) backoff = 1000;
+                        if (State != VodState.Downloading && State != VodState.Complete) { Attempt = 0; SetState(VodState.Downloading, null); }
+                        if (Pump(id, resp, target)) backoff = 1000;
                     }
                 }
                 catch (Exception e)
                 {
                     if (_stopped) break;
-                    if (probe != null) { probe.Dispose(); probe = null; }
                     Attempt++;
-                    SetState(VodState.Reconnecting, e is IOException && e.Message.StartsWith("The server") ? e.Message : LiveRelay.Describe(e, true));
+                    SetState(VodState.Reconnecting, e is NovaException ? e.Message : LiveRelay.Describe(e, true));
                     var until = DateTime.UtcNow.AddMilliseconds(backoff);
                     while (!_stopped && DateTime.UtcNow < until) Thread.Sleep(100);
                     backoff = Math.Min(30000, backoff * 2);
                 }
                 finally
                 {
-                    lock (_lock) { _current = null; _writingChunk = -1; }
+                    lock (_lock)
+                    {
+                        _open.Remove(id);
+                        for (int i = 0; i < _chunks; i++) if (_claimed[i] == id) _claimed[i] = -1;
+                        Monitor.PulseAll(_lock);
+                    }
+                    SaveMeta(false);
                 }
             }
-            SaveMeta(true);
-            if (State != VodState.Complete && State != VodState.Failed) SetState(VodState.Stopped, null);
         }
 
-        /// <summary>Copies the answer into the pieces, chunk after chunk, while that is still what's wanted.</summary>
-        private bool Pump(RawResponse resp, int chunk)
+        /// <summary>Copies the answer into the pieces, piece after piece, while that is still the right work for this worker.</summary>
+        private bool Pump(int id, RawResponse resp, int chunk)
         {
             var buf = new byte[64 * 1024];
             var any = false;
             while (!_stopped)
             {
                 int already, len;
-                lock (_lock) { already = _filled[chunk]; len = ChunkLen(chunk); _writingChunk = chunk; }
+                lock (_lock) { already = _filled[chunk]; len = ChunkLen(chunk); }
                 using (var fs = new FileStream(ChunkPath(chunk), FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 64 * 1024))
                 {
                     fs.Position = already;
                     while (already < len && !_stopped)
                     {
                         var n = resp.Body.Read(buf, 0, Math.Min(buf.Length, len - already));
-                        if (n <= 0)
-                        {
-                            fs.Flush();
-                            throw new IOException("The connection ended early.");
-                        }
+                        if (n <= 0) { fs.Flush(); throw new IOException("The connection ended early."); }
                         fs.Write(buf, 0, n);
                         fs.Flush();
                         any = true;
                         already += n;
+                        var throttle = Throttle;
+                        if (throttle != null && Readers == 0) throttle.Take(n);
                         lock (_lock)
                         {
                             _filled[chunk] = already;
                             Monitor.PulseAll(_lock);
-                            // The player jumped somewhere else: stop here and reconnect there.
-                            if (already < len && NextTarget() != chunk) { SaveMeta(false); return any; }
+                            if (already < len && ShouldMove(id, chunk)) { _claimed[chunk] = -1; return any; }
                         }
                         if ((DateTime.UtcNow - _lastMetaSave).TotalSeconds > 5) SaveMeta(false);
                     }
                 }
                 if (_stopped) return any;
-                SaveMeta(false);
                 var h = Changed; if (h != null) try { h(this); } catch { }
                 lock (_lock)
                 {
+                    _claimed[chunk] = -1;
                     var next = chunk + 1;
-                    // Keep reading the same answer only if the next piece is empty and wanted next.
-                    if (next >= _chunks || _filled[next] != 0 || NextTarget() != next) return any;
+                    // Keep reading the same answer only if the next piece is empty, free, and wanted next.
+                    if (next >= _chunks || _filled[next] != 0 || _claimed[next] != -1 || NextTarget(id) != next) return any;
+                    _claimed[next] = id;
                     chunk = next;
                 }
             }
             return any;
         }
 
-        /// <summary>The piece to download next, or -1 (nothing wanted right now). Call under the lock.</summary>
-        private int NextTarget()
+        /// <summary>
+        /// The piece this worker should download next, or -1. Pieces in watching order from where the player
+        /// reads; a piece another worker holds is skipped. Call under the lock.
+        /// </summary>
+        private int NextTarget(int id)
         {
             if (_filled == null) return -1;
             var f = Math.Max(0, Math.Min(_focus, _chunks - 1));
@@ -302,15 +357,121 @@ namespace Nova.Core.Streaming
             {
                 if (_filled[i] < ChunkLen(i))
                 {
+                    if (_claimed[i] != -1 && _claimed[i] != id) { ahead += ChunkLen(i); continue; }
                     if (_full || ahead < _readAhead) return i;
                     break;
                 }
                 ahead += ChunkLen(i);
             }
             if (_full)
-                for (int i = 0; i < _chunks; i++)
-                    if (_filled[i] < ChunkLen(i)) return i;
+                for (int i = 0; i < f; i++)
+                    if (_filled[i] < ChunkLen(i) && (_claimed[i] == -1 || _claimed[i] == id)) return i;
             return -1;
+        }
+
+        /// <summary>
+        /// True when this worker should leave its piece for a more urgent one (the player jumped).
+        /// Only the worker whose piece is furthest from the player moves, and only if no worker is free.
+        /// </summary>
+        private bool ShouldMove(int id, int chunk)
+        {
+            var want = NextTarget(id);
+            if (want == chunk || want < 0) return false;
+            if (_claimed[want] != -1) return false;
+            var busy = new List<int>();
+            for (int i = 0; i < _chunks; i++) if (_claimed[i] >= 0) busy.Add(_claimed[i]);
+            if (busy.Distinct().Count() < Math.Min(ActiveWanted, _workers.Count)) return false; // a free worker takes it
+            // Distance ahead of the player (wrapping in full mode).
+            Func<int, int> dist = c => c >= _focus ? c - _focus : c + _chunks;
+            var mine = dist(chunk);
+            for (int i = 0; i < _chunks; i++)
+                if (_claimed[i] >= 0 && _claimed[i] != id && dist(i) > mine) return false;
+            return dist(want) < mine;
+        }
+
+        // ------------------------------------------------------------------ servers without byte ranges
+
+        /// <summary>Downloads from the start in one go (no resume inside the file; a drop starts it again).</summary>
+        private void RunPlain(RawResponse first)
+        {
+            lock (_lock) _plain = true;
+            var resp = first;
+            var backoff = 1000;
+            while (!_stopped)
+            {
+                try
+                {
+                    if (resp == null) resp = HttpPolicy.Open(_url, -1, 15000, _stallMs, Headers);
+                    lock (_lock) _open[0] = resp;
+                    if (resp.Status >= 400) throw new NovaException(HttpPolicy.StatusMessage(resp.Status));
+                    var total = resp.ContentLength;
+                    var chunks = new List<int>();
+                    var buf = new byte[64 * 1024];
+                    long done = 0;
+                    var index = 0;
+                    FileStream fs = null;
+                    lock (_lock)
+                    {
+                        _length = total;
+                        _chunks = total > 0 ? (int)((total + ChunkSize - 1) / ChunkSize) : 0;
+                        _filled = new int[Math.Max(1, _chunks)];
+                        _claimed = Enumerable.Repeat(-1, _filled.Length).ToArray();
+                    }
+                    SetState(VodState.Downloading, null);
+                    try
+                    {
+                        while (!_stopped)
+                        {
+                            var n = resp.Body.Read(buf, 0, buf.Length);
+                            if (n <= 0) break;
+                            var off = 0;
+                            while (off < n)
+                            {
+                                if (fs == null) { fs = new FileStream(ChunkPath(index), FileMode.Create, FileAccess.Write, FileShare.ReadWrite); chunks.Add(0); }
+                                var take = (int)Math.Min(n - off, ChunkSize - chunks[index]);
+                                fs.Write(buf, off, take);
+                                chunks[index] += take;
+                                off += take;
+                                done += take;
+                                if (chunks[index] >= ChunkSize) { fs.Dispose(); fs = null; index++; }
+                            }
+                            var throttle = Throttle;
+                            if (throttle != null) throttle.Take(n);
+                            lock (_lock)
+                            {
+                                if (_filled.Length < chunks.Count) { Array.Resize(ref _filled, chunks.Count); Array.Resize(ref _claimed, chunks.Count); }
+                                for (int i = 0; i < chunks.Count; i++) _filled[i] = chunks[i];
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        if (fs != null) fs.Dispose();
+                    }
+                    if (_stopped) return;
+                    if (total > 0 && done < total) throw new IOException("The connection ended early.");
+                    lock (_lock)
+                    {
+                        _length = done;
+                        _chunks = chunks.Count;
+                        _filled = chunks.ToArray();
+                        _claimed = Enumerable.Repeat(-1, _chunks).ToArray();
+                    }
+                    resp.Dispose();
+                    ReportCompleteIfDone();
+                    return;
+                }
+                catch (Exception e)
+                {
+                    if (resp != null) { resp.Dispose(); resp = null; }
+                    if (_stopped) return;
+                    Attempt++;
+                    SetState(VodState.Reconnecting, (e is NovaException ? e.Message : LiveRelay.Describe(e, true)) + " Starting again from the beginning…");
+                    var until = DateTime.UtcNow.AddMilliseconds(backoff);
+                    while (!_stopped && DateTime.UtcNow < until) Thread.Sleep(100);
+                    backoff = Math.Min(30000, backoff * 2);
+                }
+            }
         }
 
         // ------------------------------------------------------------------ reading
@@ -326,9 +487,9 @@ namespace Nova.Core.Streaming
                 int chunk, within, avail;
                 lock (_lock)
                 {
-                    if (_length <= 0)
+                    if (_length <= 0 || _plain)
                     {
-                        if (State == VodState.Failed) return 0;
+                        if (State == VodState.Failed || _plain) return 0;
                         Monitor.Wait(_lock, 200);
                         continue;
                     }
@@ -367,7 +528,7 @@ namespace Nova.Core.Streaming
 
         // ------------------------------------------------------------------ finishing
 
-        /// <summary>Joins the pieces into one normal file (deleting each piece as it goes) and removes the folder.</summary>
+        /// <summary>Joins the pieces into one normal file and removes the pieces.</summary>
         public void Assemble(string finalPath)
         {
             if (!IsComplete) throw new InvalidOperationException("The download is not complete.");
@@ -395,10 +556,13 @@ namespace Nova.Core.Streaming
         {
             if (_stopped) return;
             _stopped = true;
-            RawResponse cur;
-            lock (_lock) { cur = _current; Monitor.PulseAll(_lock); }
-            if (cur != null) cur.Dispose();
-            if (_thread != null && _thread != Thread.CurrentThread) _thread.Join(3000);
+            List<RawResponse> open;
+            lock (_lock) { open = _open.Values.ToList(); Monitor.PulseAll(_lock); }
+            foreach (var r in open) try { r.Dispose(); } catch { }
+            if (_main != null && _main != Thread.CurrentThread) _main.Join(3000);
+            List<Thread> workers;
+            lock (_lock) workers = _workers.ToList();
+            foreach (var w in workers) if (w != Thread.CurrentThread) w.Join(3000);
             SaveMeta(true);
         }
 
@@ -422,7 +586,7 @@ namespace Nova.Core.Streaming
                 string text;
                 lock (_lock)
                 {
-                    if (_filled == null) return;
+                    if (_filled == null || _plain) return;
                     if (!force && (DateTime.UtcNow - _lastMetaSave).TotalSeconds < 1) return;
                     _lastMetaSave = DateTime.UtcNow;
                     text = _url + "\n" + _length.ToString(CultureInfo.InvariantCulture) + "\n" +
@@ -457,6 +621,7 @@ namespace Nova.Core.Streaming
                 _length = length;
                 _chunks = chunks;
                 _filled = filled;
+                _claimed = Enumerable.Repeat(-1, chunks).ToArray();
             }
             catch { }
         }

@@ -21,12 +21,12 @@ namespace Nova.Core.Streaming
         public const string Recording = "recording";
     }
 
-    /// <summary>A downloaded film / episode or a live recording (saved in downloads.json).</summary>
+    /// <summary>A downloaded film / episode / link, or a live recording (saved in downloads.json).</summary>
     public class DownloadItem
     {
         public string Id { get; set; }
         public string Title { get; set; }
-        /// <summary>"film", "episode" or "recording".</summary>
+        /// <summary>"film", "episode", "link" or "recording".</summary>
         public string Kind { get; set; }
         public string Url { get; set; }
         public string Ext { get; set; }
@@ -39,6 +39,14 @@ namespace Nova.Core.Streaming
         public long DoneBytes { get; set; }
         public string Error { get; set; }
         public long CreatedAt { get; set; }
+        /// <summary>An HLS (.m3u8) video, downloaded part by part.</summary>
+        public bool Hls { get; set; }
+        /// <summary>Extra request headers for links from websites.</summary>
+        public Dictionary<string, string> Headers { get; set; }
+        /// <summary>Connections in use right now (shown in the list).</summary>
+        [JsonIgnore] public int Connections { get; set; }
+        /// <summary>Current speed in bytes per second.</summary>
+        [JsonIgnore] public double Speed { get; set; }
 
         [JsonIgnore] public bool IsDone { get { return Status == DownloadStatus.Done; } }
 
@@ -46,9 +54,10 @@ namespace Nova.Core.Streaming
     }
 
     /// <summary>
-    /// Downloads films and episodes one at a time (one connection), resumes after drops and restarts,
-    /// and joins the pieces into a normal video file when done. Also lists live recordings.
-    /// On accounts that allow only one connection, a download waits while that account is used to watch.
+    /// Downloads films, episodes and links one item at a time, each with 1–16 connections and an optional
+    /// speed limit (Settings → Downloads). For your IPTV servers Nova never uses more connections than the
+    /// account allows and keeps one free for watching; on a 1-connection account a download waits while you watch.
+    /// Downloads resume after drops and restarts, then the pieces are joined into a normal video file.
     /// </summary>
     public sealed class DownloadManager : IDisposable
     {
@@ -59,8 +68,13 @@ namespace Nova.Core.Streaming
         private readonly string _listPath;
         private readonly List<DownloadItem> _items;
         private readonly Timer _timer;
+        private readonly Throttle _serverThrottle;
+        private readonly Throttle _linkThrottle;
         private DownloadItem _active;
         private VodLease _lease;
+        private HlsDownload _hls;
+        private long _lastBytes;
+        private DateTime _lastSpeedAt = DateTime.UtcNow;
         private DateTime _lastSave = DateTime.MinValue;
         private bool _dirty;
         private volatile bool _disposed;
@@ -73,6 +87,8 @@ namespace Nova.Core.Streaming
             _hub = hub;
             _settings = settings;
             _maxConnections = maxConnections;
+            _serverThrottle = new Throttle(() => (long)_settings().DlSpeedServers * 1024 * 1024);
+            _linkThrottle = new Throttle(() => (long)_settings().DlSpeedLinks * 1024 * 1024);
             _listPath = Path.Combine(dataFolder, "downloads.json");
             _items = Load();
             foreach (var i in _items)
@@ -107,13 +123,30 @@ namespace Nova.Core.Streaming
             }
         }
 
+        /// <summary>The HLS download of this address while it runs (Download &amp; Watch), or null.</summary>
+        public HlsDownload ActiveHls(string url)
+        {
+            lock (_lock) return _hls != null && _hls.Url == url && !_hls.IsStopped ? _hls : null;
+        }
+
+        /// <summary>Connections a download from this account / link may use now.</summary>
+        public int ConnectionsFor(DownloadItem item)
+        {
+            var s = _settings();
+            if (item.AccountId == null || item.Kind == "link") return Math.Max(1, Math.Min(16, s.DlConnLinks));
+            var max = _maxConnections(item.AccountId);
+            var wanted = Math.Max(1, Math.Min(16, s.DlConnServers));
+            if (max <= 1) return 1;               // unknown, or a 1-connection account
+            return Math.Max(1, Math.Min(wanted, max - 1)); // one stays free for watching
+        }
+
         // ------------------------------------------------------------------ adding
 
         public DownloadItem AddFilm(Movie m, string url)
         {
             var name = SafeName(m.Name) + "." + Ext(m.Extension);
             var path = Path.Combine(KnownFolders.NovaDownloads(_settings()), "Films", name);
-            return Add(m.Name, "film", url, Ext(m.Extension), m.AccountId, m.Icon, path);
+            return Add(m.Name, "film", url, Ext(m.Extension), m.AccountId, m.Icon, path, false, null);
         }
 
         public DownloadItem AddEpisode(Series s, Episode e, string url)
@@ -123,10 +156,20 @@ namespace Nova.Core.Streaming
             var title = string.IsNullOrWhiteSpace(e.Title) || e.Title.IndexOf(s.Name, StringComparison.OrdinalIgnoreCase) >= 0 ? "" : " - " + SafeName(e.Title);
             var file = show + " " + num + title + "." + Ext(e.Extension);
             var path = Path.Combine(KnownFolders.NovaDownloads(_settings()), "Series", show, "Season " + e.Season, file);
-            return Add(s.Name + "  ·  " + num, "episode", url, Ext(e.Extension), s.AccountId, e.Image ?? s.Cover, path);
+            return Add(s.Name + "  ·  " + num, "episode", url, Ext(e.Extension), s.AccountId, e.Image ?? s.Cover, path, false, null);
         }
 
-        private DownloadItem Add(string title, string kind, string url, string ext, string accountId, string icon, string finalPath)
+        /// <summary>Any video link (Open link). HLS links are saved as .ts.</summary>
+        public DownloadItem AddLink(string url, string title, string ext, bool hls, Dictionary<string, string> headers)
+        {
+            var name = SafeName(string.IsNullOrWhiteSpace(title) ? "Video" : title);
+            var e = hls ? "ts" : Ext(ext);
+            if (name.EndsWith("." + e, StringComparison.OrdinalIgnoreCase)) name = name.Substring(0, name.Length - e.Length - 1);
+            var path = Path.Combine(KnownFolders.NovaDownloads(_settings()), "Links", name + "." + e);
+            return Add(title, "link", url, e, null, null, path, hls, headers);
+        }
+
+        private DownloadItem Add(string title, string kind, string url, string ext, string accountId, string icon, string finalPath, bool hls, Dictionary<string, string> headers)
         {
             DownloadItem item;
             lock (_lock)
@@ -141,6 +184,7 @@ namespace Nova.Core.Streaming
                         item.DoneBytes = 0;
                     }
                     else if (item.Status == DownloadStatus.Paused) item.Status = DownloadStatus.Queued;
+                    if (headers != null) item.Headers = headers;
                     _dirty = true;
                     return item.Copy();
                 }
@@ -158,6 +202,8 @@ namespace Nova.Core.Streaming
                     PartsFolder = Path.Combine(Path.GetDirectoryName(finalPath), "." + Path.GetFileName(finalPath) + ".parts"),
                     Status = DownloadStatus.Queued,
                     CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Hls = hls,
+                    Headers = headers,
                 };
                 _items.Insert(0, item);
                 _dirty = true;
@@ -167,18 +213,15 @@ namespace Nova.Core.Streaming
             return item.Copy();
         }
 
-        /// <summary>Download &amp; Watch: this item goes first (others wait), so one connection serves both.</summary>
+        /// <summary>Download &amp; Watch: this item goes first (others wait).</summary>
         public void Prioritize(string id)
         {
             lock (_lock)
             {
                 var item = _items.FirstOrDefault(x => x.Id == id);
                 if (item == null || item.IsDone) return;
-                if (_active != null && _active.Id != id)
-                {
-                    StopActiveLocked(DownloadStatus.Queued);
-                }
-                item.Status = DownloadStatus.Queued;
+                if (_active != null && _active.Id != id) StopActiveLocked(DownloadStatus.Queued);
+                if (_active == null || _active.Id != id) item.Status = DownloadStatus.Queued;
                 _items.Remove(item);
                 _items.Insert(0, item);
                 _dirty = true;
@@ -286,7 +329,10 @@ namespace Nova.Core.Streaming
         {
             if (_active == null) return;
             _active.Status = newStatus;
+            _active.Connections = 0;
+            _active.Speed = 0;
             if (_lease != null) { _lease.File.Changed -= OnFileChanged; _lease.Dispose(); }
+            if (_hls != null) { var h = _hls; _hls = null; ThreadPool.QueueUserWorkItem(_ => h.Dispose()); }
             _lease = null;
             _active = null;
             _dirty = true;
@@ -303,39 +349,64 @@ namespace Nova.Core.Streaming
             {
                 DownloadItem finish = null;
                 VodLease finishLease = null;
+                HlsDownload finishHls = null;
                 lock (_lock)
                 {
-                    if (_active != null && _lease != null)
+                    if (_active != null && (_lease != null || _hls != null))
                     {
-                        var f = _lease.File;
-                        _active.DoneBytes = f.Downloaded;
-                        _active.TotalBytes = f.Length;
-                        if (f.State == VodState.Failed)
+                        long done, total; VodState state; string msg; bool complete; int users;
+                        if (_lease != null)
                         {
-                            _active.Error = f.Message ?? "This file can't be downloaded.";
+                            var f = _lease.File;
+                            done = f.Downloaded; total = f.Length; state = f.State; msg = f.Message; complete = f.IsComplete; users = _hub.Users(f);
+                            f.Connections = ConnectionsFor(_active);
+                            _active.Connections = f.Connections;
+                        }
+                        else
+                        {
+                            done = _hls.DoneBytes; total = _hls.EstimatedBytes; state = _hls.State; msg = _hls.Message; complete = _hls.IsComplete;
+                            users = _hls.Readers > 0 ? 2 : 1;
+                            _active.Connections = _hls.Connections;
+                        }
+                        var now = DateTime.UtcNow;
+                        var secs = (now - _lastSpeedAt).TotalSeconds;
+                        if (secs >= 1)
+                        {
+                            var rate = Math.Max(0, (done - _lastBytes) / secs);
+                            _active.Speed = _active.Speed <= 0 ? rate : _active.Speed * 0.6 + rate * 0.4;
+                            _lastBytes = done; _lastSpeedAt = now;
+                        }
+                        _active.DoneBytes = done;
+                        _active.TotalBytes = total;
+                        if (state == VodState.Failed)
+                        {
+                            _active.Error = msg ?? "This file can't be downloaded.";
                             StopActiveLocked(DownloadStatus.Failed);
                         }
-                        else if (f.IsComplete)
+                        else if (complete)
                         {
                             // Join the pieces once nobody watches it any more (Download & Watch).
-                            if (_hub.Users(f) <= 1)
+                            if (users <= 1)
                             {
                                 finish = _active;
                                 finishLease = _lease;
+                                finishHls = _hls;
                                 _active.Status = DownloadStatus.Finishing;
-                                _lease.File.Changed -= OnFileChanged;
+                                _active.Speed = 0;
+                                if (_lease != null) _lease.File.Changed -= OnFileChanged;
                                 _lease = null;
+                                _hls = null;
                                 _active = null;
                             }
                         }
-                        else if (Waits(_active, f))
+                        else if (Waits(_active, _lease != null ? _lease.File : null))
                         {
                             StopActiveLocked(DownloadStatus.Waiting);
                         }
                         else
                         {
-                            _active.Status = f.State == VodState.Reconnecting ? DownloadStatus.Downloading : DownloadStatus.Downloading;
-                            _active.Error = f.State == VodState.Reconnecting ? f.Message : null;
+                            _active.Status = DownloadStatus.Downloading;
+                            _active.Error = state == VodState.Reconnecting ? msg : null;
                         }
                         _dirty = true;
                     }
@@ -347,8 +418,21 @@ namespace Nova.Core.Streaming
                             _active = next;
                             next.Status = DownloadStatus.Downloading;
                             next.Error = null;
-                            _lease = _hub.OpenVod(next.Url, next.Ext, next.PartsFolder, true, next.AccountId);
-                            _lease.File.Changed += OnFileChanged;
+                            _lastBytes = 0;
+                            _lastSpeedAt = DateTime.UtcNow;
+                            var conns = ConnectionsFor(next);
+                            var throttle = next.AccountId != null && next.Kind != "link" ? _serverThrottle : _linkThrottle;
+                            if (next.Hls)
+                            {
+                                _hls = new HlsDownload(next.Url, next.PartsFolder, conns) { Headers = next.Headers, Throttle = throttle };
+                                _hls.Changed += h => ThreadPool.QueueUserWorkItem(_ => Tick());
+                                _hls.Begin();
+                            }
+                            else
+                            {
+                                _lease = _hub.OpenVod(next.Url, next.Ext, next.PartsFolder, true, next.AccountId, next.Headers, conns, throttle);
+                                _lease.File.Changed += OnFileChanged;
+                            }
                             _dirty = true;
                         }
                     }
@@ -357,9 +441,13 @@ namespace Nova.Core.Streaming
                 {
                     try
                     {
-                        var file = finishLease.File;
-                        finishLease.Dispose();
-                        file.Assemble(finish.FinalPath);
+                        if (finishLease != null)
+                        {
+                            var file = finishLease.File;
+                            finishLease.Dispose();
+                            file.Assemble(finish.FinalPath);
+                        }
+                        else finishHls.Assemble(finish.FinalPath);
                         lock (_lock)
                         {
                             finish.Status = DownloadStatus.Done;
@@ -385,7 +473,7 @@ namespace Nova.Core.Streaming
         /// <summary>True when this download must wait: its account allows one connection and it's in use.</summary>
         private bool Waits(DownloadItem item, VodFile own)
         {
-            if (item.AccountId == null) return false;
+            if (item.AccountId == null || item.Kind == "link") return false;
             var max = _maxConnections(item.AccountId);
             if (max != 1) return false;
             return _hub.BusyAccounts(own).Contains(item.AccountId);
@@ -490,6 +578,7 @@ namespace Nova.Core.Streaming
             return path;
         }
     }
+
 
     /// <summary>Live recordings: same connection as watching, saved as .ts in Downloads\NovaIPTV\Recordings.</summary>
     public sealed class RecordingManager : IDisposable

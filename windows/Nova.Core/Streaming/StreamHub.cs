@@ -104,7 +104,7 @@ namespace Nova.Core.Streaming
         // ------------------------------------------------------------------ live
 
         /// <summary>Starts (or joins) the download of a live channel.</summary>
-        public LiveLease OpenLive(string key, string url)
+        public LiveLease OpenLive(string key, string url, Dictionary<string, string> headers = null)
         {
             var s = _settings();
             LiveRelay relay;
@@ -114,7 +114,7 @@ namespace Nova.Core.Streaming
                 {
                     var folder = Path.Combine(LiveFolder, Guid.NewGuid().ToString("N").Substring(0, 10));
                     relay = new LiveRelay(key, url, () => _settings().UserAgent, folder,
-                        (long)Math.Max(100, s.LiveBufferMb) * 1024 * 1024, s.StallSeconds, s.DeadSeconds);
+                        (long)Math.Max(100, s.LiveBufferMb) * 1024 * 1024, s.StallSeconds, s.DeadSeconds) { Headers = headers };
                     _live[key] = relay;
                     _liveRefs[relay] = 0;
                     _routes["live/" + Id(key)] = relay;
@@ -177,7 +177,8 @@ namespace Nova.Core.Streaming
         /// Plays a film or episode through the disk cache (folder = null) or through a download
         /// folder (Download &amp; Watch). ext names the file type for VLC (mkv, mp4…).
         /// </summary>
-        public VodLease OpenVod(string url, string ext, string downloadFolder, bool full, string accountId = null)
+        public VodLease OpenVod(string url, string ext, string downloadFolder, bool full, string accountId = null,
+            Dictionary<string, string> headers = null, int connections = 1, Throttle throttle = null)
         {
             var key = Id(url);
             var s = _settings();
@@ -191,17 +192,37 @@ namespace Nova.Core.Streaming
                     file = new VodFile(key, url, () => _settings().UserAgent, folder, full,
                         downloadFolder != null ? long.MaxValue / 4 : cacheCap - 64L * 1024 * 1024, s.StallSeconds);
                     file.AccountId = accountId;
+                    file.Headers = headers;
+                    file.Connections = connections;
+                    file.Throttle = throttle;
                     _vod[key] = file;
                     _vodRefs[file] = 0;
                     _routes["vod/" + key] = file;
                     if (downloadFolder == null) TrimFilmCache(cacheCap, folder);
                     file.Begin();
                 }
-                else if (full) file.Full = true;
+                else if (full)
+                {
+                    file.Full = true;
+                    if (connections > file.Connections) file.Connections = connections;
+                    if (throttle != null) file.Throttle = throttle;
+                }
                 _vodRefs[file] = _vodRefs[file] + 1;
             }
             var safeExt = string.IsNullOrEmpty(ext) ? "mp4" : new string(ext.Where(char.IsLetterOrDigit).ToArray());
             return new VodLease(this, file, Base + "/vod/" + key + "/video." + safeExt);
+        }
+
+        /// <summary>Serves a file that grows on disk (an HLS download being watched). Returns its address.</summary>
+        public string ServeGrowing(string id, IGrowingSource source)
+        {
+            lock (_lock) _routes["grow/" + id] = source;
+            return Base + "/grow/" + id + ".ts";
+        }
+
+        public void StopServing(string id)
+        {
+            lock (_lock) _routes.Remove("grow/" + id);
         }
 
         /// <summary>How many users hold this film / episode (player, download…).</summary>
@@ -332,6 +353,8 @@ namespace Nova.Core.Streaming
                     Func<bool> gone = () => _stopped || ClientGone(client);
                     var relay = route as LiveRelay;
                     if (relay != null) { ServeLive(s, method, query, relay, gone); return; }
+                    var grow = route as IGrowingSource;
+                    if (grow != null) { ServeGrowing(s, method, grow, gone); return; }
                     var file = route as VodFile;
                     if (file != null) { ServeVod(s, method, range, file, gone); return; }
                     Send(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -403,6 +426,30 @@ namespace Nova.Core.Streaming
                 var n = relay.Read(ref pos, buf, 0, buf.Length, gone);
                 if (n <= 0) break;
                 s.Write(buf, 0, n);
+            }
+        }
+
+        private static void ServeGrowing(NetworkStream s, string method, IGrowingSource src, Func<bool> gone)
+        {
+            Send(s, "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n");
+            if (method == "HEAD") return;
+            var buf = new byte[64 * 1024];
+            long pos = 0;
+            var hls = src as HlsDownload;
+            if (hls != null) Interlocked.Increment(ref hls.Readers);
+            try
+            {
+                while (!gone())
+                {
+                    var n = src.Read(pos, buf, 0, buf.Length, gone);
+                    if (n <= 0) break;
+                    s.Write(buf, 0, n);
+                    pos += n;
+                }
+            }
+            finally
+            {
+                if (hls != null) Interlocked.Decrement(ref hls.Readers);
             }
         }
 

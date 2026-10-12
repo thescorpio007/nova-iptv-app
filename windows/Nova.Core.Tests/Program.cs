@@ -67,6 +67,10 @@ namespace Nova.Core.Tests
             Run("Ratings, years, durations", Helpers);
             Run("Storage", Storage);
             Run("Catalog and search", () => CatalogSearch().GetAwaiter().GetResult());
+            Run("Backup protection (Android sample)", Crypto);
+            Run("Backup (Android format)", BackupRoundTrip);
+            Run("Accounts list", AccountsListTest);
+            Run("Catch-up, M3U, order", Misc);
             RunStreamingTests();
             Console.WriteLine();
             Console.WriteLine("Passed: " + _passed + "   Failed: " + _failed);
@@ -78,6 +82,137 @@ namespace Nova.Core.Tests
             Console.WriteLine("== " + name);
             try { test(); }
             catch (Exception e) { _failed++; Console.WriteLine("FAIL: " + name + " threw " + e); }
+        }
+
+        private static void Crypto()
+        {
+            // Made exactly like the Android app does it (PBKDF2-SHA256 120 000 rounds, AES-256-GCM).
+            const string android = "NOVAENC1:AAECAwQFBgcICQoLDA0OD2RlZmdoaWprbG1ub6NBlGgolgRZ2MzGmSi8SVhnWMaM5+ybC5dbeXynoQCJNvTyIE5mBQ+ulRIkvKmlwgGOK5Q=";
+            Check(NovaCrypto.IsProtected(android), "protected file recognised");
+            Eq("{\"app\":\"NovaIPTV\",\"note\":\"عربي\"}", NovaCrypto.Decrypt(android, "pässwörd"), "Android-protected file opens on Windows");
+            var wrong = false;
+            try { NovaCrypto.Decrypt(android, "nope"); } catch (NovaException e) { wrong = e.Message == "Wrong password"; }
+            Check(wrong, "wrong password reported");
+            var mine = NovaCrypto.Encrypt("hello عربي", "pw");
+            Eq("hello عربي", NovaCrypto.Decrypt(mine, "pw"), "Windows round trip");
+            Check(mine.StartsWith("NOVAENC1:"), "same prefix as Android");
+        }
+
+        private static void BackupRoundTrip()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "nova-bak-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                // A backup as the Android app writes it.
+                var android = new JObject
+                {
+                    ["app"] = "NovaIPTV", ["version"] = 1, ["created"] = 1760000000000L,
+                    ["prefs"] = new JObject
+                    {
+                        ["accounts"] = new JObject { ["t"] = "s", ["v"] = "[{\"id\":\"a-1\",\"name\":\"Main\",\"server\":\"http://h:80\",\"username\":\"u\",\"password\":\"p\",\"fromList\":true}]" },
+                        ["favorites_v2"] = new JObject { ["t"] = "s", ["v"] = "[{\"type\":\"live\",\"id\":\"9\",\"name\":\"BBC\",\"savedAt\":5,\"accountId\":\"a-1\"}]" },
+                        ["org"] = new JObject { ["t"] = "s", ["v"] = "{\"hiddenGroups\":[\"live|a-1|3\"],\"groupOrder\":{\"live\":[\"a-1|2\",\"a-1|1\"]}}" },
+                        ["pin_hash"] = new JObject { ["t"] = "s", ["v"] = Store.Sha256Hex("salt1234") },
+                        ["pin_salt"] = new JObject { ["t"] = "s", ["v"] = "salt" },
+                        ["pos_movie_a-1_77"] = new JObject { ["t"] = "l", ["v"] = 123456 },
+                        ["cushion_seconds"] = new JObject { ["t"] = "i", ["v"] = 12 },
+                        ["sort_movie"] = new JObject { ["t"] = "s", ["v"] = "year" },
+                        ["hdr_site.com"] = new JObject { ["t"] = "s", ["v"] = "Referer: https://site.com/\nUser-Agent: Browser" },
+                        ["tunneling"] = new JObject { ["t"] = "b", ["v"] = true },
+                        ["user_agent"] = new JObject { ["t"] = "s", ["v"] = "NovaIPTV/1.0 (Linux; Android)" },
+                    },
+                };
+                var store = new Store(dir, Path.Combine(dir, "cache"));
+                var c = Backup.Read(android.ToString(), store.Settings);
+                Check(c.FromAndroid, "recognised as an Android backup");
+                Eq(1, c.Accounts.Count, "account read");
+                Check(c.Accounts[0].FromList, "accounts-link flag read");
+                Eq(1, c.Favorites.Count, "favorite read");
+                Check(c.State.Org.HiddenGroups.Contains("live|a-1|3"), "hidden group read");
+                Eq("a-1|2", c.State.Org.GroupOrder["live"][0], "group order read");
+                Eq(123456L, c.State.Positions["movie_a-1_77"], "resume position read");
+                Eq(12, c.Settings.CushionSeconds, "setting read");
+                Eq("year", c.Settings.SortMovie, "sorting read");
+                Eq(Store.DefaultUserAgent, c.Settings.UserAgent, "Android's own user agent not copied to Windows");
+                Eq("https://site.com/", c.State.LinkHeaders["site.com"]["Referer"], "website headers read");
+                Check(c.State.AndroidExtras.ContainsKey("tunneling"), "Android-only setting kept");
+                store.ReplaceAll(c.Accounts, c.Settings, c.Favorites, c.State);
+                Check(store.CheckPin("1234"), "PIN from Android works");
+
+                // And back to Android.
+                var back = JObject.Parse(Backup.Export(store));
+                var prefs = (JObject)back["prefs"];
+                Eq("NovaIPTV", (string)back["app"], "export app name");
+                Eq(true, (bool)prefs["tunneling"]["v"], "Android-only setting goes back unchanged");
+                Eq(123456L, (long)prefs["pos_movie_a-1_77"]["v"], "resume position written");
+                Eq("l", (string)prefs["pos_movie_a-1_77"]["t"], "position type");
+                Eq("i", (string)prefs["cushion_seconds"]["t"], "number type");
+                var accounts = JArray.Parse((string)prefs["accounts"]["v"]);
+                Eq("a-1", (string)accounts[0]["id"], "account id kept");
+                Check(prefs["user_agent"] == null, "Windows user agent not sent to the box");
+                Check(prefs["win_settings"] != null, "Windows settings included");
+
+                // Windows → Windows keeps Windows settings.
+                var s2 = store.Settings.Copy(); s2.FilmBufferMb = 4096; store.SaveSettings(s2);
+                var again = Backup.Read(Backup.Export(store), new Settings());
+                Eq(4096, again.Settings.FilmBufferMb, "Windows setting restored");
+                Check(!again.FromAndroid, "recognised as a PC backup");
+                var bad = false;
+                try { Backup.Read("{\"app\":\"Other\"}", null); } catch (NovaException) { bad = true; }
+                Check(bad, "other files refused");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        private static void AccountsListTest()
+        {
+            var list = AccountsList.Parse("# my accounts\nMain | host.tv:8080 | joe | 123\nSecond | http://b.tv/get.php?username=x&password=y\nhttp://c.tv:81/get.php?username=k&password=l\nmain | dup | a | b\n");
+            Eq(3, list.Count, "three accounts, duplicate name ignored");
+            Eq("http://host.tv:8080", list[0].Server, "server normalised");
+            Eq("y", list[1].Password, "link form");
+            Eq("c.tv:81", list[2].Name, "name from the link");
+            var before = new List<Account>
+            {
+                new Account { Id = "1", Name = "Main", Server = "http://host.tv:8080", Username = "joe", Password = "old", FromList = true },
+                new Account { Id = "2", Name = "Gone", Server = "http://g", Username = "u", Password = "p", FromList = true },
+                new Account { Id = "3", Name = "Mine", Server = "http://m", Username = "u", Password = "p" },
+            };
+            string summary;
+            var after = AccountsList.Apply(before, list, out summary);
+            Eq("1", after[0].Id, "same name keeps its id (favorites stay)");
+            Eq("123", after[0].Password, "password updated");
+            Check(after.All(a => a.Id != "2"), "account that left the list removed");
+            Check(after.Any(a => a.Id == "3"), "account typed by hand kept");
+            Eq(4, after.Count, "two new accounts added");
+            Check(summary.Contains("password updated") && summary.Contains("removed"), "summary: " + summary);
+            var text = AccountsList.Write(after);
+            Eq(after.Count, AccountsList.Parse(text).Count, "saved list reads back");
+        }
+
+        private static void Misc()
+        {
+            Func<string, string> b64 = x => Convert.ToBase64String(Encoding.UTF8.GetBytes(x));
+            var now = 2000000L * 1000;
+            var root = JObject.Parse("{\"epg_listings\":[" +
+                "{\"title\":\"" + b64("Old news") + "\",\"start\":\"2026-10-08 20:00:00\",\"start_timestamp\":\"1000000\",\"stop_timestamp\":\"1003600\",\"has_archive\":1}," +
+                "{\"title\":\"" + b64("Not kept") + "\",\"start\":\"2026-10-08 21:00:00\",\"start_timestamp\":\"1003600\",\"stop_timestamp\":\"1007200\",\"has_archive\":0}," +
+                "{\"title\":\"" + b64("Future") + "\",\"start\":\"2026-10-09 21:00:00\",\"start_timestamp\":\"3000000\",\"stop_timestamp\":\"3003600\"}]}");
+            var cu = XtreamApi.ParseCatchup(root, now);
+            Eq(1, cu.Count, "only past, archived programmes");
+            Eq("2026-10-08:20-00", cu[0].ServerStart, "server start format");
+            Eq(60, cu[0].DurationMinutes, "duration");
+            Eq("http://host.tv:8080/timeshift/user%20name/p%40ss/60/2026-10-08:20-00/42.ts", XtreamApi.CatchupUrl(Acc, "42", cu[0]), "timeshift address");
+
+            var m3u = M3uPlaylist.Parse("#EXTM3U\n#EXTINF:-1 tvg-logo=\"l.png\" group-title=\"News\",BBC One\nhttp://x/1.ts\n#EXTINF:-1,Local\nrel/2.m3u8\n", "http://site.com/list/all.m3u");
+            Eq(2, m3u.Count, "playlist entries");
+            Eq("BBC One", m3u[0].Name, "entry name");
+            Eq("l.png", m3u[0].Logo, "entry logo");
+            Eq("http://site.com/list/rel/2.m3u8", m3u[1].Url, "relative address resolved");
+
+            var order = Org.ApplyOrder(new List<string> { "a", "b", "c", "d" }, new List<string> { "c", "a" }, x => x);
+            Check(order.SequenceEqual(new[] { "c", "a", "b", "d" }), "saved order first, others keep their place");
+            Check(Org.Move(new List<string> { "a", "b", "c" }, "c", -1).SequenceEqual(new[] { "a", "c", "b" }), "move up");
+            Check(Org.MoveTo(new List<string> { "a", "b", "c" }, "c", true).SequenceEqual(new[] { "c", "a", "b" }), "move to top");
         }
 
         private static void ServerAddresses()

@@ -374,6 +374,49 @@ namespace Nova.Core
             return list.OrderBy(x => x.Start).ToList();
         }
 
+        /// <summary>Past programmes of a channel that the server keeps (catch-up), newest first.</summary>
+        public async Task<List<CatchupEntry>> Catchup(Account a, string streamId, CancellationToken ct = default(CancellationToken))
+        {
+            var root = await CallToken(a, P("action", "get_simple_data_table", "stream_id", streamId), ct).ConfigureAwait(false) as JObject;
+            return root == null ? new List<CatchupEntry>() : ParseCatchup(root, NowMs());
+        }
+
+        internal static List<CatchupEntry> ParseCatchup(JObject root, long nowMs)
+        {
+            var list = new List<CatchupEntry>();
+            foreach (var el in Items(root["epg_listings"]))
+            {
+                var o = el as JObject;
+                if (o == null) continue;
+                var start = ToLong(Str(o, "start_timestamp")) * 1000;
+                var end = ToLong(Str(o, "stop_timestamp")) * 1000;
+                if (start <= 0 || end <= 0 || end > nowMs) continue;
+                var archived = Str(o, "has_archive");
+                if (archived != null && archived != "1") continue;
+                var raw = Str(o, "start");
+                if (raw == null) continue;
+                var m = Regex.Match(raw.Trim(), @"(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})");
+                if (!m.Success) continue;
+                list.Add(new CatchupEntry
+                {
+                    Title = DecodeB64(Str(o, "title")),
+                    Description = DecodeB64(Str(o, "description")),
+                    Start = start,
+                    End = end,
+                    ServerStart = m.Groups[1].Value + ":" + m.Groups[2].Value + "-" + m.Groups[3].Value,
+                    DurationMinutes = (int)Math.Max(1, (end - start) / 60000),
+                });
+            }
+            return list.OrderByDescending(x => x.Start).ToList();
+        }
+
+        /// <summary>Address of a past programme on Xtream servers (the /timeshift/ path).</summary>
+        public static string CatchupUrl(Account a, string streamId, CatchupEntry e)
+        {
+            return NormalizeServer(a.Server) + "/timeshift/" + Uri.EscapeDataString(a.Username) + "/" + Uri.EscapeDataString(a.Password) + "/" +
+                   e.DurationMinutes + "/" + e.ServerStart + "/" + streamId + ".ts";
+        }
+
         // ------------------------------------------------------------------ stream addresses
 
         public static string LiveUrl(Account a, string streamId, string format)

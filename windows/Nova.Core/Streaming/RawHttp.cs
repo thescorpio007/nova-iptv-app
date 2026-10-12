@@ -81,10 +81,16 @@ namespace Nova.Core.Streaming
         /// </summary>
         public static RawResponse Open(string url, string userAgent, long from, int connectTimeoutMs, int readTimeoutMs)
         {
+            return Open(url, new Dictionary<string, string> { { "User-Agent", userAgent } }, from, connectTimeoutMs, readTimeoutMs);
+        }
+
+        /// <summary>Same, with any request headers (User-Agent, Referer…).</summary>
+        public static RawResponse Open(string url, IDictionary<string, string> headers, long from, int connectTimeoutMs, int readTimeoutMs)
+        {
             var current = url;
             for (int hop = 0; hop < 6; hop++)
             {
-                var resp = OpenOnce(current, userAgent, from, connectTimeoutMs, readTimeoutMs);
+                var resp = OpenOnce(current, headers, from, connectTimeoutMs, readTimeoutMs);
                 if (resp.Status >= 300 && resp.Status < 400 && resp.Status != 304)
                 {
                     string loc;
@@ -99,7 +105,7 @@ namespace Nova.Core.Streaming
             throw new IOException("Too many redirects");
         }
 
-        private static RawResponse OpenOnce(string url, string userAgent, long from, int connectTimeoutMs, int readTimeoutMs)
+        private static RawResponse OpenOnce(string url, IDictionary<string, string> headers, long from, int connectTimeoutMs, int readTimeoutMs)
         {
             var uri = new Uri(url);
             var https = uri.Scheme == Uri.UriSchemeHttps;
@@ -125,7 +131,16 @@ namespace Nova.Core.Streaming
                 var req = new StringBuilder();
                 req.Append("GET ").Append(uri.PathAndQuery).Append(" HTTP/1.1\r\n");
                 req.Append("Host: ").Append(uri.IsDefaultPort ? uri.Host : uri.Host + ":" + uri.Port).Append("\r\n");
-                req.Append("User-Agent: ").Append(userAgent).Append("\r\n");
+                var hasUa = false;
+                foreach (var h in headers ?? new Dictionary<string, string>())
+                {
+                    if (string.IsNullOrWhiteSpace(h.Key) || h.Value == null) continue;
+                    if (h.Key.Equals("Host", StringComparison.OrdinalIgnoreCase) || h.Key.Equals("Range", StringComparison.OrdinalIgnoreCase) ||
+                        h.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (h.Key.Equals("User-Agent", StringComparison.OrdinalIgnoreCase)) hasUa = true;
+                    req.Append(h.Key.Trim()).Append(": ").Append(h.Value.Replace("\r", "").Replace("\n", "")).Append("\r\n");
+                }
+                if (!hasUa) req.Append("User-Agent: NovaIPTV\r\n");
                 req.Append("Accept: */*\r\n");
                 req.Append("Icy-MetaData: 0\r\n");
                 if (from >= 0) req.Append("Range: bytes=").Append(from.ToString(CultureInfo.InvariantCulture)).Append("-\r\n");

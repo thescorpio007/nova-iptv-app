@@ -62,6 +62,12 @@ namespace Nova.Core.Tests
 
         private void Handle(TcpClient c)
         {
+            Interlocked.Increment(ref Active);
+            try { HandleInner(c); } finally { Interlocked.Decrement(ref Active); }
+        }
+
+        private void HandleInner(TcpClient c)
+        {
             using (c)
             {
                 try
@@ -77,9 +83,11 @@ namespace Nova.Core.Tests
                     }
                     if (lines.Count == 0) return;
                     var path = lines[0].Split(' ')[1];
+                    var ua = lines.FirstOrDefault(l => l.StartsWith("User-Agent:")) ?? "";
                     long from = -1;
                     foreach (var l in lines)
                         if (l.StartsWith("Range: bytes=")) from = long.Parse(l.Substring(13).TrimEnd('-'), CultureInfo.InvariantCulture);
+                    if (path.StartsWith("/hls/") || path.StartsWith("/site/")) { if (HandleExtra(s, path, ua, from)) return; }
                     var counter = 0;
                     switch (path)
                     {
@@ -115,6 +123,9 @@ namespace Nova.Core.Tests
                             break;
                         case "/vod/film.mkv":
                         case "/vod/norange.mp4":
+                            var filmNow = Interlocked.Increment(ref ActiveFilm);
+                            lock (this) if (filmNow > MaxActive) MaxActive = filmNow;
+                            try
                             {
                                 var ranged = path.Contains("film") && from >= 0;
                                 var start = ranged ? from : 0;
@@ -133,8 +144,9 @@ namespace Nova.Core.Tests
                                     pos += n;
                                     Thread.Sleep(15);
                                 }
-                                break;
                             }
+                            finally { Interlocked.Decrement(ref ActiveFilm); }
+                            break;
                         default:
                             Head(s, "404 Not Found", "0");
                             break;
@@ -142,6 +154,71 @@ namespace Nova.Core.Tests
                 }
                 catch { }
             }
+        }
+
+        public int Active, ActiveFilm, MaxActive;
+        public static readonly byte[] HlsKey = Enumerable.Range(1, 16).Select(i => (byte)i).ToArray();
+
+        public static byte[] HlsPart(int i)
+        {
+            var b = new byte[188 * 50];
+            for (int p = 0; p < 50; p++) { b[p * 188] = 0x47; for (int k = 1; k < 188; k++) b[p * 188 + k] = (byte)(i * 31 + k); }
+            return b;
+        }
+
+        private bool HandleExtra(Stream s, string path, string ua, long from)
+        {
+            if (path == "/hls/master.m3u8")
+            {
+                Body(s, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=900000\nmedia.m3u8\n");
+                return true;
+            }
+            if (path == "/hls/media.m3u8")
+            {
+                var sb = new StringBuilder("#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n");
+                for (int i = 0; i < 6; i++) sb.Append("#EXTINF:4.0,\nseg" + i + ".ts\n");
+                sb.Append("#EXT-X-ENDLIST\n");
+                Body(s, sb.ToString());
+                return true;
+            }
+            if (path == "/hls/live.m3u8") { Body(s, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg0.ts\n"); return true; }
+            if (path == "/hls/key.bin") { Bytes(s, HlsKey); return true; }
+            if (path.StartsWith("/hls/seg"))
+            {
+                var i = int.Parse(path.Substring(8, path.IndexOf('.') - 8));
+                var iv = new byte[16];
+                iv[15] = (byte)i; // sequence number as IV
+                using (var aes = System.Security.Cryptography.Aes.Create())
+                {
+                    aes.Key = HlsKey; aes.IV = iv;
+                    using (var enc = aes.CreateEncryptor()) { var plain = HlsPart(i); Bytes(s, enc.TransformFinalBlock(plain, 0, plain.Length)); }
+                }
+                return true;
+            }
+            if (path == "/site/film.mp4")
+            {
+                // A website that only answers web browsers.
+                if (!ua.Contains("Mozilla")) { Head(s, "403 Forbidden", "0"); return true; }
+                var start = Math.Max(0, from);
+                var len = 300000 - start;
+                Send(s, "HTTP/1.1 206 Partial Content\r\nContent-Length: " + len + "\r\nContent-Range: bytes " + start + "-299999/300000\r\n\r\n");
+                var data = new byte[len];
+                for (int i = 0; i < len; i++) data[i] = FilmByte(start + i);
+                s.Write(data, 0, data.Length);
+                return true;
+            }
+            return false;
+        }
+
+        private static void Body(Stream s, string text)
+        {
+            Bytes(s, Encoding.UTF8.GetBytes(text));
+        }
+
+        private static void Bytes(Stream s, byte[] b)
+        {
+            Send(s, "HTTP/1.1 200 OK\r\nContent-Length: " + b.Length + "\r\nConnection: close\r\n\r\n");
+            s.Write(b, 0, b.Length);
         }
 
         private static void Head(Stream s, string status, string length)
@@ -375,6 +452,84 @@ namespace Nova.Core.Tests
                         Eq(DownloadStatus.Done, dm.Items.First().Status, "listed as done");
                         Check(!rm.IsRecording(ch.Key), "stopped");
                     }
+                });
+
+                Run("Downloads: several connections, in order, correct file", () =>
+                {
+                    settings.DlConnLinks = 4;
+                    provider.MaxActive = 0;
+                    using (var dm = new DownloadManager(hub, () => settings, a => 0, Path.Combine(root, "data4")))
+                    {
+                        var item = dm.AddLink(provider.Url("/vod/film.mkv"), "Multi", "mkv", false, null);
+                        Check(WaitFor(() => dm.Items.First().IsDone, 30000), "multi-connection download finished (" + dm.Items.First().Status + " " + dm.Items.First().Error + ")");
+                        var bytes = File.ReadAllBytes(dm.Items.First().FinalPath);
+                        Check(bytes.Length == FakeProvider.FilmLength && Same(bytes, 0), "multi-connection file correct");
+                        Check(provider.MaxActive >= 2, "used several connections at once (" + provider.MaxActive + ")");
+                        Check(dm.Items.First().FinalPath.Contains(Path.Combine("MyDownloads", "Links")), "links saved in Downloads\\NovaIPTV\\Links");
+                    }
+                });
+
+                Run("Downloads: server connections never above the account's limit", () =>
+                {
+                    settings.DlConnServers = 8;
+                    var max = 3;
+                    using (var dm = new DownloadManager(hub, () => settings, a => max, Path.Combine(root, "data5")))
+                    {
+                        Eq(2, dm.ConnectionsFor(new DownloadItem { AccountId = "acc", Kind = "film" }), "3 allowed: 2 used, one free for watching");
+                        max = 1;
+                        Eq(1, dm.ConnectionsFor(new DownloadItem { AccountId = "acc", Kind = "film" }), "1-connection account: 1");
+                        max = 0;
+                        Eq(1, dm.ConnectionsFor(new DownloadItem { AccountId = "acc", Kind = "film" }), "unknown limit: 1");
+                        Eq(4, dm.ConnectionsFor(new DownloadItem { Kind = "link" }), "links: the links setting");
+                    }
+                });
+
+                Run("Speed limit", () =>
+                {
+                    long limit = 1024 * 1024;
+                    var t = new Throttle(() => limit);
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    for (int i = 0; i < 40; i++) t.Take(64 * 1024); // 2.5 MB at 1 MB/s
+                    Check(sw.Elapsed.TotalSeconds >= 1.5, "limited to about 1 MB/s (" + sw.Elapsed.TotalSeconds.ToString("0.0") + " s)");
+                    limit = 0;
+                    sw.Restart();
+                    for (int i = 0; i < 40; i++) t.Take(64 * 1024);
+                    Check(sw.Elapsed.TotalSeconds < 0.5, "no limit = no wait");
+                });
+
+                Run("HLS: best quality, AES-128 parts, joined into one .ts", () =>
+                {
+                    using (var dm = new DownloadManager(hub, () => settings, a => 0, Path.Combine(root, "data6")))
+                    {
+                        var item = dm.AddLink(provider.Url("/hls/master.m3u8"), "HLS film", "m3u8", true, null);
+                        Check(item.FinalPath.EndsWith(".ts"), "saved as .ts");
+                        Check(WaitFor(() => dm.Items.First().IsDone, 30000), "HLS download finished (" + dm.Items.First().Status + " " + dm.Items.First().Error + ")");
+                        var bytes = File.ReadAllBytes(dm.Items.First().FinalPath);
+                        var expected = Enumerable.Range(0, 6).SelectMany(FakeProvider.HlsPart).ToArray();
+                        Check(bytes.SequenceEqual(expected), "parts decrypted and joined in order (" + bytes.Length + " bytes)");
+                    }
+                    using (var dm = new DownloadManager(hub, () => settings, a => 0, Path.Combine(root, "data7")))
+                    {
+                        dm.AddLink(provider.Url("/hls/live.m3u8"), "Live HLS", "m3u8", true, null);
+                        Check(WaitFor(() => dm.Items.First().Status == DownloadStatus.Failed, 15000), "live HLS refused");
+                        Check((dm.Items.First().Error ?? "").Contains("live"), "explained: " + dm.Items.First().Error);
+                    }
+                });
+
+                Run("Websites: retry as a browser, then remembered", () =>
+                {
+                    var remembered = new Dictionary<string, Dictionary<string, string>>();
+                    HttpPolicy.SavedHeaders = h => remembered.ContainsKey(h) ? remembered[h] : new Dictionary<string, string>();
+                    HttpPolicy.RememberHeaders = (h, d) => remembered[h] = d;
+                    var info = LinkCheck.Probe(provider.Url("/site/film.mp4"), null);
+                    Check(info.Ok && info.Kind == "video", "refused link works as a browser (" + info.Message + ")");
+                    Check(remembered.ContainsKey("127.0.0.1") && remembered["127.0.0.1"]["User-Agent"].Contains("Mozilla"), "browser name remembered for the site");
+                    var hls = LinkCheck.Probe(provider.Url("/hls/master.m3u8"), null);
+                    Eq("hls", hls.Kind, "HLS recognised");
+                    var gone = LinkCheck.Probe(provider.Url("/nothing"), null);
+                    Check(!gone.Ok && gone.Message.Contains("expired"), "missing link explained: " + gone.Message);
+                    HttpPolicy.SavedHeaders = h => new Dictionary<string, string>();
+                    HttpPolicy.RememberHeaders = (h, d) => { };
                 });
             }
             try { Directory.Delete(root, true); } catch { }
