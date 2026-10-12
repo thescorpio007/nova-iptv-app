@@ -234,7 +234,7 @@ namespace Nova.Core
             {
                 var line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#")) continue;
-                var parts = line.Split('|').Select(p => p.Trim()).ToArray();
+                var parts = line.Split('|').Select(x => x.Trim()).ToArray();
                 ListedAccount a = null;
                 string srv, u, p;
                 if (parts.Length >= 4 && parts[1].Length > 0 && parts[2].Length > 0 && parts[3].Length > 0)
