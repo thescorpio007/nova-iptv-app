@@ -34,6 +34,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -71,12 +75,17 @@ fun TvTextField(
     val inner = remember { FocusRequester() }
     var editing by remember { mutableStateOf(false) }
     var lit by remember { mutableStateOf(false) }
+    // The box had the keyboard focus during this typing session (losing it then ends typing).
+    var innerHad by remember { mutableStateOf(false) }
+    var stopping by remember { mutableStateOf(false) }
     val green = Color(0xFF4CD787)
 
     fun stop() {
         keyboard?.hide()
+        stopping = true
         runCatching { outer.requestFocus() }
         editing = false
+        innerHad = false
     }
 
     LaunchedEffect(editing) {
@@ -90,18 +99,31 @@ fun TvTextField(
     }
     if (editing) BackHandler { stop() }
 
-    val actions = if (!remote && !editing) KeyboardActions.Default else KeyboardActions(
+    val actions = KeyboardActions(
         onDone = { stop() },
         onGo = { stop() },
         onSearch = { stop() },
         onSend = { stop() },
+        // Remote: to the next item (OK types there). Touch: the next box starts typing by itself.
         onNext = { stop(); focus.moveFocus(FocusDirection.Down) },
     )
 
     Box(
         Modifier
             .focusRequester(outer)
-            .onFocusChanged { lit = it.isFocused }
+            // A tap / mouse click on the box starts typing straight away (also right after using the arrows).
+            .pointerInput(enabled) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    if (enabled && !editing) editing = true
+                }
+            }
+            .onFocusChanged {
+                lit = it.isFocused
+                // Touch: reaching the box with "Next" on the keyboard starts typing in it.
+                if (it.isFocused && !remote && !stopping && enabled) editing = true
+                if (it.isFocused) stopping = false
+            }
             .onKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when {
@@ -123,8 +145,12 @@ fun TvTextField(
             onValueChange = onValueChange,
             modifier = modifier
                 .focusRequester(inner)
-                .focusProperties { canFocus = editing || !remote }
-                .onFocusChanged { if (!it.isFocused && editing && !it.hasFocus) editing = false }
+                // Typeable only while typing: the keys of a remote or air-mouse keyboard can't switch it off midway.
+                .focusProperties { canFocus = editing }
+                .onFocusChanged {
+                    if (it.isFocused) innerHad = true
+                    else if (innerHad && editing && !it.hasFocus) { innerHad = false; editing = false; keyboard?.hide() }
+                }
                 .onPreviewKeyEvent { e ->
                     if (!editing || e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (e.key) {
