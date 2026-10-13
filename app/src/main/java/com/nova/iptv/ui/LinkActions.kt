@@ -52,10 +52,18 @@ object LinkActions {
     fun probe(context: Context, url: String): Probe {
         if (!url.startsWith("http", ignoreCase = true)) return Probe(Kind.FILE)
         val app = context.applicationContext as NovaApp
-        fun fetch(u: String): Pair<okhttp3.Response, String> {
-            val req = okhttp3.Request.Builder().url(u).header("User-Agent", app.storage.userAgent).header("Range", "bytes=0-65535").build()
+        // whole = the full text (an .m3u8 list of a long film is several hundred KB: its end mark is at the end).
+        fun fetch(u: String, whole: Boolean = false): Pair<okhttp3.Response, String> {
+            val max = if (whole) 8 * 1024 * 1024 else 65536
+            val req = okhttp3.Request.Builder().url(u).header("User-Agent", app.storage.userAgent)
+                .apply { if (!whole) header("Range", "bytes=0-65535") }.build()
             val r = app.http.newCall(req).execute()
-            val head = r.body?.byteStream()?.use { s -> val b = ByteArray(65536); var n = 0; while (n < b.size) { val k = s.read(b, n, b.size - n); if (k < 0) break; n += k }; String(b, 0, n, Charsets.ISO_8859_1) }.orEmpty()
+            val head = r.body?.byteStream()?.use { s ->
+                val out = java.io.ByteArrayOutputStream()
+                val b = ByteArray(65536)
+                while (out.size() < max) { val k = s.read(b); if (k < 0) break; out.write(b, 0, k) }
+                String(out.toByteArray(), Charsets.ISO_8859_1)
+            }.orEmpty()
             r.close()
             return r to head
         }
@@ -69,15 +77,23 @@ object LinkActions {
                 !r.isSuccessful -> Probe(Kind.REFUSED, "The website answered HTTP ${r.code}.")
                 text.startsWith("#EXTM3U") && !text.contains("#EXT-X-") && text.contains("#EXTINF") -> Probe(Kind.M3U_LIST)
                 text.startsWith("#EXTM3U") -> {
-                    var list = text
+                    // Read the WHOLE list (and the quality list it points to), then decide.
+                    var listUrl = r.request.url.toString()
+                    var list = fetch(listUrl, whole = true).second.ifEmpty { text }
                     if (list.contains("#EXT-X-STREAM-INF")) {
                         val variant = list.lines().map { it.trim() }.firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
-                        if (variant != null) list = fetch(java.net.URI(r.request.url.toString()).resolve(variant).toString()).second
+                        if (variant != null) {
+                            listUrl = java.net.URI(listUrl).resolve(variant).toString()
+                            list = fetch(listUrl, whole = true).second
+                        }
                     }
                     when {
                         list.contains("SAMPLE-AES") || list.contains("KEYFORMAT=", ignoreCase = true) -> Probe(Kind.PROTECTED, "This video is protected (DRM): it can't be played or downloaded outside its website.")
-                        list.contains("#EXT-X-ENDLIST") -> Probe(Kind.HLS_FILM)
-                        else -> Probe(Kind.HLS_LIVE)
+                        HlsLists.isFilm(list) -> Probe(Kind.HLS_FILM)
+                        list.contains("#EXT-X-PLAYLIST-TYPE:EVENT") -> Probe(Kind.HLS_LIVE)
+                        // No mark either way: look again a few seconds later — a live list grows, a film's doesn't.
+                        HlsLists.grows(list) { fetch(listUrl, whole = true).second } -> Probe(Kind.HLS_LIVE)
+                        else -> Probe(Kind.HLS_FILM)
                     }
                 }
                 text.startsWith("<MPD") || type.contains("dash+xml") -> Probe(Kind.PROTECTED, "This is a DASH stream (usually protected): Nova can't download it.")
@@ -156,5 +172,22 @@ object LinkActions {
         PlaybackQueue.groupKey = null
         PlaybackQueue.playlist = null
         context.startActivity(Intent(context, PlayerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+
+/** Helpers to tell an HLS film (.m3u8 with an end) from a live stream. */
+object HlsLists {
+    fun isFilm(list: String) = list.contains("#EXT-X-ENDLIST") || list.contains("#EXT-X-PLAYLIST-TYPE:VOD", ignoreCase = true)
+
+    private fun lastPart(list: String) = list.lines().map { it.trim() }.lastOrNull { it.isNotEmpty() && !it.startsWith("#") }
+    private fun sequence(list: String) = list.lines().firstOrNull { it.startsWith("#EXT-X-MEDIA-SEQUENCE") }?.substringAfter(':')?.trim()
+
+    /** True when the list changes after its part duration (a live stream). */
+    fun grows(list: String, reload: () -> String): Boolean {
+        val wait = list.lines().firstOrNull { it.startsWith("#EXT-X-TARGETDURATION") }?.substringAfter(':')?.trim()?.toDoubleOrNull() ?: 6.0
+        Thread.sleep((wait.coerceIn(2.0, 10.0) * 1000 + 500).toLong())
+        val again = runCatching(reload).getOrNull() ?: return false
+        return lastPart(again) != lastPart(list) || sequence(again) != sequence(list)
     }
 }

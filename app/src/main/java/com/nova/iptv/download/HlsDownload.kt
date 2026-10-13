@@ -76,7 +76,9 @@ class HlsDownload(
             url = resolve(url, best ?: throw IOException("No video quality found in this list"))
             text = String(get(url))
         }
-        if (!text.contains("#EXT-X-ENDLIST")) throw IOException("This is a live stream, not a video that can be downloaded")
+        if (!com.nova.iptv.ui.HlsLists.isFilm(text) &&
+            (text.contains("#EXT-X-PLAYLIST-TYPE:EVENT") || com.nova.iptv.ui.HlsLists.grows(text) { String(get(url)) })
+        ) throw IOException("This is a live stream, not a video that can be downloaded")
         var key: Key? = null
         var init: String? = null
         var seq = 0L
