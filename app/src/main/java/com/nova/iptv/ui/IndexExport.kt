@@ -86,6 +86,9 @@ fun SearchIndexSection(vm: MainViewModel) {
             n.onSuccess { toast("Index saved (${"%,d".format(it)} items)") }.onFailure { toast("Could not save the index here") }
         }
     }
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) { vm.setIndexTree(uri); toast("Index folder chosen — Nova keeps this permission") }
+    }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val bytes = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
@@ -105,7 +108,18 @@ fun SearchIndexSection(vm: MainViewModel) {
                 "A new install of Nova finds it here and uses it straight away for the servers you add.",
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
         )
-        Text("📁 Download/NovaIPTV/Index", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+        val chosen = remember(tick) { vm.indexTree != null }
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(
+                "📁 Download/NovaIPTV/Index" + if (chosen) "  ·  folder access ✓" else "",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { runCatching { pickFolder.launch(indexFolderStart()) } }) { Text(if (chosen) "Change folder" else "📁 Choose folder") }
+        }
+        if (!chosen) Text(
+            "Choose the folder once: Nova keeps the permission, so a reinstalled Nova can still read and update the files an earlier install saved.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Text("Save automatically after each update", fontWeight = FontWeight.Medium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -149,10 +163,13 @@ fun SearchIndexSection(vm: MainViewModel) {
 
     if (chooser) {
         var infos by remember { mutableStateOf<List<SearchIndex.FileInfo>?>(null) }
+        // Files in the folder chosen with the picker (also those an earlier install saved).
+        var treeFiles by remember { mutableStateOf<List<Triple<String, android.net.Uri, Long>>>(emptyList()) }
         LaunchedEffect(Unit) {
             infos = withContext(Dispatchers.IO) {
                 SearchIndex.exportFiles(context).mapNotNull { f -> runCatching { SearchIndex.describe(f) }.getOrNull() }
             }
+            treeFiles = withContext(Dispatchers.IO) { vm.treeIndexFiles() }.filter { t -> infos.orEmpty().none { it.file.name == t.first } }
         }
         AlertDialog(
             onDismissRequest = { chooser = false },
@@ -188,11 +205,27 @@ fun SearchIndexSection(vm: MainViewModel) {
                             }
                         }
                     }
+                    treeFiles.forEach { (name, uri, modified) ->
+                        FocusBox(onClick = {
+                            chooser = false
+                            scope.launch {
+                                val b = withContext(Dispatchers.IO) { vm.readUri(uri) }
+                                if (b == null) toast("Could not read $name") else ask = Triple(name, b, true)
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                                Text((if (name == SearchIndex.LATEST) "✅ " else "🗂 ") + name.removeSuffix("." + SearchIndex.EXT), fontSize = 14.sp)
+                                Text("chosen folder · " + DateFormat.getDateInstance().format(Date(modified)), fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                    if (vm.indexTree == null) TextButton(onClick = { chooser = false; runCatching { pickFolder.launch(indexFolderStart()) } }) {
+                        Text("📁 Choose the Index folder (shows files of an earlier install)")
+                    }
                     Text(
                         "Items play once an account on the same server is added.",
                         fontSize = 12.sp, color = Color(0xFFFFD27A),
                     )
-                    AllFilesNotice()
                 }
             },
             confirmButton = { TextButton(onClick = { chooser = false; pick.launch(arrayOf("*/*")) }) { Text("Other location…") } },
@@ -225,5 +258,46 @@ fun SearchIndexSection(vm: MainViewModel) {
             },
             dismissButton = { TextButton(onClick = { ask = null }) { Text("Cancel") } },
         )
+    }
+}
+
+
+/** Opens Android's folder picker already on Download/NovaIPTV/Index. */
+fun indexFolderStart(): android.net.Uri =
+    android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download/NovaIPTV/Index")
+
+/** Search screen, new install: "Import an existing index?" — choose the Index folder once, Nova imports the newest file. */
+@Composable
+fun IndexImportOffer(vm: MainViewModel) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val idxStatus by SearchIndex.status.collectAsStateWithLifecycle()
+    var show by remember(idxStatus) { mutableStateOf(vm.shouldOfferIndexImport()) }
+    var busy by remember { mutableStateOf(false) }
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            vm.setIndexTree(uri)
+            busy = true
+            scope.launch {
+                val msg = runCatching { vm.importFromChosenFolder() }.getOrElse { it.message ?: "Could not import" }
+                busy = false; show = false
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    if (!show) return
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text(
+            if (busy) "Importing…" else "⬇ Import an existing index? Choose Download/NovaIPTV/Index once — Search then works at once.",
+            fontSize = 12.sp, modifier = Modifier.weight(1f),
+        )
+        if (!busy) {
+            TextButton(onClick = { runCatching { pickFolder.launch(indexFolderStart()) } }) { Text("Choose folder") }
+            TextButton(onClick = { vm.dismissIndexOffer(); show = false }) { Text("Not now") }
+        }
     }
 }

@@ -82,6 +82,19 @@ class Storage(context: Context) {
         get() = prefs.getBoolean("auto_export_index", true)
         set(value) = prefs.edit().putBoolean("auto_export_index", value).apply()
 
+    /** The Index folder chosen with Android's folder picker (permission kept), or null. */
+    var indexTreeUri: String?
+        get() = prefs.getString("index_tree_uri", null)
+        set(value) = prefs.edit().putString("index_tree_uri", value).apply()
+    /** What the last export held (server + update time), to skip writing the same again. */
+    var indexExportStamp: String
+        get() = prefs.getString("index_export_stamp", "") ?: ""
+        set(value) = prefs.edit().putString("index_export_stamp", value).apply()
+    /** The "Import existing index?" offer was answered. */
+    var indexOfferDone: Boolean
+        get() = prefs.getBoolean("index_offer_done", false)
+        set(value) = prefs.edit().putBoolean("index_offer_done", value).apply()
+
     /** When the search index was last exported (0 = never). */
     var indexExportedAt: Long
         get() = prefs.getLong("index_exported_at", 0L)

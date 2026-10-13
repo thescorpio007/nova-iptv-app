@@ -1286,6 +1286,7 @@ private fun SearchScreen(vm: MainViewModel, onPlay: PlayFn) {
                 )
                 if (!idxBusy) SmallButton("⟳ Update now", { vm.refreshIndex(force = true) })
             }
+            IndexImportOffer(vm)
             val err = res.error
             if (err != null && !res.loading) {
                 Text(err, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))

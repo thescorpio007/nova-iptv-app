@@ -148,6 +148,18 @@ object SearchIndex {
         }
     }
 
+    /** Format version of an export file ("NOVAINDEX2" → 2), or null when it isn't one. */
+    fun headerVersion(bytes: ByteArray): Int? = runCatching {
+        GZIPInputStream(bytes.inputStream()).bufferedReader().use { r ->
+            val first = r.readLine()?.substringBefore('\t') ?: return@use null
+            if (!first.startsWith("NOVAINDEX")) null else first.removePrefix("NOVAINDEX").toIntOrNull()
+        }
+    }.getOrNull()
+
+    /** What an export of [accounts] would hold now (server + update time): unchanged = no need to write. */
+    fun stamp(accounts: List<Account>): String =
+        accounts.mapNotNull { a -> data[a.id]?.let { hostOf(a.server) + "@" + it.builtAt } }.sorted().joinToString(",")
+
     /** Accounts of [accounts] that have an index in memory right now. */
     fun exportable(accounts: List<Account>): List<Account> = accounts.filter { data.containsKey(it.id) }
 

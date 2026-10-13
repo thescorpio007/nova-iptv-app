@@ -1889,6 +1889,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         indexJob = viewModelScope.launch(Dispatchers.IO) {
             val accs = accounts.value
             com.nova.iptv.data.SearchIndex.load(nova, accs)
+            // Servers still without an index: take it from the folder chosen with the folder picker, if any.
+            if (indexTree != null && accs.any { com.nova.iptv.data.SearchIndex.get(it.id) == null }) runCatching {
+                treeIndexFiles().firstOrNull()?.let { f -> readUri(f.second)?.let { importIndex(it, fromIndexFolder = true) } }
+            }
             val todo = accs.filter { force || com.nova.iptv.data.SearchIndex.needsUpdate(it) }
             if (todo.isEmpty()) {
                 // First run after this feature arrived: make sure index-latest exists.
@@ -1913,17 +1917,96 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun appVersion(): String =
         runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "2.0"
 
-    /** Writes index-latest.novaindex (all accounts). Never throws. */
+    /**
+     * Writes index-latest.novaindex (all accounts) — only when something changed since the last export.
+     * Also into the folder chosen with the folder picker (works even for files an earlier install made). Never throws.
+     */
     private fun autoExportIndex() {
+        val stamp = com.nova.iptv.data.SearchIndex.stamp(accounts.value)
+        val latest = java.io.File(com.nova.iptv.data.SearchIndex.folder(nova), com.nova.iptv.data.SearchIndex.LATEST)
+        if (stamp.isBlank() || (stamp == storage.indexExportStamp && (latest.exists() || indexTree != null))) {
+            android.util.Log.i("NovaTest", "INDEX auto-export skipped: nothing changed"); return
+        }
+        var saved = false
         runCatching { com.nova.iptv.data.SearchIndex.exportFile(nova, accounts.value, appVersion(), latest = true) }
-            .onSuccess { if (it != null) { storage.indexExportedAt = System.currentTimeMillis(); indexExportTick.value++ } }
+            .onSuccess { if (it != null) saved = true }
             .onFailure { android.util.Log.i("NovaTest", "INDEX auto-export failed: $it") }
+        if (indexTree != null) runCatching { exportToTree(com.nova.iptv.data.SearchIndex.LATEST, accounts.value) }
+            .onSuccess { saved = true }.onFailure { android.util.Log.i("NovaTest", "INDEX export to the chosen folder failed: $it") }
+        if (saved) { storage.indexExportStamp = stamp; storage.indexExportedAt = System.currentTimeMillis(); indexExportTick.value++ }
+    }
+
+    // ---------- the Index folder chosen with Android's folder picker (kept permission) ----------
+
+    val indexTree: android.net.Uri? get() = storage.indexTreeUri?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() }
+
+    fun setIndexTree(uri: android.net.Uri) {
+        runCatching {
+            nova.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        storage.indexTreeUri = uri.toString()
+        indexExportTick.value++
+    }
+
+    /** .novaindex files in the chosen folder: (name, link, modified), index-latest first then newest. */
+    fun treeIndexFiles(): List<Triple<String, android.net.Uri, Long>> {
+        val tree = indexTree ?: return emptyList()
+        val c = android.provider.DocumentsContract
+        val kids = c.buildChildDocumentsUriUsingTree(tree, c.getTreeDocumentId(tree))
+        val out = ArrayList<Triple<String, android.net.Uri, Long>>()
+        runCatching {
+            nova.contentResolver.query(kids, arrayOf(c.Document.COLUMN_DOCUMENT_ID, c.Document.COLUMN_DISPLAY_NAME, c.Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { cur ->
+                while (cur.moveToNext()) {
+                    val name = cur.getString(1) ?: continue
+                    if (name.endsWith("." + com.nova.iptv.data.SearchIndex.EXT, ignoreCase = true))
+                        out += Triple(name, c.buildDocumentUriUsingTree(tree, cur.getString(0)), cur.getLong(2))
+                }
+            }
+        }
+        return out.sortedWith(compareByDescending<Triple<String, android.net.Uri, Long>> { it.first == com.nova.iptv.data.SearchIndex.LATEST }.thenByDescending { it.third })
+    }
+
+    /** Writes an export into the chosen folder (overwriting a file with the same name, whoever made it). */
+    private fun exportToTree(name: String, accs: List<Account>) {
+        val tree = indexTree ?: return
+        val c = android.provider.DocumentsContract
+        val cr = nova.contentResolver
+        val target = treeIndexFiles().firstOrNull { it.first == name }?.second
+            ?: c.createDocument(cr, c.buildDocumentUriUsingTree(tree, c.getTreeDocumentId(tree)), "application/octet-stream", name)
+            ?: throw IllegalStateException("Could not create $name in the chosen folder")
+        // Written to memory first: the file on disk is only replaced by a complete index.
+        val bytes = java.io.ByteArrayOutputStream().also { com.nova.iptv.data.SearchIndex.exportTo(it, com.nova.iptv.data.SearchIndex.exportable(accs), appVersion()) }.toByteArray()
+        cr.openOutputStream(target, "wt")!!.use { it.write(bytes) }
+    }
+
+    /** Reads a file from the chosen folder. */
+    fun readUri(uri: android.net.Uri): ByteArray? = runCatching { nova.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+
+    /** New install with servers but no search index yet, and nothing chosen: offer to import. */
+    fun shouldOfferIndexImport(): Boolean =
+        !storage.indexOfferDone && indexTree == null && accounts.value.isNotEmpty() &&
+            accounts.value.none { com.nova.iptv.data.SearchIndex.get(it.id) != null }
+
+    fun dismissIndexOffer() { storage.indexOfferDone = true }
+
+    /** After choosing the folder on a new install: imports its newest index (index-latest first). */
+    suspend fun importFromChosenFolder(): String = withContext(Dispatchers.IO) {
+        storage.indexOfferDone = true
+        val f = treeIndexFiles().firstOrNull() ?: return@withContext "No .novaindex file in this folder"
+        val bytes = readUri(f.second) ?: return@withContext "Could not read ${f.first}"
+        val r = importIndex(bytes, fromIndexFolder = true)
+        if (r.linked.isEmpty()) "${f.first}: none of its servers is in Nova yet"
+        else "Imported ${"%,d".format(r.items)} items for ${r.linked.joinToString(", ")} from ${f.first}"
     }
 
     /** Export button: a dated file for [accs] (and refreshes index-latest). Blocking: call off the main thread. */
     fun exportIndex(accs: List<Account>): Pair<java.io.File, Int>? {
         val r = com.nova.iptv.data.SearchIndex.exportFile(nova, accs, appVersion(), latest = false) ?: return null
-        com.nova.iptv.data.SearchIndex.exportFile(nova, accounts.value, appVersion(), latest = true)
+        runCatching { com.nova.iptv.data.SearchIndex.exportFile(nova, accounts.value, appVersion(), latest = true) }
+        if (indexTree != null) runCatching { exportToTree(com.nova.iptv.data.SearchIndex.LATEST, accounts.value); exportToTree(r.first.name, accs) }
+        storage.indexExportStamp = com.nova.iptv.data.SearchIndex.stamp(accounts.value)
         storage.indexExportedAt = System.currentTimeMillis()
         indexExportTick.value++
         return r
@@ -1935,8 +2018,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Imports an index file; keeps a copy in the Index folder when it came from elsewhere. Blocking. */
     fun importIndex(bytes: ByteArray, fromIndexFolder: Boolean): com.nova.iptv.data.SearchIndex.ImportResult {
-        val p = com.nova.iptv.data.SearchIndex.readPortable(bytes.inputStream())
+        val v = com.nova.iptv.data.SearchIndex.headerVersion(bytes)
             ?: throw IllegalArgumentException("This isn't a Nova search index file (.novaindex)")
+        if (v > 2) throw IllegalArgumentException("This index was made by a newer Nova — update Nova first, then import it")
+        val p = com.nova.iptv.data.SearchIndex.readPortable(bytes.inputStream())
+            ?: throw IllegalArgumentException("This index file is damaged and can't be read")
         val r = com.nova.iptv.data.SearchIndex.importPortable(nova, p, accounts.value)
         if (!fromIndexFolder) com.nova.iptv.data.SearchIndex.keepCopy(nova, bytes)
         indexExportTick.value++
