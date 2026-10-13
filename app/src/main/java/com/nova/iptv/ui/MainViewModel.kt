@@ -1516,6 +1516,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun backupFileName(): String =
         "NovaIPTV-" + java.text.SimpleDateFormat("yyyy-MM-dd-HHmm", java.util.Locale.US).format(java.util.Date()) + ".bak"
 
+    fun listsFileName(): String =
+        "Nova-" + java.text.SimpleDateFormat("yyyy-MM-dd_HHmm", java.util.Locale.US).format(java.util.Date()) + "_list.bakL"
+
+    /** Saves the lists only (order, favorites, hidden items) in Download/NovaIPTV/Backups. */
+    fun saveLists(): File {
+        val f = File(backupDir(), listsFileName())
+        f.writeText(storage.exportLists())
+        android.util.Log.i("NovaTest", "LISTS saved ${f.name}")
+        return f
+    }
+
+    fun listsFiles(): List<File> =
+        backupDir().listFiles { f -> f.name.endsWith(".bakL", ignoreCase = true) }?.sortedByDescending { it.lastModified() }.orEmpty()
+
+    fun restoreLists(text: String) {
+        storage.importLists(text)
+        org.value = storage.org
+        favorites.value = storage.favorites
+        android.util.Log.i("NovaTest", "LISTS restored")
+    }
+
+    /** Film / series page for the "Hidden by age" list: details from your server (poster, year, synopsis…). */
+    suspend fun ageInfo(code: String, key: String): Pair<com.nova.iptv.data.MediaDetails, String?>? = withContext(Dispatchers.IO) {
+        val accId = key.substringBefore('|')
+        val acc = account(accId) ?: return@withContext null
+        val idx = com.nova.iptv.data.SearchIndex.get(accId)
+        if (code == "movie") {
+            val m = idx?.movies?.firstOrNull { it.key == key } ?: return@withContext null
+            val d = runCatching { api.movieInfo(acc, m) }.getOrNull() ?: com.nova.iptv.data.MediaDetails()
+            d to (d.poster ?: m.icon)
+        } else {
+            val s = idx?.series?.firstOrNull { it.key == key } ?: return@withContext null
+            val info = runCatching { api.seriesInfo(acc, s) }.getOrNull()
+            val d = (info?.details ?: com.nova.iptv.data.MediaDetails()).let {
+                it.copy(plot = it.plot ?: info?.plot ?: s.plot, genre = it.genre ?: info?.genre)
+            }
+            d to (d.poster ?: s.cover)
+        }
+    }
+
+    /** Live TV: ▶ from the groups asks the channel list to put the remote on its first channel. */
+    val liveTopAsk = MutableStateFlow(0)
+
     fun backupText(password: String? = null): String =
         storage.exportBackup().let { if (password.isNullOrEmpty()) it else com.nova.iptv.data.NovaCrypto.encrypt(it, password) }
 

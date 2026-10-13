@@ -358,6 +358,17 @@ private fun <T> ZoneLayout(
                                     }
                                     .focusProperties { if (trap) exit = { if (allowExit) FocusRequester.Default else FocusRequester.Cancel } }
                                     .focusGroup()
+                                else if (!posters && !edit) Modifier
+                                    // Live TV: ▶ from the groups always lands on the first channel of the list.
+                                    .focusProperties {
+                                        enter = { dir ->
+                                            if (dir == androidx.compose.ui.focus.FocusDirection.Right && groupsHaveFocus) {
+                                                vm.liveTopAsk.value = vm.liveTopAsk.value + 1
+                                                FocusRequester.Cancel
+                                            } else FocusRequester.Default
+                                        }
+                                    }
+                                    .focusGroup()
                                 else Modifier
                             )
                     ) { content(big) }
@@ -724,6 +735,20 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
     val picked by vm.pickedKey.collectAsStateWithLifecycle()
     var catchupFor by remember { mutableStateOf<LiveChannel?>(null) }
     catchupFor?.let { ch -> CatchupDialog(vm, ch, onPlay) { catchupFor = null } }
+    // ▶ from the groups: back to the top of the list, the remote on the first channel.
+    val firstChannel = remember { FocusRequester() }
+    val topAsk by vm.liveTopAsk.collectAsStateWithLifecycle()
+    LaunchedEffect(topAsk) {
+        if (topAsk == 0) return@LaunchedEffect
+        runCatching { if (wide && !edit && settings.liveColumns == 2) liveGridState.scrollToItem(0) else listState.scrollToItem(0) }
+        repeat(15) {
+            kotlinx.coroutines.delay(40)
+            if (runCatching { firstChannel.requestFocus() }.isSuccess) {
+                android.util.Log.i("NovaTest", "LIVE ▶ first channel")
+                return@LaunchedEffect
+            }
+        }
+    }
 
     val row: @Composable (Int, LiveChannel) -> Unit = { index, ch ->
         val saved = vm.saved(ch)
@@ -745,7 +770,7 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
             onClick = { if (!edit) onPlay(vm.liveItems(shown), index) else vm.editActiveKey.value = "i:${ch.key}" },
             onFocused = if (wide && !edit) ({ vm.focusChannel(ch) }) else null,
             onLongClick = { if (edit) vm.togglePicked(ch.key) else vm.toggleFavorite(saved) },
-            modifier = lineMod.alpha(if (hidden) 0.45f else 1f)
+            modifier = (if (index == 0) Modifier.focusRequester(firstChannel) else Modifier).then(lineMod).alpha(if (hidden) 0.45f else 1f)
                 .then(if (edit && (moving == ch.key || picked == ch.key)) Modifier.border(if (picked == ch.key) 3.dp else 2.dp, MovingYellow, RoundedCornerShape(12.dp)) else Modifier)
                 .then(if (edit && picked == ch.key) pickedKeys({ d -> keepInPlace(keys[index]) { vm.moveItem(z, shown, ch, d) } }) { vm.togglePicked(ch.key) } else Modifier),
             active = !edit && ch.key == lastKey,

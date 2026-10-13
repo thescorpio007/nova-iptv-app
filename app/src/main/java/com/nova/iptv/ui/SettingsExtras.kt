@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
@@ -447,6 +449,7 @@ fun BackupSettings(vm: MainViewModel) {
             Button(onClick = { showSave = true }) { Text("Save backup") }
             RestoreBackupButton(vm, "Restore a backup")
         }
+        ListsBackup(vm)
     }
     if (showSave) SaveBackupDialog(
         vm,
@@ -986,6 +989,8 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     var tab by remember { mutableStateOf("movie") }
     var query by remember { mutableStateOf("") }
     var onlyAllowed by remember { mutableStateOf(false) }
+    var infoFor by remember { mutableStateOf<com.nova.iptv.data.AgeFilter.HiddenRow?>(null) }
+    infoFor?.let { r -> AgeInfoDialog(vm, r) { infoFor = null } }
     val exceptions = remember(ageV) { AF.exceptions }
     val nf = remember { java.text.NumberFormat.getIntegerInstance() }
     val green = androidx.compose.ui.graphics.Color(0xFF2EE66B)
@@ -1008,7 +1013,7 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("👁 Hidden by age · up to " + AF.LEVELS.getOrElse(AF.level) { "" }, fontWeight = FontWeight.Bold, fontSize = 19.sp)
-                Text("☑ hidden · ☐ allowed anyway (an exception that stays). OK / tap to switch.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("☑ hidden · ☐ allowed anyway (an exception that stays). OK / tap to switch · ▶ ℹ Info = the film page.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 ChoiceRow(
                     listOf("movie" to "🎬 Films", "series" to "🎞 Series", "live" to "📺 Channels").map { (k, l) ->
                         k to (l + (lists?.get(k)?.let { " " + nf.format(it.size) } ?: ""))
@@ -1032,9 +1037,10 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                             items(rows.size, key = { rows[it].exKey }) { i ->
                                 val r = rows[i]
                                 val allowed = r.exKey in exceptions
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FocusBox(
                                     onClick = { vm.toggleAgeException(r.exKey) },
-                                    modifier = Modifier.fillMaxWidth().background(
+                                    modifier = Modifier.weight(1f).background(
                                         if (allowed) androidx.compose.ui.graphics.Color(0xFF1D3326) else androidx.compose.ui.graphics.Color(0xFF232A35), RoundedCornerShape(10.dp),
                                     ),
                                 ) {
@@ -1054,6 +1060,11 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                                             modifier = Modifier.background(androidx.compose.ui.graphics.Color(0x33FFFFFF), RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 2.dp),
                                         )
                                     }
+                                }
+                                if (r.code != "live") FocusBox(onClick = { infoFor = r }, shape = RoundedCornerShape(12.dp)) {
+                                    Text("ℹ Info", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFF9FC3FF),
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp))
+                                }
                                 }
                             }
                         }
@@ -1091,4 +1102,155 @@ fun LastProblemSettings() {
             }
         }
     }
+}
+
+
+// =============================================================================== LISTS BACKUP (_list.bakL)
+
+@Composable
+private fun ListsBackup(vm: MainViewModel) {
+    val context = LocalContext.current
+    val s by vm.settings.collectAsStateWithLifecycle()
+    var chooser by remember { mutableStateOf(false) }
+    var ask by remember { mutableStateOf<Pair<String, String>?>(null) } // (file name, text)
+    var askPin by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val text = runCatching { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
+            if (text == null) Toast.makeText(context, "Could not read this file", Toast.LENGTH_LONG).show()
+            else ask = (uri.lastPathSegment?.substringAfterLast('/') ?: "file") to text
+        }
+    }
+    Text("📋 My lists only (_list.bakL)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+    Hint("No servers, no passwords, no settings — only how you arranged your lists: group & item order (channels, films, series), " +
+        "favorites, the groups and items you hid yourself, and open / closed server sections. Restoring replaces only your lists.")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            scope.launch {
+                val f = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { vm.saveLists() }.getOrNull() }
+                Toast.makeText(context, if (f != null) "Lists saved: Download/NovaIPTV/Backups/${f.name}" else "Could not save the lists", Toast.LENGTH_LONG).show()
+            }
+        }) { Text("📋 Save my lists") }
+        // Restoring can bring hidden items back: it asks for the PIN.
+        OutlinedButton(onClick = { if (s.hasPin && !PinGate.unlocked(true)) askPin = true else chooser = true }) { Text("Restore my lists") }
+    }
+    if (askPin) PinDialog("Enter your PIN", onDismiss = { askPin = false }) { pin ->
+        if (vm.checkPin(pin)) { PinGate.unlockNow(); askPin = false; chooser = true; true } else false
+    }
+    if (chooser) {
+        val files = remember { vm.listsFiles() }
+        AlertDialog(
+            onDismissRequest = { chooser = false },
+            title = { Text("Restore my lists") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (files.isEmpty()) Hint("No _list.bakL file in Download/NovaIPTV/Backups.")
+                    LazyColumn(Modifier.heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        itemsIndexed(files) { _, f ->
+                            FocusBox(onClick = { chooser = false; ask = f.name to f.readText() }, modifier = Modifier.fillMaxWidth()) {
+                                Text("📋 " + f.name, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { chooser = false; pick.launch(arrayOf("*/*")) }) { Text("Other file…") } },
+            dismissButton = { TextButton(onClick = { chooser = false }) { Text("Cancel") } },
+        )
+    }
+    ask?.let { (name, text) ->
+        ConfirmOverlayDialog(
+            title = "Restore these lists?",
+            text = "$name\nYour current order, favorites and hidden items are replaced. Servers and settings stay.",
+            yes = "Yes, restore",
+            onYes = {
+                runCatching { vm.restoreLists(text) }
+                    .onSuccess { Toast.makeText(context, "Lists restored", Toast.LENGTH_SHORT).show() }
+                    .onFailure { Toast.makeText(context, it.message ?: "Could not restore", Toast.LENGTH_LONG).show() }
+                ask = null
+            },
+            onDismiss = { ask = null },
+        )
+    }
+}
+
+@Composable
+private fun ConfirmOverlayDialog(title: String, text: String, yes: String, onYes: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = { TextButton(onClick = onYes) { Text(yes) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+// =============================================================================== FILM PAGE (Hidden by age › ℹ Info)
+
+@Composable
+private fun AgeInfoDialog(vm: MainViewModel, row: com.nova.iptv.data.AgeFilter.HiddenRow, onDismiss: () -> Unit) {
+    val AF = com.nova.iptv.data.AgeFilter
+    val ageV by AF.version.collectAsStateWithLifecycle()
+    val allowed = remember(ageV) { row.exKey in AF.exceptions }
+    val info by androidx.compose.runtime.produceState<Pair<com.nova.iptv.data.MediaDetails, String?>?>(null, row.key) {
+        value = runCatching { vm.ageInfo(row.code, row.key) }.getOrNull() ?: (com.nova.iptv.data.MediaDetails() to null)
+    }
+    val green = androidx.compose.ui.graphics.Color(0xFF2EE66B)
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        androidx.compose.material3.Surface(
+            shape = RoundedCornerShape(16.dp), color = androidx.compose.ui.graphics.Color(0xFF20262F),
+            modifier = Modifier.fillMaxWidth(0.92f).widthIn(max = 760.dp),
+        ) {
+            BoxWithConstraintsInfo { wide ->
+                val d = info?.first
+                val poster: @Composable (Modifier) -> Unit = { m ->
+                    Logo(info?.second, row.name, m.background(androidx.compose.ui.graphics.Color(0xFF2B3D5C), RoundedCornerShape(10.dp)),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                }
+                val text: @Composable () -> Unit = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        val year = d?.releaseDate?.take(4)?.takeIf { it.all(Char::isDigit) }
+                        Text(row.name + (year?.let { " ($it)" } ?: ""), fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                        Text(
+                            listOfNotNull(d?.genre, d?.duration, d?.rating?.let { "★ %.1f".format(it) }, vm.accountName(row.accountId)).joinToString(" · "),
+                            fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            when {
+                                info == null -> "Loading the page from your server…"
+                                d?.plot.isNullOrBlank() -> "Your server has no synopsis for this title."
+                                else -> d!!.plot!!
+                            },
+                            fontSize = 13.5.sp, lineHeight = 20.sp, maxLines = 10,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "Hidden because: ${row.reason}" + if (allowed) " · now allowed (exception)" else "",
+                            fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFFFE2A8),
+                            modifier = Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color(0xFF2A2112), RoundedCornerShape(8.dp)).padding(horizontal = 9.dp, vertical = 6.dp),
+                        )
+                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(onClick = { if (!allowed) vm.toggleAgeException(row.exKey); onDismiss() }) { Text("☐ Allow it (show to the children)") }
+                            OutlinedButton(onClick = { if (allowed) vm.toggleAgeException(row.exKey); onDismiss() }) { Text("Keep hidden", color = green) }
+                            TextButton(onClick = onDismiss) { Text("Close") }
+                        }
+                    }
+                }
+                if (wide) Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    poster(Modifier.width(150.dp).height(220.dp)); Box(Modifier.weight(1f)) { text() }
+                } else Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    poster(Modifier.fillMaxWidth().height(170.dp)); text()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoxWithConstraintsInfo(content: @Composable (wide: Boolean) -> Unit) {
+    androidx.compose.foundation.layout.BoxWithConstraints { content(maxWidth >= 560.dp) }
 }

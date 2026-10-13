@@ -274,7 +274,7 @@ fun SettingsScreen(vm: MainViewModel) {
         var confirmReset by remember { mutableStateOf(false) }
         Card("Reset") {
             Text(
-                "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer, 25 s cushion (safe start), stay and retry on channels that don't work, age filter NC-17 with words, 100 MB read-ahead, " +
+                "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer, 15 s cushion (safe start), stay and retry on channels that don't work, age filter NC-17 with words, 500 MB disk read-ahead, " +
                     "app audio decoders, Back twice to leave live TV, films sorted by rating, storage in the box's Download/NovaIPTV folder…). " +
                     "Your servers, favorites, order, hidden items, PIN and downloads are kept.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,

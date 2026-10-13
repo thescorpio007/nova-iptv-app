@@ -40,7 +40,7 @@ class Storage(context: Context) {
 
     /** Seconds of video collected before live playback starts (the safety cushion). */
     var cushionSeconds: Int
-        get() = prefs.getInt("cushion_seconds", 25)
+        get() = prefs.getInt("cushion_seconds", 15)
         set(value) = prefs.edit().putInt("cushion_seconds", value).apply()
 
     /** Maximum seconds held ahead of the playback position. */
@@ -151,7 +151,7 @@ class Storage(context: Context) {
 
     /** Disk read-ahead for films & series in MB (0 = off): one connection fills segments ahead of the player. */
     var readAheadMb: Int
-        get() = prefs.getInt("read_ahead_mb", 100)
+        get() = prefs.getInt("read_ahead_mb", 500)
         set(value) = prefs.edit().putInt("read_ahead_mb", value).apply()
 
     /** How see-through the overlays over live TV are (group list, recent bar), in %. */
@@ -570,6 +570,29 @@ class Storage(context: Context) {
             .put("created", System.currentTimeMillis())
             .put("prefs", values)
             .toString(2)
+    }
+
+    // ---------- lists backup (_list.bakL): order, favorites, hidden items only ----------
+
+    private fun isListKey(k: String) = k == "org" || k == "favorites_v2" || k.startsWith("fav_")
+
+    /** Only how the lists are arranged: group & item order, favorites, what you hid, open / closed sections. */
+    fun exportLists(): String {
+        val values = JSONObject()
+        prefs.all.filterKeys { isListKey(it) }.forEach { (k, v) -> if (v is String) values.put(k, v) }
+        return JSONObject().put("app", "NovaIPTV").put("kind", "lists").put("version", 1)
+            .put("created", System.currentTimeMillis()).put("lists", values).toString(2)
+    }
+
+    /** Puts back the lists only (servers and settings are not touched). */
+    fun importLists(text: String) {
+        val root = try { JSONObject(text) } catch (e: Exception) { throw IllegalArgumentException("This file is not a Nova lists backup") }
+        if (root.optString("app") != "NovaIPTV" || root.optString("kind") != "lists") throw IllegalArgumentException("This file is not a Nova lists backup (.bakL)")
+        val values = root.optJSONObject("lists") ?: throw IllegalArgumentException("The lists backup is empty")
+        val e = prefs.edit()
+        prefs.all.keys.filter { isListKey(it) }.forEach { e.remove(it) }
+        values.keys().forEach { k -> if (isListKey(k)) e.putString(k, values.optString(k)) }
+        e.apply()
     }
 
     /** Replaces all saved data with the backup. Throws IllegalArgumentException if the file is not a Nova backup. */
