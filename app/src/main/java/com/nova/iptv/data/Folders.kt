@@ -36,10 +36,6 @@ object Folders {
         File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "NovaIPTV")
 
     /** Android 9 and older (and 10 in legacy mode) need the storage permission for the Download folder. */
-    /** Android 11+: "All files access" lets Nova see files an earlier install of Nova made in Download. */
-    fun hasAllFilesAccess(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || android.os.Environment.isExternalStorageManager()
-
     fun allFilesAccessIntent(context: Context): android.content.Intent =
         android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, android.net.Uri.parse("package:" + context.packageName))
 

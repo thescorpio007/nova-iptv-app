@@ -1270,7 +1270,7 @@ private fun BoxWithConstraintsInfo(content: @Composable (wide: Boolean) -> Unit)
 /** Files made by an earlier install of Nova are hidden by Android until "All files access" is allowed. */
 @Composable
 fun AllFilesNotice() {
-    if (com.nova.iptv.data.Folders.hasAllFilesAccess()) return
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R || com.nova.iptv.data.Folders.hasAllFilesAccess()) return
     val context = LocalContext.current
     Text(
         "Files saved by an earlier install of Nova are hidden by Android. Allow “All files access” once to see them all — or use “Other file…”.",
