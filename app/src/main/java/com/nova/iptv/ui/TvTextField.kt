@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
  *  - ▶ reaches the small buttons inside (📋 Paste …), ◀ comes back.
  * With a touch screen (phone) a tap edits directly, as before.
  */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun TvTextField(
     value: String,
