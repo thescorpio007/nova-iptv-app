@@ -80,10 +80,12 @@ object LiveCatalog {
 
     private val allByAccount = HashMap<String, List<LiveChannel>>()
 
+    private val TAGS = Regex("""[|\[(][^|\])]{1,12}[|\])]""")
+    private val QUALITY = Regex("""\b(fhd|uhd|hd|sd|4k|hevc|h265|backup|ott|raw|vip|hq|multi)\b""")
+    private val NON_ALNUM = Regex("""[^\p{L}\p{N}]+""")
+
     private fun normalize(name: String): String = name.lowercase()
-        .replace(Regex("""[|\[(][^|\])]{1,12}[|\])]"""), " ")
-        .replace(Regex("""\b(fhd|uhd|hd|sd|4k|hevc|h265|backup|ott|raw|vip|hq|multi)\b"""), " ")
-        .replace(Regex("""[^\p{L}\p{N}]+"""), "")
+        .replace(TAGS, " ").replace(QUALITY, " ").replace(NON_ALNUM, "")
 
     /** The same channel (by name) on one of your other accounts, if there is one. */
     suspend fun sameChannelElsewhere(app: NovaApp, item: PlayItem): PlayItem? {

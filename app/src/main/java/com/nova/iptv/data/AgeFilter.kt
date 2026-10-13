@@ -42,8 +42,8 @@ object AgeFilter {
     const val ADULT = 6
 
     // ---- settings (copied from Storage by [configure]) ----
-    @Volatile var level = 1; private set
-    @Volatile var source = "tmdb"; private set
+    @Volatile var level = 5; private set
+    @Volatile var source = "rules"; private set
     @Volatile var hideUnknown = false; private set
     @Volatile var liveMode = "name"; private set
     @Volatile var allowedGroups: Set<String> = emptySet(); private set
@@ -81,7 +81,7 @@ object AgeFilter {
             "18+", "uncensored", "unrated", "sexe", "sexuel", "sexuelle", "nu", "nue", "nues", "érotique", "sensuel", "sensuelle",
             "désirs", "prostituée", "fétiche", "cinquante nuances", "interdit aux mineurs", "non censuré", "-18",
         )),
-        WordGroup("horror", "🩸 Horror & violence", true, listOf(
+        WordGroup("horror", "🩸 Horror & violence", false, listOf(
             "horror", "blood", "bloody", "killer", "kill", "massacre", "slasher", "gore", "zombie", "demon", "devil", "exorcist",
             "possession", "haunted", "evil", "cannibal", "chainsaw", "psycho", "nightmare", "horreur", "sang", "sanglant", "tueur",
             "tueuse", "démon", "diable", "exorciste", "hanté", "hantée", "maléfique", "cannibale", "cauchemar", "terreur", "épouvante",
@@ -93,12 +93,27 @@ object AgeFilter {
     )
 
     /** Lower case, no accents, "_" and "." as spaces: "FR_Amoür.Fou" → "fr amour fou". */
-    fun normalize(text: String): String =
-        java.text.Normalizer.normalize(text.lowercase(), java.text.Normalizer.Form.NFD)
-            .replace(Regex("""\p{Mn}+"""), "").replace('_', ' ').replace('.', ' ').replace('’', '\'')
+    // Text patterns are made once (making them again for every title used up the memory and closed Nova).
+    private val MARKS = Regex("""\p{Mn}+""")
+    private val YEAR = Regex("""\b(19[2-9]\d|20[0-4]\d)\b""")
+    private val BRACKETS = Regex("""\[[^]]*]""")
+    private val PARENS = Regex("""\(([^)]*)\)""")
+    private val SPACES = Regex("""\s+""")
+    private val patternCache = ConcurrentHashMap<List<String>, Regex>()
+
+    fun normalize(text: String): String {
+        var t = text.lowercase()
+        if (t.any { it.code > 127 }) t = MARKS.replace(java.text.Normalizer.normalize(t, java.text.Normalizer.Form.NFD), "")
+        return t.replace('_', ' ').replace('.', ' ').replace('’', '\'')
+    }
 
     /** One word list → one pattern (whole words, with plurals: love → loves). */
     fun wordsPattern(words: List<String>): Regex? {
+        patternCache[words]?.let { return it }
+        return wordsPatternNow(words)?.also { if (patternCache.size > 50) patternCache.clear(); patternCache[words] = it }
+    }
+
+    private fun wordsPatternNow(words: List<String>): Regex? {
         val parts = words.map { normalize(it).trim() }.filter { it.isNotEmpty() }.distinct()
             .map { Regex.escape(it).replace(" ", """\E\s+\Q""") }
         if (parts.isEmpty()) return null
@@ -277,11 +292,11 @@ object AgeFilter {
     fun cleanName(raw: String, knownYear: Int?): Pair<String, Int?> {
         var s = raw.replace(tagPrefix, "")
         s = s.replace('_', ' ').replace('.', ' ')
-        val year = knownYear ?: Regex("""\b(19[2-9]\d|20[0-4]\d)\b""").findAll(s).lastOrNull()?.value?.toIntOrNull()
-        s = s.replace(Regex("""\[[^]]*]"""), " ").replace(Regex("""\(([^)]*)\)"""), " ")
-        s = s.replace(Regex("""\b(19[2-9]\d|20[0-4]\d)\b"""), " ")
+        val year = knownYear ?: YEAR.findAll(s).lastOrNull()?.value?.toIntOrNull()
+        s = s.replace(BRACKETS, " ").replace(PARENS, " ")
+        s = s.replace(YEAR, " ")
         s = s.replace(junk, " ")
-        s = s.replace(Regex("""\s+"""), " ").trim(' ', '-', ':', '|', ',')
+        s = s.replace(SPACES, " ").trim(' ', '-', ':', '|', ',')
         return s.lowercase() to year
     }
 
@@ -368,7 +383,50 @@ object AgeFilter {
         }
     }
 
-    private fun file(context: Context) = File(Folders.keepDir(context, "Index").also { it.mkdirs() }, "ages.gz")
+    /** Download/NovaIPTV/Filter: the ratings found, the filter settings and the list of what is hidden. */
+    fun folder(context: Context): File = Folders.keepDir(context, "Filter").also { it.mkdirs() }
+
+    private fun file(context: Context): File {
+        val f = File(folder(context), "ratings.gz")
+        if (!f.exists()) runCatching {
+            val old = File(Folders.keepDir(context, "Index"), "ages.gz")
+            if (old.exists()) old.copyTo(f, overwrite = true).also { old.delete() }
+        }
+        return f
+    }
+
+    /** Saves the filter settings (sealed) next to the ratings. */
+    fun saveSettings(context: Context, s: Storage) {
+        runCatching { File(folder(context), "filter-settings.txt").writeText(s.exportFilter()) }
+    }
+
+    /** New install / cleared data: takes the filter back from the folder (only if nobody changed the file by hand). */
+    fun restoreSettings(context: Context, s: Storage): Boolean = runCatching {
+        if (!s.filterUnset) return false
+        val f = File(folder(context), "filter-settings.txt")
+        f.exists() && s.importFilter(f.readText()).also { Log.i(TAG, "FILTER settings restored: $it") }
+    }.getOrDefault(false)
+
+    /** hidden-list.txt: every hidden film, series and channel with the reason, easy to read. */
+    fun writeHiddenList(context: Context, accounts: List<Account>, names: Map<String, String>) {
+        runCatching {
+            val lists = hiddenList(accounts, names)
+            val stamp = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            val accName = accounts.associate { it.id to it.name }
+            val sb = StringBuilder("Nova IPTV — hidden by the age filter (${LEVELS.getOrElse(level) { "" }}) · $stamp\n")
+            sb.append("☑ hidden · ☐ allowed anyway (exception)\n")
+            listOf("movie" to "FILMS", "series" to "SERIES", "live" to "CHANNELS").forEach { (k, title) ->
+                val rows = lists[k].orEmpty()
+                sb.append("\n==== $title (${rows.size}) ====\n")
+                rows.forEach { r ->
+                    sb.append(if (r.exKey in exceptions) "☐ " else "☑ ").append(r.name).append("  —  ").append(r.reason)
+                    if (accounts.size > 1) sb.append("  ·  ").append(accName[r.accountId].orEmpty())
+                    sb.append('\n')
+                }
+            }
+            File(folder(context), "hidden-list.txt").writeText(sb.toString())
+        }
+    }
 
     fun load(context: Context) {
         if (loaded) return

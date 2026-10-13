@@ -864,14 +864,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setAge(change: (com.nova.iptv.data.Storage) -> Unit) {
         change(storage)
         com.nova.iptv.data.AgeFilter.configure(storage)
+        saveFilterFiles()
         checkAges()
+    }
+
+    private var filterFilesJob: Job? = null
+
+    /** Download/NovaIPTV/Filter: settings (sealed) and hidden-list.txt, written a moment after the last change. */
+    fun saveFilterFiles() {
+        com.nova.iptv.data.AgeFilter.saveSettings(nova, storage)
+        filterFilesJob?.cancel()
+        val names = ageGroupNames()
+        filterFilesJob = viewModelScope.launch(Dispatchers.Default) {
+            delay(3000)
+            com.nova.iptv.data.AgeFilter.writeHiddenList(nova, accounts.value, names)
+        }
     }
 
     fun checkAges() {
         ageJob?.cancel()
+        val names = ageGroupNames()
         ageJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 com.nova.iptv.data.AgeFilter.check(nova, nova.http, accounts.value)
+                com.nova.iptv.data.AgeFilter.writeHiddenList(nova, accounts.value, names)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -895,6 +911,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cur = storage.ageAllowed
         storage.ageAllowed = if (exKey in cur) cur - exKey else cur + exKey
         com.nova.iptv.data.AgeFilter.configure(storage)
+        saveFilterFiles()
     }
 
     /** Live groups of all accounts (for "Only groups I allow"). */
@@ -1489,6 +1506,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setPin(pin: String?) {
         storage.setPin(pin)
         settings.value = readSettings()
+        com.nova.iptv.data.AgeFilter.saveSettings(nova, storage)
     }
 
     // ================================================================ backup
@@ -1649,6 +1667,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun resetSettings() {
         storage.resetSettings()
         com.nova.iptv.data.AgeFilter.configure(storage)
+        com.nova.iptv.data.AgeFilter.saveSettings(nova, storage)
         Folders.customRoot = storage.storageRoot
         settings.value = readSettings()
     }
@@ -1784,6 +1803,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Runs last, once every property above exists (the start-up check uses them).
     init {
+        // New install / cleared data: the filter (and PIN) come back from Download/NovaIPTV/Filter.
+        if (com.nova.iptv.data.AgeFilter.restoreSettings(nova, storage)) settings.value = readSettings()
         com.nova.iptv.data.AgeFilter.configure(storage)
         viewModelScope.launch(Dispatchers.IO) { com.nova.iptv.data.AgeFilter.load(nova) }
         if (com.nova.iptv.data.CrashLog.isNew(nova)) android.widget.Toast.makeText(

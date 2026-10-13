@@ -40,7 +40,7 @@ class Storage(context: Context) {
 
     /** Seconds of video collected before live playback starts (the safety cushion). */
     var cushionSeconds: Int
-        get() = prefs.getInt("cushion_seconds", 10)
+        get() = prefs.getInt("cushion_seconds", 25)
         set(value) = prefs.edit().putInt("cushion_seconds", value).apply()
 
     /** Maximum seconds held ahead of the playback position. */
@@ -74,7 +74,7 @@ class Storage(context: Context) {
 
     /** Jump to the next channel automatically when a live channel doesn't work. */
     var autoSkip: Boolean
-        get() = prefs.getBoolean("auto_skip", true)
+        get() = prefs.getBoolean("auto_skip", false)
         set(value) = prefs.edit().putBoolean("auto_skip", value).apply()
 
     /** Seconds a channel may take to start before it counts as "not working". */
@@ -275,7 +275,7 @@ class Storage(context: Context) {
 
     /** Live channel start: "fast" (start near live, build the cushion while watching) or "safe" (wait for the full cushion). */
     var liveStart: String
-        get() = prefs.getString("live_start", "fast") ?: "fast"
+        get() = prefs.getString("live_start", "safe") ?: "safe"
         set(value) = prefs.edit().putString("live_start", value).apply()
 
     /** Weak signal (video still arriving, too slowly): pause and refill this many seconds before playing on. 0 = off. */
@@ -290,11 +290,11 @@ class Storage(context: Context) {
 
     /** Parental age filter (USA ratings): 0 OFF, 1 G, 2 PG, 3 PG-13, 4 R, 5 NC-17 = the highest rating allowed. */
     var ageLevel: Int
-        get() = prefs.getInt("age_level", 1)
+        get() = prefs.getInt("age_level", 5)
         set(value) = prefs.edit().putInt("age_level", value).apply()
     /** "tmdb" (film database) or "rules" (genre & name). */
     var ageSource: String
-        get() = prefs.getString("age_source", "tmdb") ?: "tmdb"
+        get() = prefs.getString("age_source", "rules") ?: "rules"
         set(value) = prefs.edit().putString("age_source", value).apply()
     var ageHideUnknown: Boolean
         get() = prefs.getBoolean("age_hide_unknown", false)
@@ -323,6 +323,47 @@ class Storage(context: Context) {
         prefs.getString("age_words_$group", null)?.split('\n')?.filter { it.isNotBlank() }
     fun setAgeWords(group: String, words: List<String>?) =
         prefs.edit().putString("age_words_$group", words?.joinToString("\n")).apply()
+
+    // ---------- filter file (Download/NovaIPTV/Filter/filter-settings.txt) ----------
+
+    private fun isFilterKey(k: String) = k.startsWith("age_") || k == "tmdb_key" || k == "pin_hash" || k == "pin_salt"
+    private val filterSeal = "NovaIPTV-filter-seal-7Q2v"
+
+    /** The filter settings (and the PIN) as text, sealed so a change by hand is noticed. */
+    fun exportFilter(): String {
+        val sb = StringBuilder("NOVAFILTER1\n")
+        prefs.all.filterKeys { isFilterKey(it) }.toSortedMap().forEach { (k, v) ->
+            val t = when (v) { is Int -> "i"; is Boolean -> "b"; is Long -> "l"; else -> "s" }
+            sb.append(k).append('\t').append(t).append('\t').append(v.toString().replace("\\", "\\\\").replace("\n", "\\n")).append('\n')
+        }
+        val body = sb.toString()
+        return body + "seal\t" + hash(filterSeal + body) + "\n"
+    }
+
+    /** Puts back the filter from the file; false when the file is missing, damaged or changed by hand. */
+    fun importFilter(text: String): Boolean {
+        val i = text.lastIndexOf("seal\t")
+        if (!text.startsWith("NOVAFILTER1") || i < 0) return false
+        val body = text.substring(0, i)
+        if (text.substring(i + 5).trim() != hash(filterSeal + body)) return false
+        val e = prefs.edit()
+        body.lines().drop(1).filter { it.isNotBlank() }.forEach { l ->
+            val p = l.split('\t', limit = 3)
+            if (p.size < 3 || !isFilterKey(p[0])) return@forEach
+            val v = p[2].replace(Regex("""\\(.)""")) { m -> if (m.groupValues[1] == "n") "\n" else m.groupValues[1] }
+            when (p[1]) {
+                "i" -> v.toIntOrNull()?.let { e.putInt(p[0], it) }
+                "b" -> e.putBoolean(p[0], v == "true")
+                "l" -> v.toLongOrNull()?.let { e.putLong(p[0], it) }
+                else -> e.putString(p[0], v)
+            }
+        }
+        e.apply()
+        return true
+    }
+
+    /** True when this phone / box has never saved filter settings (new install or cleared data). */
+    val filterUnset: Boolean get() = prefs.all.keys.none { it.startsWith("age_") }
 
     /** Downloads: connections (1–16) and speed limit (MB/s, 0 = none), for your IPTV servers and for other links. */
     var dlConnServers: Int

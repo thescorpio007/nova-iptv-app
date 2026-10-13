@@ -809,7 +809,7 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
     }
 
     Text("Live channels", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-    ChoiceRow(listOf("name" to "Hide by name (Adult, XXX, 18+, Horror…)", "allow" to "Only groups I allow"), liveMode) { v ->
+    ChoiceRow(listOf("name" to "Hide by name (Adult, XXX, Horror…)", "allow" to "Only groups I allow"), liveMode) { v ->
         guard { vm.setAge { it.ageLiveMode = v } }
     }
     if (liveMode == "allow") {
@@ -861,11 +861,13 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(g.title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Text(
-                    if (!on) "  · off" else stats.groupCounts[g.id]?.let { "  · ${nf.format(it)} titles" } ?: "",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(g.title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        if (!on) "off" else stats.groupCounts[g.id]?.let { "${nf.format(it)} titles" } ?: "",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Chip(if (on) "● On" else "○ Off", on, {
                     guard {
                         vm.setAge { st ->

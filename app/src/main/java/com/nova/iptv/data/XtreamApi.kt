@@ -233,7 +233,7 @@ class XtreamApi(
             if (archived != null && archived != "1") return@mapNotNull null
             // "2026-10-08 20:00:00" -> "2026-10-08:20-00"
             val serverStart = o.str("start")?.trim()?.let { raw ->
-                val m = Regex("""(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})""").find(raw)
+                val m = DATE_TIME.find(raw)
                 m?.let { "${it.groupValues[1]}:${it.groupValues[2]}-${it.groupValues[3]}" }
             } ?: return@mapNotNull null
             CatchupEntry(
@@ -323,12 +323,15 @@ class XtreamApi(
             return "%.1f".format(Locale.US, value).removeSuffix(".0")
         }
 
+        private val YEAR4 = Regex("""(19|20)\d{2}""")
+        private val DIGITS = Regex("""\d+""")
+        private val DATE_TIME = Regex("""(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})""")
         private val yearInName = Regex("""(?:\(|\[|\s|-|\|)((?:19|20)\d{2})(?:\)|\]|\s|$)""")
 
         /** Year of production: "year" / release date fields, otherwise "(2026)" in the title. */
         internal fun yearOf(o: JsonObject, name: String?): Int? {
             for (k in listOf("year", "releaseDate", "release_date", "releasedate")) {
-                val y = o.str(k)?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toIntOrNull() }
+                val y = o.str(k)?.let { YEAR4.find(it)?.value?.toIntOrNull() }
                 if (y != null) return y
             }
             return yearFromName(name)
@@ -350,7 +353,7 @@ class XtreamApi(
                 val minutes = if (parts.size == 3) parts[0] * 60 + parts[1] else parts[0] * 60 + parts[1]
                 return if (minutes > 0) formatMinutes(minutes.toLong()) else null
             }
-            val m = Regex("""\d+""").find(raw)?.value?.toLongOrNull() ?: return raw.takeIf { it.isNotBlank() }
+            val m = DIGITS.find(raw)?.value?.toLongOrNull() ?: return raw.takeIf { it.isNotBlank() }
             return if (m > 0) formatMinutes(m) else null
         }
 
