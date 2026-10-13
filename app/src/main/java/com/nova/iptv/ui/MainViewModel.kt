@@ -1123,6 +1123,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---------- coming back after a video: same tab, same search, same film / series page ----------
+
+    fun saveReturnPoint() {
+        storage.returnPoint = listOf(
+            System.currentTimeMillis().toString(), tab.value.name, query.value,
+            movieDetail.value?.movie?.key.orEmpty(), seriesDetail.value?.series?.key.orEmpty(),
+        ).joinToString("\u0001")
+    }
+
+    /** Puts back the place saved before the video. False when there is none (or it is too old). */
+    fun restoreReturnPoint(): Boolean {
+        val raw = storage.returnPoint ?: return false
+        storage.returnPoint = null
+        val p = raw.split('\u0001')
+        if (p.size < 5) return false
+        val at = p[0].toLongOrNull() ?: 0L
+        if (System.currentTimeMillis() - at > 6 * 3600_000L) return false
+        val t = runCatching { Tab.valueOf(p[1]) }.getOrNull() ?: return false
+        val movieKey = p[3]
+        val seriesKey = p[4]
+        val sameDetail = (movieKey.isEmpty() || movieDetail.value?.movie?.key == movieKey) &&
+            (seriesKey.isEmpty() || seriesDetail.value?.series?.key == seriesKey)
+        if (tab.value == t && sameDetail && (t != Tab.SEARCH || query.value == p[2])) return true
+        android.util.Log.i("NovaTest", "RETURN to ${t.name}${if (p[2].isNotBlank()) " \"" + p[2] + "\"" else ""}")
+        if (tab.value != t) setTab(t)
+        if (t == Tab.SEARCH && p[2].isNotBlank() && query.value != p[2]) setQuery(p[2])
+        fun accIdx(key: String) = com.nova.iptv.data.SearchIndex.get(key.substringBefore('|'))
+        if (movieKey.isNotEmpty() && movieDetail.value?.movie?.key != movieKey) {
+            (accIdx(movieKey)?.movies?.firstOrNull { it.key == movieKey }
+                ?: films.items.value.items.firstOrNull { it.key == movieKey })?.let { openMovie(it) }
+        }
+        if (seriesKey.isNotEmpty() && seriesDetail.value?.series?.key != seriesKey) {
+            (accIdx(seriesKey)?.series?.firstOrNull { it.key == seriesKey }
+                ?: series.items.value.items.firstOrNull { it.key == seriesKey })?.let { openSeries(it) }
+        }
+        return true
+    }
+
     fun closeMovie() {
         movieJob?.cancel()
         movieDetail.value = null

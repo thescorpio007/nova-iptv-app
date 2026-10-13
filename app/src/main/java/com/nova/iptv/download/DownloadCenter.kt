@@ -65,37 +65,51 @@ object DownloadCenter {
     /** A download being watched while it downloads: it goes first. */
     @Volatile private var priorityId: String? = null
 
-    /**
-     * Two lanes run side by side: one download from your IPTV servers (they allow few connections)
-     * and one from other web links (they don't use your account's connections).
-     */
-    fun isServer(url: String): Boolean {
-        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: return false
-        return runCatching { storage.accounts }.getOrDefault(emptyList()).any { a ->
+    /** Links (not your IPTV servers) downloading at the same time. */
+    const val LINK_SLOTS = 4
+
+    /** The IPTV account a download comes from, or null for other links. */
+    fun accountOf(url: String): com.nova.iptv.data.Account? {
+        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: return null
+        return runCatching { storage.accounts }.getOrDefault(emptyList()).firstOrNull { a ->
             runCatching { java.net.URI(com.nova.iptv.data.XtreamApi.normalizeServer(a.server)).host }.getOrNull() == host
         }
     }
 
-    /** Oldest waiting download of this lane (the list is newest first); a "Download & watch" one goes first. */
-    fun nextQueued(server: Boolean): DownloadItem? {
-        priorityId?.let { id ->
-            _items.value.firstOrNull { it.id == id && it.status == DownloadStatus.QUEUED && isServer(it.url) == server }?.let { return it }
-        }
-        return _items.value.lastOrNull { it.status == DownloadStatus.QUEUED && isServer(it.url) == server }
+    fun isServer(url: String): Boolean = accountOf(url) != null
+
+    /**
+     * Lanes: each IPTV server downloads one film at a time ("srv:<account>", so watching is never blocked);
+     * other links share the "link" lane, up to [LINK_SLOTS] at once.
+     */
+    fun laneOf(url: String): String = accountOf(url)?.let { "srv:" + it.id } ?: "link"
+
+    /** Takes the next waiting download of this lane and marks it running (so two workers never take the same). */
+    fun claimNext(lane: String): DownloadItem? = synchronized(lock) {
+        val list = _items.value
+        val pick = priorityId?.let { id -> list.firstOrNull { it.id == id && it.status == DownloadStatus.QUEUED && laneOf(it.url) == lane } }
+            ?: list.lastOrNull { it.status == DownloadStatus.QUEUED && laneOf(it.url) == lane }
+            ?: return@synchronized null
+        val running = pick.copy(status = DownloadStatus.DOWNLOADING, error = null)
+        _items.value = list.map { if (it.id == pick.id) running else it }
+        storage.downloads = _items.value
+        running
     }
 
-    fun nextQueued(): DownloadItem? = nextQueued(true) ?: nextQueued(false)
+    fun nextQueued(): DownloadItem? = _items.value.lastOrNull { it.status == DownloadStatus.QUEUED }
 
-    /** For a waiting download: "another download is finishing (27 s left)". */
+    /** For a waiting download: what it waits for ("Subtv is busy with “Pirates…” (18 min left)"). */
     fun waitingNote(d: DownloadItem): String {
-        val lane = isServer(d.url)
-        val running = _items.value.firstOrNull { it.id != d.id && it.status == DownloadStatus.DOWNLOADING && isServer(it.url) == lane }
-            ?: return "waiting for its turn"
-        val left = if (running.speed > 0 && running.totalBytes > running.doneBytes) {
-            val sec = (running.totalBytes - running.doneBytes) / running.speed
+        val lane = laneOf(d.url)
+        val running = _items.value.filter { it.id != d.id && it.status == DownloadStatus.DOWNLOADING && laneOf(it.url) == lane }
+        if (running.isEmpty()) return "waiting for its turn"
+        fun left(r: DownloadItem) = if (r.speed > 0 && r.totalBytes > r.doneBytes) {
+            val sec = (r.totalBytes - r.doneBytes) / r.speed
             " (" + (if (sec >= 3600) "${sec / 3600} h ${sec % 3600 / 60} min" else if (sec >= 60) "${sec / 60} min" else "$sec s") + " left)"
         } else ""
-        return "waiting — another download is finishing$left"
+        if (lane == "link") return if (running.size >= LINK_SLOTS) "waiting — $LINK_SLOTS links already downloading" else "waiting for its turn"
+        val acc = accountOf(d.url)?.name ?: "This server"
+        return "waiting — $acc is busy with “${running.first().title}”" + left(running.first())
     }
 
     /**
@@ -118,9 +132,12 @@ object DownloadCenter {
         if (item.status == DownloadStatus.DONE) return item
         priorityId = item.id
         // Others that are downloading step back into the queue (they keep what they already have).
-        val lane = isServer(item.url)
-        _items.value.filter { it.id != item.id && it.status == DownloadStatus.DOWNLOADING && isServer(it.url) == lane }
-            .forEach { other -> update(other.id) { o -> o.copy(status = DownloadStatus.QUEUED) } }
+        // Others of the same lane step back into the queue (they keep what they already have):
+        // the same server always; for links only when all slots are taken.
+        val lane = laneOf(item.url)
+        val sameLane = _items.value.filter { it.id != item.id && it.status == DownloadStatus.DOWNLOADING && laneOf(it.url) == lane }
+        val stepBack = if (lane == "link") sameLane.drop(LINK_SLOTS - 1) else sameLane
+        stepBack.forEach { other -> update(other.id) { o -> o.copy(status = DownloadStatus.QUEUED) } }
         if (get(item.id)?.status != DownloadStatus.DOWNLOADING) {
             update(item.id) { it.copy(status = DownloadStatus.QUEUED, error = null) }
         }

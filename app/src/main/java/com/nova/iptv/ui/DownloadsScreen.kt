@@ -43,7 +43,7 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
         item {
             Text(
                 "Saved in: ${vm.downloadsFolder()}\n" +
-                    "Downloads from your IPTV servers use one connection of your account and run one at a time; downloads from other links run at the same time. " +
+                    "Each IPTV server downloads one film at a time (one connection of your account); other links download up to 4 at once. " +
                     "Recordings are made from the Rec button in the player while you watch a channel.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
@@ -53,7 +53,16 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
         if (items.isEmpty()) {
             item { EmptyText("No downloads or recordings yet.\nOpen a movie or a series episode and choose Download.") }
         }
-        itemsIndexed(items) { _, d ->
+        val split = items.partition { com.nova.iptv.download.DownloadCenter.isServer(it.url) }
+        listOf(
+            "🖥  YOUR IPTV SERVERS · 1 at a time per server (never blocks your watching)" to split.first,
+            "🔗  OTHER LINKS · up to ${com.nova.iptv.download.DownloadCenter.LINK_SLOTS} at the same time" to split.second,
+        ).forEach { (title, list) ->
+        if (list.isNotEmpty()) item(key = title) {
+            Text(title, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold,
+                color = androidx.compose.ui.graphics.Color(0xFF9FC3FF), modifier = Modifier.padding(top = 6.dp, start = 2.dp))
+        }
+        itemsIndexed(list, key = { _, d -> d.id }) { _, d ->
             DownloadRow(
                 d,
                 onPlay = {
@@ -69,6 +78,7 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
                 onResume = { vm.resumeDownload(d) },
                 onDelete = { vm.deleteDownload(d) },
             )
+        }
         }
     }
 }

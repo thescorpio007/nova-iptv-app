@@ -183,7 +183,14 @@ object PlayerFactory {
         // Hardware decoder (the box's chip, needed for 4K/HDR) or software decoders first.
         val softwareFirst = tweaks.softwareVideo ?: (s.videoDecoder == "software")
         val codecSelector = MediaCodecSelector { mime, secure, tunneling ->
-            val all = MediaCodecUtil.getDecoderInfos(mime, secure, tunneling)
+            var all = MediaCodecUtil.getDecoderInfos(mime, secure, tunneling)
+            // Dolby Vision on a device without a Dolby Vision decoder (most phones): play the normal
+            // HEVC / AV1 picture inside the file instead (HDR10 for most 4K films) rather than refusing it.
+            if (mime == androidx.media3.common.MimeTypes.VIDEO_DOLBY_VISION && all.isEmpty()) {
+                all = MediaCodecUtil.getDecoderInfos(androidx.media3.common.MimeTypes.VIDEO_H265, secure, tunneling) +
+                    MediaCodecUtil.getDecoderInfos(androidx.media3.common.MimeTypes.VIDEO_AV1, secure, tunneling)
+                if (all.isNotEmpty()) android.util.Log.i("NovaTest", "DOLBY VISION → no decoder here, using the HDR10 / HEVC picture")
+            }
             if (softwareFirst) all.sortedBy { if (it.softwareOnly) 0 else 1 } else all
         }
         val renderers = DefaultRenderersFactory(context)

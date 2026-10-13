@@ -70,6 +70,9 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var infoBar: LinearLayout
     private lateinit var titleView: TextView
+    private lateinit var liveBadge: VideoBadgeRow
+    /** Name of the video decoder in use (for "ℹ Video info"). */
+    private var videoDecoderName: String? = null
     private lateinit var epgView: TextView
     private lateinit var timeView: TextView
     private lateinit var statusView: TextView
@@ -304,11 +307,12 @@ class PlayerActivity : ComponentActivity() {
         aspectButton = pill("Aspect: Fit") { cycleAspect() }
         favButton = pill("♡ Favorite") { toggleFavorite() }
         val tracksButton = pill("CC Audio & subtitles") { vod.openPanel() }
+        val infoButton = pill("ℹ Video info") { showVideoInfo() }
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, recButton, tracksButton, downloadButton, externalButton, aspectButton, favButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, recButton, tracksButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -324,6 +328,8 @@ class PlayerActivity : ComponentActivity() {
                 intArrayOf(0xDD000000.toInt(), 0x00000000),
             )
             addView(titleView)
+            liveBadge = VideoBadgeRow.make(this@PlayerActivity, ::dp)
+            addView(liveBadge.root)
             addView(epgView)
             addView(timeView)
             addView(buttonScroller)
@@ -405,6 +411,7 @@ class PlayerActivity : ComponentActivity() {
                 "⬇ Download" to { downloadCurrent() },
                 "↗ External player" to { openExternal() },
                 "♡ Favorite" to { toggleFavorite() },
+                "ℹ Video info" to { showVideoInfo() },
             ),
         )
         // Keep the controls clear of the camera cut-out.
@@ -484,6 +491,12 @@ class PlayerActivity : ComponentActivity() {
         val p = PlayerFactory.create(this, app, mode, source, tweaks)
         playerTweaks = tweaks
         p.addListener(listener)
+        p.addAnalyticsListener(object : AnalyticsListener {
+            override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+                videoDecoderName = decoderName
+            }
+        })
+        updateBadge()
         p.addAnalyticsListener(decoderLogger)
         player = p
         playerMode = mode
@@ -676,7 +689,28 @@ class PlayerActivity : ComponentActivity() {
         p.playWhenReady = true
     }
 
+    /** The badge follows the real quality (live streams change it with the internet speed). */
+    private fun updateBadge() {
+        val b = VideoBadge.of(player?.videoFormat)
+        if (::liveBadge.isInitialized) liveBadge.show(b)
+        if (::vod.isInitialized) vod.setBadge(b)
+    }
+
+    private fun showVideoInfo() {
+        val p = player
+        val text = VideoBadge.details(p?.videoFormat, p?.audioFormat, videoDecoderName)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("ℹ Video now · " + (current?.title ?: ""))
+            .setMessage(text)
+            .setPositiveButton("OK", null)
+            .show()
+            .findViewById<TextView>(android.R.id.message)?.typeface = Typeface.MONOSPACE
+    }
+
     private val listener = object : Player.Listener {
+        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) { updateBadge() }
+        override fun onTracksChanged(tracks: androidx.media3.common.Tracks) { updateBadge() }
+
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 Player.STATE_READY -> {
@@ -889,7 +923,9 @@ class PlayerActivity : ComponentActivity() {
                     generateSequence(error as Throwable?) { it.cause }.take(4).joinToString(" <- ") { "${it.javaClass.simpleName}: ${it.message}" },
             )
             if (tryRecover(item, error)) return
-            val reason = detail?.let { "\nThis device can't decode the $it." }.orEmpty()
+            val dolby = detail?.contains("Dolby Vision") == true
+            val reason = if (dolby) "\nThis device can't play Dolby Vision (your TV box can). Look for the same film in HD / without “4K”, or use VLC / MX Player."
+                else detail?.let { "\nThis device can't decode the $it." }.orEmpty()
             if (app.storage.externalOnError) {
                 // Codec problem: hand this channel / video to the external player.
                 Toast.makeText(this, "The built-in player can't play this format$reason\nOpening the external player…", Toast.LENGTH_LONG).show()

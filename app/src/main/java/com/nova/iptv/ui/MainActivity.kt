@@ -117,13 +117,19 @@ class MainActivity : ComponentActivity() {
                 kotlinx.coroutines.delay(600)
                 // Only once the start-up check let us in (not on the Accounts check screen).
                 val st = vm.startup.first { it !is MainViewModel.Startup.Loading }
+                // Nova was closed by Android during a video: back to where you were, no auto-play.
+                if (vm.restoreReturnPoint()) return@launch
                 if (st is MainViewModel.Startup.Ready) vm.autoPlayItems()?.let { play(it, 0) }
             }
         }
     }
 
+    /** A video was started from here: when it ends, come back to the same place (tab, search, film page). */
+    private var backFromPlayer = false
+
     override fun onResume() {
         super.onResume()
+        if (backFromPlayer) { backFromPlayer = false; vm.restoreReturnPoint() }
         // Favorites may have been changed from the player screen.
         vm.refreshLocal()
     }
@@ -191,6 +197,8 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (!item.isLocal && !item.catchup) vm.addRecent(item.saved)
+        vm.saveReturnPoint()
+        backFromPlayer = true
         when (choice) {
             "builtin" -> startActivity(Intent(this, PlayerActivity::class.java))
             "ask" -> com.nova.iptv.player.ExternalPlayer.open(this, item, null)

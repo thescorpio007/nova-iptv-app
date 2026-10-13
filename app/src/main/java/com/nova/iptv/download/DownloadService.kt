@@ -31,8 +31,8 @@ import java.io.IOException
 class DownloadService : Service() {
 
     private val main = Handler(Looper.getMainLooper())
-    /** One worker for the IPTV servers, one for other links. */
-    private val workers = HashMap<Boolean, Thread>()
+    /** One worker per IPTV server ("srv:<account>") and up to 4 for other links ("link#1" …). */
+    private val workers = HashMap<String, Thread>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -57,9 +57,20 @@ class DownloadService : Service() {
 
     /** Main thread only. */
     private fun startWorkers() {
-        for (server in listOf(true, false)) {
-            if (workers[server] == null && DownloadCenter.nextQueued(server) != null) {
-                workers[server] = Thread({ runQueue(server) }, if (server) "NovaDownloads" else "NovaLinkDownloads").also { it.start() }
+        val queued = DownloadCenter.items.value.filter { it.status == DownloadStatus.QUEUED }
+        val lanes = queued.map { DownloadCenter.laneOf(it.url) }
+        // Each server: one worker.
+        lanes.filter { it.startsWith("srv:") }.distinct().forEach { lane ->
+            if (workers[lane] == null) workers[lane] = Thread({ runQueue(lane, lane) }, "NovaDl-$lane").also { it.start() }
+        }
+        // Links: as many workers as waiting links, up to 4.
+        var waitingLinks = lanes.count { it == "link" }
+        for (slot in 1..DownloadCenter.LINK_SLOTS) {
+            if (waitingLinks <= 0) break
+            val key = "link#$slot"
+            if (workers[key] == null) {
+                workers[key] = Thread({ runQueue(key, "link") }, "NovaDl-$key").also { it.start() }
+                waitingLinks--
             }
         }
         if (workers.isEmpty()) {
@@ -68,14 +79,14 @@ class DownloadService : Service() {
         }
     }
 
-    private fun runQueue(server: Boolean) {
+    private fun runQueue(key: String, lane: String) {
         val app = application as NovaApp
         while (true) {
-            val item = DownloadCenter.nextQueued(server) ?: break
+            val item = DownloadCenter.claimNext(lane) ?: break
             runCatching { download(app, item) }
         }
         main.post {
-            workers.remove(server)
+            workers.remove(key)
             startWorkers()
         }
     }

@@ -123,6 +123,10 @@ class VodControls(
     private val controls = FrameLayout(ctx)
     private val unlockButton: TextView
     private lateinit var titleView: TextView
+    private lateinit var badgeRow: VideoBadgeRow
+
+    /** Shows the real quality of the video under the title. */
+    fun setBadge(b: VideoBadge.Badge?) { if (::badgeRow.isInitialized) badgeRow.show(b) }
     private lateinit var playButton: TextView
     private lateinit var seekBar: SeekBar
     private lateinit var timeNow: TextView
@@ -234,10 +238,17 @@ class VodControls(
         row.addView(circle("←", 22f) { onBack() }.apply { layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)) })
         titleView = text("", 19f, bold = true).apply {
             maxLines = 1
+        }
+        // Title, and under it the real quality of the video ("4K · DOLBY VISION · HEVC · 3840×1600 · 24 fps").
+        val titleCol = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(16), 0, dp(16), 0)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        row.addView(titleView)
+        titleCol.addView(titleView)
+        badgeRow = VideoBadgeRow.make(ctx, ::dp)
+        titleCol.addView(badgeRow.root)
+        row.addView(titleCol)
         row.addView(circle("🔒", 20f) { setLocked(true) }.apply {
             layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginEnd = dp(14) }
         })

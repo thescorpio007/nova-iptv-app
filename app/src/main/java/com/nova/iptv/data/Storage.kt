@@ -408,6 +408,11 @@ class Storage(context: Context) {
         set(value) = prefs.edit().putString("recent_links", value.take(15).joinToString("\n")).apply()
 
     /** Search: what to look for ("all", "live", "movie", "series") and in which account (null = all servers). */
+    /** Where you were when a video started (tab, search words, film / series page), to come back there after it. */
+    var returnPoint: String?
+        get() = prefs.getString("return_point", null)
+        set(value) = prefs.edit().putString("return_point", value).apply()
+
     var searchKind: String
         get() = prefs.getString("search_kind", "all") ?: "all"
         set(value) = prefs.edit().putString("search_kind", value).apply()
