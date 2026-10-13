@@ -1134,7 +1134,8 @@ private fun RecentScreen(vm: MainViewModel, onPlay: PlayFn) {
     val channels = list.filter { it.type == ItemType.LIVE }
     val others = list.filter { it.type != ItemType.LIVE }
 
-    LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
+    val recentState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LazyColumn(Modifier.fillMaxSize().scrollBar(recentState), state = recentState, contentPadding = PaddingValues(bottom = 16.dp)) {
         item {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = vm::clearRecent) { Text("Clear history") }
@@ -1198,7 +1199,7 @@ private fun SearchScreen(vm: MainViewModel, onPlay: PlayFn) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 840.dp
         Column(Modifier.fillMaxSize()) {
-            OutlinedTextField(
+            TvTextField(
                 value = q,
                 onValueChange = vm::setQuery,
                 label = { Text("Search $what $where".trim()) },
@@ -1284,13 +1285,17 @@ private fun SearchScreen(vm: MainViewModel, onPlay: PlayFn) {
                 // TV / wide screen, everything: three columns side by side.
                 wide && kind == "all" -> Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     listOf(channelRows, movieRows, seriesRows).forEach { rows ->
-                        LazyColumn(Modifier.weight(1f).fillMaxHeight(), contentPadding = PaddingValues(bottom = 16.dp)) { rows() }
+                        val colState = androidx.compose.foundation.lazy.rememberLazyListState()
+                        LazyColumn(Modifier.weight(1f).fillMaxHeight().scrollBar(colState), state = colState, contentPadding = PaddingValues(bottom = 16.dp, end = 10.dp)) { rows() }
                     }
                 }
-                else -> LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
+                else -> {
+                    val searchState = androidx.compose.foundation.lazy.rememberLazyListState()
+                    LazyColumn(Modifier.fillMaxSize().scrollBar(searchState), state = searchState, contentPadding = PaddingValues(bottom = 16.dp, end = 10.dp)) {
                     if (kind == "all" || kind == "live") { if (kind == "live" || res.channels.isNotEmpty()) channelRows() }
                     if (kind == "all" || kind == "movie") { if (kind == "movie" || res.movies.isNotEmpty()) movieRows() }
                     if (kind == "all" || kind == "series") { if (kind == "series" || res.series.isNotEmpty()) seriesRows() }
+                }
                 }
             }
         }

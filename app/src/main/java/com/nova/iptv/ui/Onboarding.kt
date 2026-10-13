@@ -266,7 +266,7 @@ fun RestoreDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                         }
                         OutlinedButton(onClick = { openFrom.launch(arrayOf("*/*")) }) { Text("Choose a file…") }
                     } else {
-                        OutlinedTextField(
+                        TvTextField(
                             link, { link = it; error = null }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                             label = { Text("Link to your .bak file") },
                             trailingIcon = { PasteButton { link = it; error = null } },
@@ -349,7 +349,7 @@ fun PasswordPrompt(title: String, onDismiss: () -> Unit, onPassword: (String) ->
         title = { Text(title) },
         text = {
             Column {
-                OutlinedTextField(
+                TvTextField(
                     pw, { pw = it; err = null }, singleLine = true, label = { Text("Password") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -380,8 +380,8 @@ fun SaveBackupDialog(vm: MainViewModel, onSaveTo: (password: String?) -> Unit, o
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Accounts, favourites, order, hidden items and all settings.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedTextField(pw, { pw = it; err = null }, singleLine = true, label = { Text("Password (optional)") }, visualTransformation = PasswordVisualTransformation())
-                OutlinedTextField(again, { again = it; err = null }, singleLine = true, label = { Text("Repeat password") }, visualTransformation = PasswordVisualTransformation())
+                TvTextField(pw, { pw = it; err = null }, singleLine = true, label = { Text("Password (optional)") }, visualTransformation = PasswordVisualTransformation())
+                TvTextField(again, { again = it; err = null }, singleLine = true, label = { Text("Repeat password") }, visualTransformation = PasswordVisualTransformation())
                 Text(
                     if (pw.isEmpty()) "Leave it empty for a normal backup." else "🔒 Keep this password safe — without it the backup cannot be restored.",
                     fontSize = 12.sp, color = if (pw.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFFFFD27A),
@@ -426,12 +426,12 @@ fun ConnectLinkDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                     Text("Name | server | username | password", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Text("(or a full Xtream / M3U link)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                OutlinedTextField(
+                TvTextField(
                     link, { link = it; error = null; found = null }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                     label = { Text("Link to your accounts list (.txt)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     trailingIcon = { PasteButton { link = it; error = null; found = null } },
                 )
-                OutlinedTextField(
+                TvTextField(
                     pw, { pw = it; error = null }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                     label = { Text("Password of the list (only if protected)") }, visualTransformation = PasswordVisualTransformation(),
                 )
@@ -623,7 +623,7 @@ fun AccountsLinkSection(vm: MainViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("A .txt file in the Backups folder, ready to upload to OneDrive / Drive / Dropbox and use as your accounts link.", fontSize = 13.sp)
-                    OutlinedTextField(pw, { pw = it }, singleLine = true, label = { Text("Password (optional)") }, visualTransformation = PasswordVisualTransformation())
+                    TvTextField(pw, { pw = it }, singleLine = true, label = { Text("Password (optional)") }, visualTransformation = PasswordVisualTransformation())
                     Text("🔒 The file holds your account passwords — share its link only with yourself, or protect it with a password.", fontSize = 12.sp, color = Color(0xFFFFD27A))
                 }
             },

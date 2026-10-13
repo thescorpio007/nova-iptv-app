@@ -291,7 +291,7 @@ fun PinDialog(title: String, onDismiss: () -> Unit, onPin: (String) -> Boolean) 
         title = { Text(title) },
         text = {
             Column {
-                OutlinedTextField(
+                TvTextField(
                     value = pin,
                     onValueChange = { pin = it.filter(Char::isDigit).take(8); wrong = false },
                     singleLine = true,
@@ -317,13 +317,13 @@ private fun NewPinDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {
         title = { Text("New PIN") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
+                TvTextField(
                     value = pin, onValueChange = { pin = it.filter(Char::isDigit).take(8); error = null },
                     singleLine = true, label = { Text("PIN (4 to 8 digits)") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                 )
-                OutlinedTextField(
+                TvTextField(
                     value = again, onValueChange = { again = it.filter(Char::isDigit).take(8); error = null },
                     singleLine = true, label = { Text("Repeat PIN") },
                     visualTransformation = PasswordVisualTransformation(),

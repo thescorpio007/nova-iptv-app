@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -37,7 +38,8 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
     val items by vm.downloads.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val dlState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LazyColumn(Modifier.fillMaxSize().scrollBar(dlState), state = dlState, contentPadding = PaddingValues(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Text(
                 "Saved in: ${vm.downloadsFolder()}\n" +

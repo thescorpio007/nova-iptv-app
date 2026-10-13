@@ -197,7 +197,7 @@ fun StorageSettings(vm: MainViewModel) {
             text = {
                 Column {
                     Text(d.systemName + "  ·  " + d.root.absolutePath, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedTextField(name, { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    TvTextField(name, { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
             },
             confirmButton = { TextButton(onClick = { Locations.rename(d.id, name); renaming = null; version++ }) { Text("Save") } },
@@ -350,7 +350,7 @@ private fun FolderBrowser(
                 if (n == null) {
                     SmallButton("＋ New folder", { newName = "" })
                 } else {
-                    OutlinedTextField(n, { newName = it }, singleLine = true, label = { Text("New folder name") }, modifier = Modifier.fillMaxWidth())
+                    TvTextField(n, { newName = it }, singleLine = true, label = { Text("New folder name") }, modifier = Modifier.fillMaxWidth())
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         SmallButton("Create", {
                             val clean = com.nova.iptv.data.Folders.safeFileName(n)

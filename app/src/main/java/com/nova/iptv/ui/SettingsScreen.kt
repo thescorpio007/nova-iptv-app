@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,6 +58,7 @@ fun SettingsScreen(vm: MainViewModel) {
     var editing by remember { mutableStateOf<Account?>(null) }
 
     val settingsScroll = rememberScrollState()
+    val wideSettings = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
     androidx.compose.runtime.CompositionLocalProvider(LocalPinSet provides s.hasPin) {
     Column(
         Modifier.fillMaxSize().scrollBar(settingsScroll).verticalScroll(settingsScroll).padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = 28.dp),
@@ -72,6 +74,7 @@ fun SettingsScreen(vm: MainViewModel) {
                 }
             }
         }
+        val accountsCard: @Composable () -> Unit = {
         Card("Accounts (${accounts.size})", summary = accounts.joinToString("  ·  ") { it.name }) {
             Text(
                 "All accounts are shown together in Live TV, Films and Series, each as its own section of groups. " +
@@ -125,16 +128,8 @@ fun SettingsScreen(vm: MainViewModel) {
             }
             AccountsLinkSection(vm)
         }
-
-        BackupSettings(vm)
-        ParentalSettings(vm)
-        PlayerSettings(vm)
-        DownloadSettings(vm)
-        WatchdogSettings(vm)
-        VpnSettings(vm)
-        DisplaySettings(vm)
-        RemoteSettings(vm)
-
+        }
+        val liveFormatCard: @Composable () -> Unit = {
         Card("Live stream format") {
             Text(
                 "MPEG-TS starts fastest on most servers. Try HLS if channels stutter or won't start.",
@@ -146,6 +141,8 @@ fun SettingsScreen(vm: MainViewModel) {
             }
         }
 
+        }
+        val rollingCard: @Composable () -> Unit = {
         Card("Rolling buffer", summary = "Cushion ${s.cushionSeconds} s  ·  " + if (s.liveStart == "fast") "Fast start" else "Safe start") {
             Text(
                 "Safety cushion: seconds of video collected before playback starts. Live TV plays this far " +
@@ -172,6 +169,8 @@ fun SettingsScreen(vm: MainViewModel) {
             Stepper("Read-ahead", "${s.maxBufferSeconds} s", { vm.setMaxBuffer(s.maxBufferSeconds - 10) }, { vm.setMaxBuffer(s.maxBufferSeconds + 10) })
         }
 
+        }
+        val liveBufferCard: @Composable () -> Unit = {
         Card("Live TV buffer") {
             Text(
                 "Memory: fastest channel changes. Disk: live TV is stored on the device while you watch, " +
@@ -192,8 +191,8 @@ fun SettingsScreen(vm: MainViewModel) {
             }
         }
 
-        StorageSettings(vm)
-
+        }
+        val engineCard: @Composable () -> Unit = {
         Card("Playback engine") {
             Text(
                 "Tunneled playback sends video and audio through the box's hardware path together. On many Amlogic " +
@@ -207,6 +206,8 @@ fun SettingsScreen(vm: MainViewModel) {
             }
         }
 
+        }
+        val channelsCard: @Composable () -> Unit = {
         Card("Channels that don't work") {
             Text(
                 "When a live channel doesn't start, or drops and can't reconnect, move to the next channel in the list automatically.",
@@ -219,6 +220,8 @@ fun SettingsScreen(vm: MainViewModel) {
             Stepper("Wait before skipping", "${s.skipTimeoutSec} s", { vm.setSkipTimeout(s.skipTimeoutSec - 2) }, { vm.setSkipTimeout(s.skipTimeoutSec + 2) })
         }
 
+        }
+        val readAheadCard: @Composable () -> Unit = {
         Card("Films & series: disk read-ahead") {
             Text(
                 "One connection downloads the film ahead of you into small pieces on disk, and the player reads " +
@@ -252,23 +255,27 @@ fun SettingsScreen(vm: MainViewModel) {
             }
         }
 
+        }
+        val advancedCard: @Composable () -> Unit = {
         Card("Advanced") {
             Text(
                 "User-Agent sent to the server. Change only if your provider asks for a specific one.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
             )
-            OutlinedTextField(value = ua, onValueChange = { ua = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            TvTextField(value = ua, onValueChange = { ua = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(onClick = {
                 vm.setUserAgent(ua)
                 Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
             }) { Text("Save User-Agent") }
         }
 
+        }
+        val resetCard: @Composable () -> Unit = {
         var confirmReset by remember { mutableStateOf(false) }
         Card("Reset") {
             Text(
-                "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer, 10 s cushion, 200 MB read-ahead, " +
-                    "app audio decoders, Back twice to leave live TV, films sorted by recently added, storage on any USB / SD drive…). " +
+                "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer, 10 s cushion, 100 MB read-ahead, " +
+                    "app audio decoders, Back twice to leave live TV, films sorted by rating, storage in the box's Download/NovaIPTV folder…). " +
                     "Your servers, favorites, order, hidden items, PIN and downloads are kept.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
             )
@@ -290,7 +297,38 @@ fun SettingsScreen(vm: MainViewModel) {
             )
         }
 
-        Text("Nova IPTV " + appVersion(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        }
+        // Settings grouped by use, in this order (on a TV: two columns, groups 1–3 left, 4–7 right).
+        val groups: List<Pair<String, @Composable () -> Unit>> = listOf(
+            "👤  ACCOUNTS & SAFETY" to { accountsCard(); BackupSettings(vm); ParentalSettings(vm); VpnSettings(vm) },
+            "📡  LIVE TV" to { liveBufferCard(); rollingCard(); WatchdogSettings(vm); channelsCard() },
+            "▶  PLAYER" to { PlayerSettings(vm); engineCard(); liveFormatCard() },
+            "🎬  FILMS & DOWNLOADS" to { readAheadCard(); DownloadSettings(vm) },
+            "💾  STORAGE" to { StorageSettings(vm) },
+            "🖥  SCREEN & REMOTE" to { DisplaySettings(vm); RemoteSettings(vm) },
+            "🛠  SYSTEM" to {
+                advancedCard(); resetCard()
+                Text("Nova IPTV " + appVersion(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            },
+        )
+        @Composable
+        fun Group(n: Int) {
+            val (title, content) = groups[n]
+            Text(
+                "${n + 1}  $title", color = Color(0xFF9FC3FF), fontWeight = FontWeight.ExtraBold, fontSize = 12.sp,
+                letterSpacing = 0.6.sp, modifier = Modifier.padding(top = 10.dp, start = 4.dp),
+            )
+            content()
+        }
+        if (wideSettings) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) { (0..2).forEach { Group(it) } }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) { (3..6).forEach { Group(it) } }
+            }
+        } else {
+            groups.indices.forEach { Group(it) }
+        }
+
     }
     }
 
@@ -299,7 +337,7 @@ fun SettingsScreen(vm: MainViewModel) {
         AlertDialog(
             onDismissRequest = { renaming = null },
             title = { Text("Rename account") },
-            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
+            text = { TvTextField(value = name, onValueChange = { name = it }, singleLine = true) },
             confirmButton = { TextButton(onClick = { vm.renameAccount(acc, name); renaming = null }) { Text("Save") } },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
         )
@@ -381,10 +419,10 @@ fun EditAccountDialog(vm: MainViewModel, acc: Account, onDone: () -> Unit) {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(server, { server = it }, label = { Text("Server URL (or full M3U link)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(user, { user = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(
+                TvTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                TvTextField(server, { server = it }, label = { Text("Server URL (or full M3U link)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                TvTextField(user, { user = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                TvTextField(
                     pass, { pass = it }, label = { Text("Password") }, singleLine = true,
                     visualTransformation = if (showPass) androidx.compose.ui.text.input.VisualTransformation.None
                     else androidx.compose.ui.text.input.PasswordVisualTransformation(),

@@ -64,11 +64,12 @@ fun LinkScreen(vm: MainViewModel) {
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 700.dp
+        val linkScroll = rememberScrollState()
         Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.fillMaxSize().scrollBar(linkScroll).verticalScroll(linkScroll).padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            OutlinedTextField(
+            TvTextField(
                 value = link, onValueChange = { link = it }, singleLine = true,
                 label = { Text(if (wide) "Video link (mp4, mkv, m3u8, ts, m3u…)" else "Video link") },
                 trailingIcon = { PasteButton { link = it } },
@@ -79,12 +80,12 @@ fun LinkScreen(vm: MainViewModel) {
                 Text(if (advanced) "▾ Advanced (only if the website refuses)" else "▸ Advanced (only if the website refuses)", fontSize = 13.sp)
             }
             if (advanced) {
-                OutlinedTextField(
+                TvTextField(
                     value = referer, onValueChange = { referer = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                     label = { Text("Referer — the website's address, e.g. https://site.com/") },
                     trailingIcon = { PasteButton { referer = it } },
                 )
-                OutlinedTextField(
+                TvTextField(
                     value = agent, onValueChange = { agent = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                     label = { Text("User-Agent (browser name) — empty = automatic") },
                     trailingIcon = {

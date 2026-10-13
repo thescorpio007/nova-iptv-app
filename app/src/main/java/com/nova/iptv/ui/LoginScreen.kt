@@ -158,7 +158,7 @@ private fun SignInForm(vm: MainViewModel, hasAccounts: Boolean, accountsText: St
         )
         Text("Add another account", fontWeight = FontWeight.Bold)
     }
-    OutlinedTextField(
+    TvTextField(
         value = name, onValueChange = { name = it },
         label = { Text("Name (optional)") }, singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
@@ -174,7 +174,7 @@ private fun SignInForm(vm: MainViewModel, hasAccounts: Boolean, accountsText: St
             server = text
         }
     }
-    OutlinedTextField(
+    TvTextField(
         value = server,
         onValueChange = { setServer(it) },
         label = { Text("Server URL or M3U link") }, singleLine = true,
@@ -183,14 +183,14 @@ private fun SignInForm(vm: MainViewModel, hasAccounts: Boolean, accountsText: St
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
         modifier = Modifier.fillMaxWidth(),
     )
-    OutlinedTextField(
+    TvTextField(
         value = user, onValueChange = { user = it },
         label = { Text("Username") }, singleLine = true,
         trailingIcon = { PasteButton { user = it } },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
         modifier = Modifier.fillMaxWidth(),
     )
-    OutlinedTextField(
+    TvTextField(
         value = pass, onValueChange = { pass = it },
         label = { Text("Password") }, singleLine = true,
         visualTransformation = if (showPass) VisualTransformation.None else PasswordVisualTransformation(),
