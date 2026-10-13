@@ -118,7 +118,10 @@ class DownloadService : Service() {
         }
         // Several connections: pieces in watching order (falls back to one connection if the server refuses).
         val inPieces = Sidecar.file(start.path, "pieces").exists()
-        if ((inPieces || (conns > 1 && start.connections != 1)) &&
+        // Pieces also with ONE connection (one after the other): the film's beginning and end come first,
+        // so "Watch now" can start even when the index of an MP4 is at the end of the file.
+        val refused = start.note?.contains("refused") == true
+        if ((inPieces || !refused) &&
             PieceDownload(app, start, conns, limit) { title, total, done -> notifyProgress(title, total, done) }.run()
         ) return
         DownloadCenter.update(start.id, persist = false) { it.copy(connections = 1) }

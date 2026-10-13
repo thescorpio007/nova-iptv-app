@@ -139,13 +139,17 @@ class PieceDownload(
         if (total == 0L) return false
         if (total < 0) {
             Log.i("NovaTest", "DOWNLOAD ${start.title}: the server doesn't send pieces → 1 connection")
-            DownloadCenter.update(id) { it.copy(connections = 1, note = "The website refused several connections → downloading with 1") }
+            if (connections > 1) DownloadCenter.update(id) { it.copy(connections = 1, note = "The website refused several connections → downloading with 1") }
+            else DownloadCenter.update(id) { it.copy(note = "The server refused pieces → downloading from the start") }
             return false
         }
         val sidecar = Sidecar.file(start.path, "pieces")
         val map = PieceMap.of(start)?.takeIf { it.total == total } ?: PieceMap(total, sidecar).also {
             file.parentFile?.mkdirs()
+            // A download started earlier from the beginning (one connection): keep what is already saved.
+            val had = if (file.exists()) file.length().coerceAtMost(total) else 0L
             RandomAccessFile(file, "rw").use { raf -> raf.setLength(total) }
+            for (i in 0 until it.count) if (it.end(i) <= had) it.done[i] = true
             it.save()
         }
         PieceMap.register(id, map)

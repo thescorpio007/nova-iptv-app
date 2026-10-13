@@ -154,7 +154,7 @@ object DownloadCenter {
 
     fun pause(id: String) = update(id) {
         if (it.status == DownloadStatus.QUEUED || it.status == DownloadStatus.DOWNLOADING) {
-            it.copy(status = DownloadStatus.PAUSED)
+            it.copy(status = DownloadStatus.PAUSED, speed = 0)
         } else {
             it
         }
