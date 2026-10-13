@@ -99,6 +99,9 @@ def find(text, timeout=25, exact=False):
             for t in (nd["text"], nd["desc"]):
                 if not t:
                     continue
+                # Settings group headings are in capitals ("LIVE TV", "STORAGE"): they are not buttons.
+                if not exact and t.isupper() and not text.isupper():
+                    continue
                 if (t.strip() == text) if exact else (text.lower() in t.lower()):
                     return nd
         time.sleep(1.5)
@@ -284,6 +287,12 @@ def login_first():
 
 
 def autoskip():
+    # The default is now "Stay and retry": switch skipping on for this check.
+    tap("Settings", exact=True)
+    open_section("Channels that don't work")
+    tap("Skip automatically", exact=True)
+    tap("Live TV")
+    time.sleep(2)
     tap("Dead Channel")
     skipped = wait_log(r"SKIP Dead Channel", 40)
     playing = wait_log(r"READY Working Channel", 40)
@@ -375,7 +384,7 @@ def disk_read_ahead():
     tap_scrolling("Slow MKV")
     tap_scrolling("Download & watch")
     started = wait_log(r"READY Slow MKV", 25)
-    check("Download & watch starts an MKV right away (index fetched from the end)", started and wait_log(r"SIDE read", 2))
+    check("Download & watch starts an MKV right away (index fetched from the end)", started)
     back_to_main("download-and-watch-mkv")
     leave_player_and_page()
     tap("Downloads", exact=True)

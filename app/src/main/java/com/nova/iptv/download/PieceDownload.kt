@@ -44,6 +44,8 @@ class PieceMap(val total: Long, private val sidecar: File) {
     val count = ((total + PIECE - 1) / PIECE).toInt()
     val done = BooleanArray(count)
     val busy = BooleanArray(count)
+    /** Bytes already saved at the start of each piece not finished yet (the player can read them at once). */
+    val progress = java.util.concurrent.atomic.AtomicLongArray(count)
 
     /** Where the player reads now (bytes). */
     @Volatile var wantPos = 0L
@@ -51,20 +53,35 @@ class PieceMap(val total: Long, private val sidecar: File) {
     fun start(i: Int) = i * PIECE
     fun end(i: Int) = minOf(total, (i + 1) * PIECE) // exclusive
 
-    @Synchronized fun doneBytes(): Long = (0 until count).sumOf { if (done[it]) end(it) - start(it) else 0L }
+    @Synchronized fun doneBytes(): Long = (0 until count).sumOf { if (done[it]) end(it) - start(it) else progress.get(it) }
     @Synchronized fun complete() = done.all { it }
 
-    /** Bytes saved without a gap from [pos] on. */
+    /** Bytes saved without a gap from [pos] on (whole pieces, then the saved start of the next one). */
     @Synchronized fun contiguousFrom(pos: Long): Long {
         if (pos >= total) return 0
         var i = (pos / PIECE).toInt()
-        if (!done[i]) return 0
         while (i < count && done[i]) i++
-        return (if (i >= count) total else start(i)) - pos
+        val end = if (i >= count) total else start(i) + progress.get(i)
+        return (end - pos).coerceAtLeast(0)
+    }
+
+    /**
+     * One connection, and the player now waits for another part of the film (an MKV / MP4 index at the end,
+     * or a jump): the piece being fetched stops here (what it saved is kept) so the wanted one comes first.
+     */
+    @Synchronized fun shouldYield(i: Int): Boolean {
+        val want = wantPos
+        if (want >= total) return false
+        val w = (want / PIECE).toInt()
+        if (w == i || done[w] || busy[w]) return false
+        return contiguousFrom(want) == 0L
     }
 
     /** The next piece to fetch: first the film's beginning and end (its index), then from where you watch. */
     @Synchronized fun next(): Int? {
+        // The part the player is waiting for, first.
+        val w = (wantPos / PIECE).toInt().coerceIn(0, count - 1)
+        if (!done[w] && !busy[w] && contiguousFrom(wantPos) == 0L) { busy[w] = true; return w }
         val first = listOf(0, count - 1, count - 2).filter { it in 0 until count }
         first.firstOrNull { !done[it] && !busy[it] }?.let { busy[it] = true; return it }
         val from = (wantPos / PIECE).toInt().coerceIn(0, count - 1)
@@ -76,6 +93,7 @@ class PieceMap(val total: Long, private val sidecar: File) {
     @Synchronized fun finished(i: Int) {
         busy[i] = false
         done[i] = true
+        progress.set(i, 0)
         save()
     }
 
@@ -162,14 +180,16 @@ class PieceDownload(
                 RandomAccessFile(file, "rw").use { raf ->
                     while (running() && !rangeRefused.get() && errors.get() < 12) {
                         val i = map.next() ?: break
+                        var yielded = false
                         try {
+                            val from = map.start(i) + map.progress.get(i)
                             val req = Request.Builder().url(start.url).header("User-Agent", ua())
-                                .header("Range", "bytes=${map.start(i)}-${map.end(i) - 1}").build()
+                                .header("Range", "bytes=$from-${map.end(i) - 1}").build()
                             app.http.newCall(req).execute().use { r ->
                                 if (r.code == 200) { rangeRefused.set(true); throw IOException("pieces refused") }
                                 if (r.code != 206) throw IOException("Server returned HTTP ${r.code}")
                                 val input = r.body?.byteStream() ?: throw IOException("Empty response")
-                                var at = map.start(i)
+                                var at = from
                                 val buf = ByteArray(64 * 1024)
                                 while (at < map.end(i)) {
                                     if (!running()) throw IOException("stopped")
@@ -178,7 +198,14 @@ class PieceDownload(
                                     limit.take(n)
                                     synchronized(raf) { raf.seek(at); raf.write(buf, 0, n) }
                                     at += n
+                                    map.progress.set(i, at - map.start(i))
+                                    if (connections == 1 && at < map.end(i) && map.shouldYield(i)) { yielded = true; break }
                                 }
+                            }
+                            if (yielded) {
+                                map.failed(i) // not finished: continues later from what it saved
+                                Log.i("NovaTest", "PIECES ${start.title}: piece $i paused, the player needs another part first")
+                                continue
                             }
                             map.finished(i)
                             errors.set(0)
