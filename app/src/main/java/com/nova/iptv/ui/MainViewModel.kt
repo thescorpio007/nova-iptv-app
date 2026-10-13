@@ -870,7 +870,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun checkAges() {
         ageJob?.cancel()
         ageJob = viewModelScope.launch(Dispatchers.IO) {
-            com.nova.iptv.data.AgeFilter.check(nova, nova.http, accounts.value)
+            try {
+                com.nova.iptv.data.AgeFilter.check(nova, nova.http, accounts.value)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                android.util.Log.i("NovaTest", "AGES check error: $e")
+            }
         }
     }
 
@@ -1780,6 +1786,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         com.nova.iptv.data.AgeFilter.configure(storage)
         viewModelScope.launch(Dispatchers.IO) { com.nova.iptv.data.AgeFilter.load(nova) }
+        if (com.nova.iptv.data.CrashLog.isNew(nova)) android.widget.Toast.makeText(
+            nova, "Nova closed unexpectedly last time — see Settings › 7 System › Last problem", android.widget.Toast.LENGTH_LONG,
+        ).show()
         if (accounts.value.isNotEmpty()) reloadEverything()
         runStartup()
         // Search index: load at start (and when accounts change), update quietly when older than a day.

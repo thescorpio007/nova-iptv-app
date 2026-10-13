@@ -836,6 +836,20 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
 
     // ---- words in the name ----
     Text("🔤 Hide films & series with these words in the name", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+    val hasPin = vm.settings.collectAsStateWithLifecycle().value.hasPin
+    var wordsOpen by remember { mutableStateOf(false) }
+    if (hasPin && !wordsOpen) {
+        // Locked: the words are not shown to the children.
+        val onGroups = remember(ageV) { AF.WORD_GROUPS.filter { AF.groupOn(storage, it) } }
+        val count = remember(ageV) { onGroups.sumOf { AF.wordsOf(storage, it).size } }
+        Text(
+            "🔒 Word list locked — ${onGroups.size} groups on · $count words" +
+                (stats.groupCounts.filterKeys { k -> onGroups.any { it.id == k } }.values.sum().takeIf { it > 0 }?.let { " · ${nf.format(it)} titles hidden" } ?: ""),
+            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(onClick = { guard { wordsOpen = true } }) { Text("🔓 Show / edit the words (PIN)") }
+    } else {
+    if (hasPin) TextButton(onClick = { wordsOpen = false }) { Text("🔒 Hide the words again") }
     Hint("Upper/lower case and accents ignored · also found in “FR_Love_Story_4K” · plurals too (kiss → kisses) · ✕ removes a word.")
     AF.WORD_GROUPS.forEach { g ->
         val on = remember(ageV) { AF.groupOn(storage, g) }
@@ -881,6 +895,8 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
                 }
             }
         }
+    }
+
     }
 
     // ---- status ----
@@ -1045,6 +1061,31 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                     Text("${exceptions.size} exceptions · Back = close", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                     Button(onClick = onDismiss) { Text("Done") }
                 }
+            }
+        }
+    }
+}
+
+
+/** Settings › 7 System: why Nova closed by itself last time (to send to the developer). */
+@Composable
+fun LastProblemSettings() {
+    val context = LocalContext.current
+    var text by remember { mutableStateOf(com.nova.iptv.data.CrashLog.last(context)) }
+    LaunchedEffect(Unit) { com.nova.iptv.data.CrashLog.seen(context) }
+    SettingsCard("Last problem", summary = if (text == null) "none" else text!!.lineSequence().drop(1).firstOrNull()?.take(60)) {
+        if (text == null) {
+            Hint("Nova has not closed by itself since this was cleared.")
+        } else {
+            Hint("Why Nova closed by itself last time. Share it so the problem can be fixed (also saved in Download/NovaIPTV/Logs).")
+            Text(text!!.take(1500), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(android.content.Intent.EXTRA_TEXT, text)
+                    runCatching { context.startActivity(android.content.Intent.createChooser(send, "Share the problem").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }) { Text("Share") }
+                OutlinedButton(onClick = { com.nova.iptv.data.CrashLog.clear(context); text = null }) { Text("Clear") }
             }
         }
     }

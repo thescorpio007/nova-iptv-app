@@ -74,5 +74,6 @@ class NovaApp : Application() {
         Folders.customRoot = storage.storageRoot
         com.nova.iptv.data.Locations.init(this, storage)
         DownloadCenter.init(storage)
+        com.nova.iptv.data.CrashLog.install(this)
     }
 }

@@ -307,7 +307,7 @@ fun SettingsScreen(vm: MainViewModel) {
             "💾  STORAGE" to { StorageSettings(vm) },
             "🖥  SCREEN & REMOTE" to { DisplaySettings(vm); RemoteSettings(vm) },
             "🛠  SYSTEM" to {
-                advancedCard(); resetCard()
+                advancedCard(); LastProblemSettings(); resetCard()
                 Text("Nova IPTV " + appVersion(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             },
         )

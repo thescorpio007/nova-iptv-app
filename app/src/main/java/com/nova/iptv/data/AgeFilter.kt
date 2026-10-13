@@ -112,9 +112,12 @@ object AgeFilter {
     fun wordIn(name: String): String? {
         val words = activeWords
         if (words.isEmpty()) return null
+        wordCache[name]?.let { return it.ifEmpty { null } }
         val n = normalize(name)
-        for ((_, re) in words) re.find(n)?.let { return it.groupValues[1] }
-        return null
+        var found: String? = null
+        for ((_, re) in words) { re.find(n)?.let { found = it.groupValues[1] }; if (found != null) break }
+        if (wordCache.size < 200_000) wordCache[name] = found.orEmpty()
+        return found
     }
 
     /** How many titles of the index these words would hide, with 2 examples (for "Add a word" and the group counts). */
@@ -160,11 +163,20 @@ object AgeFilter {
         val wordsChanged = words.map { it.second.pattern } != activeWords.map { it.second.pattern }
         val exChanged = ex != exceptions
         exceptions = ex
+        if (wordsChanged) wordCache.clear()
         activeWords = words
         if (changed || wordsChanged || exChanged) bump()
     }
 
-    private fun bump() { version.value = version.value + 1 }
+    private fun bump() {
+        reasonCache.clear()
+        version.value = version.value + 1
+    }
+
+    /** Results already worked out (lists are redrawn often): cleared whenever something changes. */
+    private val reasonCache = ConcurrentHashMap<String, String>()
+    private val ruleCache = ConcurrentHashMap<String, Int>()
+    private val wordCache = ConcurrentHashMap<String, String>()
 
     // ------------------------------------------------------------------ rules
 
@@ -176,6 +188,11 @@ object AgeFilter {
     /** Rating guessed from the name and the group: 0 when nothing is clear. */
     fun ruleRating(name: String, group: String?): Int {
         val text = name + " " + group.orEmpty()
+        ruleCache[text]?.let { return it }
+        return ruleRatingNow(text, group).also { if (ruleCache.size < 200_000) ruleCache[text] = it }
+    }
+
+    private fun ruleRatingNow(text: String, group: String?): Int {
         return when {
             adultWords.containsMatchIn(text) -> ADULT
             horrorWords.containsMatchIn(text) -> 4
@@ -200,6 +217,12 @@ object AgeFilter {
         val lv = level
         if (lv == 0) return null
         if (code != "movie" && code != "series") return null
+        val ck = "$code|$key|${group.orEmpty()}"
+        reasonCache[ck]?.let { return it.ifEmpty { null } }
+        return reasonNow(code, key, name, group, lv).also { if (reasonCache.size < 300_000) reasonCache[ck] = it.orEmpty() }
+    }
+
+    private fun reasonNow(code: String, key: String, name: String, group: String?, lv: Int): String? {
         val rule = ruleRating(name, group)
         val r = ratingOf(code, key, name, group)
         val fromRule = r == rule && (source == "rules" || items[if (code == "series") "series|$key" else "movie|$key"].let { it == null || it == 0 })
@@ -452,7 +475,8 @@ object AgeFilter {
         Log.i(TAG, "AGES to check: ${todo.size}")
         if (todo.isEmpty()) { busy.value = false; status.value = summary(accounts); return@withContext }
         val done = java.util.concurrent.atomic.AtomicInteger(0)
-        val gate = Semaphore(10)
+        val gate = Semaphore(6)
+        var lastBump = System.currentTimeMillis()
         found.set(0); notFound.set(0); failed.set(0); lastError = null
         fun diag() {
             diagnosis.value = "🔎 TMDB: ${nf0.format(found.get())} found · ${nf0.format(notFound.get())} not found · ${nf0.format(failed.get())} failed" +
@@ -514,8 +538,12 @@ object AgeFilter {
                         }
                     }.awaitAll()
                     checkedAt = System.currentTimeMillis()
-                    save(context)
-                    bump()
+                    // Lists are redrawn at most every 20 s while checking (redrawing costs time on a TV box).
+                    if (System.currentTimeMillis() - lastBump > 20_000) {
+                        save(context)
+                        bump()
+                        lastBump = System.currentTimeMillis()
+                    }
                 }
             }
             diag()
@@ -523,12 +551,14 @@ object AgeFilter {
             Log.i(TAG, "AGES checked ${done.get()}: ${diagnosis.value}")
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            save(context)
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+            runCatching { save(context) }
             diag()
-            status.value = "Age check stopped: ${e.message}"
+            status.value = "Age check stopped: ${e.message ?: e.javaClass.simpleName}"
             Log.i(TAG, "AGES failed: $e")
         } finally {
+            runCatching { save(context) }
             busy.value = false
             bump()
         }
