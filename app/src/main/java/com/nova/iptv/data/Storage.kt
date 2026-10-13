@@ -262,6 +262,11 @@ class Storage(context: Context) {
         get() = prefs.getBoolean("double_back_live", true)
         set(value) = prefs.edit().putBoolean("double_back_live", value).apply()
 
+    /** Films & series: press Back twice to stop the video (avoids leaving it by mistake). */
+    var doubleBackVod: Boolean
+        get() = prefs.getBoolean("double_back_vod", true)
+        set(value) = prefs.edit().putBoolean("double_back_vod", value).apply()
+
     /** Main screen: press Back twice to close Nova. */
     var doubleBackExit: Boolean
         get() = prefs.getBoolean("double_back_exit", true)

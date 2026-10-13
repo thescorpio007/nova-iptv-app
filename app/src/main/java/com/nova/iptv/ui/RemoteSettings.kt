@@ -64,6 +64,12 @@ fun RemoteSettings(vm: MainViewModel) {
             listOf("once" to "Press once to leave", "twice" to "Press twice to leave"),
             if (s.doubleBackLive) "twice" else "once",
         ) { vm.setDoubleBackLive(it == "twice") }
+        Text("Back button in films & series", fontWeight = FontWeight.Medium)
+        var vodTwice by remember { mutableStateOf(storage.doubleBackVod) }
+        ChoicePills(
+            listOf("twice" to "Press twice to stop the video", "once" to "Press once to stop"),
+            if (vodTwice) "twice" else "once",
+        ) { storage.doubleBackVod = it == "twice"; vodTwice = it == "twice" }
         Text("Back button on the main screen", fontWeight = FontWeight.Medium)
         ChoicePills(
             listOf("twice" to "Press twice to close Nova", "once" to "Press once to close"),

@@ -2168,6 +2168,14 @@ class PlayerActivity : ComponentActivity() {
                     Toast.makeText(this, "Press Back again to return to the list", Toast.LENGTH_SHORT).show()
                 }
             }
+            item != null && !item.isLive && app.storage.doubleBackVod -> {
+                val now = System.currentTimeMillis()
+                if (now - lastBackAt < 2000) finish()
+                else {
+                    lastBackAt = now
+                    Toast.makeText(this, "Press Back again to stop the video", Toast.LENGTH_SHORT).show()
+                }
+            }
             else -> finish()
         }
     }

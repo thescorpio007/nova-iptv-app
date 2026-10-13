@@ -1316,18 +1316,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun movieItem(m: Movie): PlayItem? {
         val acc = account(m.accountId) ?: return null
+        val url = api.movieUrl(acc, m.streamId, m.extension)
         return PlayItem(
-            saved(m), api.movieUrl(acc, m.streamId, m.extension), isLive = false,
+            saved(m), url, isLive = false,
             subtitle = m.rating?.let { "Rating $it" }, downloadExt = m.extension,
+            downloadId = runningDownloadOf(url),
         )
+    }
+
+    /**
+     * This film / episode is downloading right now: play it from the download (Watch now) instead of opening
+     * a second connection to the server, which most accounts refuse (black screen, "0 MB on disk").
+     */
+    private fun runningDownloadOf(url: String): String? {
+        val d = DownloadCenter.items.value.firstOrNull { it.url == url } ?: return null
+        if (d.status != com.nova.iptv.data.DownloadStatus.DOWNLOADING && d.status != com.nova.iptv.data.DownloadStatus.QUEUED) return null
+        return DownloadCenter.watchNow(nova, d.title, d.url, d.path.substringAfterLast('.', "mp4"), d.kind, d.icon).id
     }
 
     fun episodeItems(info: SeriesInfo, season: Int): List<PlayItem> {
         val acc = account(info.series.accountId) ?: return emptyList()
         return info.episodes[season].orEmpty().map {
+            val url = api.episodeUrl(acc, it.id, it.extension)
             PlayItem(
-                saved(it, info.series), api.episodeUrl(acc, it.id, it.extension), isLive = false,
+                saved(it, info.series), url, isLive = false,
                 subtitle = it.plot, downloadExt = it.extension, seriesKey = info.series.key,
+                downloadId = DownloadCenter.items.value.firstOrNull { d -> d.url == url &&
+                    (d.status == com.nova.iptv.data.DownloadStatus.DOWNLOADING || d.status == com.nova.iptv.data.DownloadStatus.QUEUED) }?.id,
             )
         }
     }
