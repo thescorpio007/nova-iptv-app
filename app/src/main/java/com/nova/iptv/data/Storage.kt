@@ -77,6 +77,16 @@ class Storage(context: Context) {
         get() = prefs.getInt("live_grow_target", 60)
         set(value) = prefs.edit().putInt("live_grow_target", value).apply()
 
+    /** Search index: also save index-latest.novaindex in Download/NovaIPTV/Index after every update. */
+    var autoExportIndex: Boolean
+        get() = prefs.getBoolean("auto_export_index", true)
+        set(value) = prefs.edit().putBoolean("auto_export_index", value).apply()
+
+    /** When the search index was last exported (0 = never). */
+    var indexExportedAt: Long
+        get() = prefs.getLong("index_exported_at", 0L)
+        set(value) = prefs.edit().putLong("index_exported_at", value).apply()
+
     /** Live TV: when the line stays slower than the channel needs, switch to the same channel on your other server. */
     var liveSwitchWhenSlow: Boolean
         get() = prefs.getBoolean("live_switch_slow", true)

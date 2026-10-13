@@ -127,6 +127,7 @@ fun SettingsScreen(vm: MainViewModel) {
                 Button(onClick = { vm.openLogin(true) }) { Text("+ Add account") }
                 OutlinedButton(onClick = { vm.loadUserInfo() }) { Text("Refresh status") }
             }
+            SearchIndexSection(vm)
             AccountsLinkSection(vm)
         }
         }

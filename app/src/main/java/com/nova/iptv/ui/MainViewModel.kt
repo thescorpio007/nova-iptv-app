@@ -1890,16 +1890,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val accs = accounts.value
             com.nova.iptv.data.SearchIndex.load(nova, accs)
             val todo = accs.filter { force || com.nova.iptv.data.SearchIndex.needsUpdate(it) }
-            if (todo.isEmpty()) { checkAges(); return@launch }
+            if (todo.isEmpty()) {
+                // First run after this feature arrived: make sure index-latest exists.
+                if (storage.autoExportIndex && !java.io.File(com.nova.iptv.data.SearchIndex.folder(nova), com.nova.iptv.data.SearchIndex.LATEST).exists()) autoExportIndex()
+                checkAges(); return@launch
+            }
             com.nova.iptv.data.SearchIndex.busy.value = true
             try {
                 todo.forEach { com.nova.iptv.data.SearchIndex.update(nova, nova.http, { storage.userAgent }, it) }
             } finally {
                 com.nova.iptv.data.SearchIndex.busy.value = false
             }
+            if (storage.autoExportIndex) autoExportIndex()
             checkAges()
             if (query.value.trim().length >= 2) withContext(Dispatchers.Main) { setQuery(query.value) }
         }
+    }
+
+    /** Changes after an export or import, so the Search index panel redraws. */
+    val indexExportTick = MutableStateFlow(0)
+
+    private fun appVersion(): String =
+        runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "2.0"
+
+    /** Writes index-latest.novaindex (all accounts). Never throws. */
+    private fun autoExportIndex() {
+        runCatching { com.nova.iptv.data.SearchIndex.exportFile(nova, accounts.value, appVersion(), latest = true) }
+            .onSuccess { if (it != null) { storage.indexExportedAt = System.currentTimeMillis(); indexExportTick.value++ } }
+            .onFailure { android.util.Log.i("NovaTest", "INDEX auto-export failed: $it") }
+    }
+
+    /** Export button: a dated file for [accs] (and refreshes index-latest). Blocking: call off the main thread. */
+    fun exportIndex(accs: List<Account>): Pair<java.io.File, Int>? {
+        val r = com.nova.iptv.data.SearchIndex.exportFile(nova, accs, appVersion(), latest = false) ?: return null
+        com.nova.iptv.data.SearchIndex.exportFile(nova, accounts.value, appVersion(), latest = true)
+        storage.indexExportedAt = System.currentTimeMillis()
+        indexExportTick.value++
+        return r
+    }
+
+    /** Writes the index of [accs] to a place the user picked (Other location…). */
+    fun exportIndexTo(out: java.io.OutputStream, accs: List<Account>): Int =
+        com.nova.iptv.data.SearchIndex.exportTo(out, com.nova.iptv.data.SearchIndex.exportable(accs), appVersion())
+
+    /** Imports an index file; keeps a copy in the Index folder when it came from elsewhere. Blocking. */
+    fun importIndex(bytes: ByteArray, fromIndexFolder: Boolean): com.nova.iptv.data.SearchIndex.ImportResult {
+        val p = com.nova.iptv.data.SearchIndex.readPortable(bytes.inputStream())
+            ?: throw IllegalArgumentException("This isn't a Nova search index file (.novaindex)")
+        val r = com.nova.iptv.data.SearchIndex.importPortable(nova, p, accounts.value)
+        if (!fromIndexFolder) com.nova.iptv.data.SearchIndex.keepCopy(nova, bytes)
+        indexExportTick.value++
+        if (query.value.trim().length >= 2) viewModelScope.launch(Dispatchers.Main) { setQuery(query.value) }
+        return r
     }
 
     // Runs last, once every property above exists (the start-up check uses them).
