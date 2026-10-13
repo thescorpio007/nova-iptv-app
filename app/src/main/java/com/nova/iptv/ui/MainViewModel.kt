@@ -1953,15 +1953,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** .novaindex files in the chosen folder: (name, link, modified), index-latest first then newest. */
     fun treeIndexFiles(): List<Triple<String, android.net.Uri, Long>> {
         val tree = indexTree ?: return emptyList()
-        val c = android.provider.DocumentsContract
-        val kids = c.buildChildDocumentsUriUsingTree(tree, c.getTreeDocumentId(tree))
+        val kids = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
         val out = ArrayList<Triple<String, android.net.Uri, Long>>()
         runCatching {
-            nova.contentResolver.query(kids, arrayOf(c.Document.COLUMN_DOCUMENT_ID, c.Document.COLUMN_DISPLAY_NAME, c.Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { cur ->
+            nova.contentResolver.query(kids, arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME, android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { cur ->
                 while (cur.moveToNext()) {
                     val name = cur.getString(1) ?: continue
                     if (name.endsWith("." + com.nova.iptv.data.SearchIndex.EXT, ignoreCase = true))
-                        out += Triple(name, c.buildDocumentUriUsingTree(tree, cur.getString(0)), cur.getLong(2))
+                        out += Triple(name, android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, cur.getString(0)), cur.getLong(2))
                 }
             }
         }
@@ -1971,10 +1970,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Writes an export into the chosen folder (overwriting a file with the same name, whoever made it). */
     private fun exportToTree(name: String, accs: List<Account>) {
         val tree = indexTree ?: return
-        val c = android.provider.DocumentsContract
         val cr = nova.contentResolver
         val target = treeIndexFiles().firstOrNull { it.first == name }?.second
-            ?: c.createDocument(cr, c.buildDocumentUriUsingTree(tree, c.getTreeDocumentId(tree)), "application/octet-stream", name)
+            ?: android.provider.DocumentsContract.createDocument(cr, android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree)), "application/octet-stream", name)
             ?: throw IllegalStateException("Could not create $name in the chosen folder")
         // Written to memory first: the file on disk is only replaced by a complete index.
         val bytes = java.io.ByteArrayOutputStream().also { com.nova.iptv.data.SearchIndex.exportTo(it, com.nova.iptv.data.SearchIndex.exportable(accs), appVersion()) }.toByteArray()
