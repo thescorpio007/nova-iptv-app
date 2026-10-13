@@ -287,6 +287,28 @@ class Storage(context: Context) {
         get() = prefs.getString("watchdog_mode", "live") ?: "live"
         set(value) = prefs.edit().putString("watchdog_mode", value).apply()
 
+    /** Parental age filter (USA ratings): 0 OFF, 1 G, 2 PG, 3 PG-13, 4 R, 5 NC-17 = the highest rating allowed. */
+    var ageLevel: Int
+        get() = prefs.getInt("age_level", 0)
+        set(value) = prefs.edit().putInt("age_level", value).apply()
+    /** "tmdb" (film database) or "rules" (genre & name). */
+    var ageSource: String
+        get() = prefs.getString("age_source", "tmdb") ?: "tmdb"
+        set(value) = prefs.edit().putString("age_source", value).apply()
+    var ageHideUnknown: Boolean
+        get() = prefs.getBoolean("age_hide_unknown", true)
+        set(value) = prefs.edit().putBoolean("age_hide_unknown", value).apply()
+    /** Live channels: "name" (hide Adult, XXX, 18+, Horror…) or "allow" (only the groups you allow). */
+    var ageLiveMode: String
+        get() = prefs.getString("age_live_mode", "name") ?: "name"
+        set(value) = prefs.edit().putString("age_live_mode", value).apply()
+    var ageAllowedGroups: Set<String>
+        get() = prefs.getString("age_allowed_groups", "")!!.split('\n').filter { it.isNotBlank() }.toSet()
+        set(value) = prefs.edit().putString("age_allowed_groups", value.joinToString("\n")).apply()
+    var tmdbKey: String
+        get() = prefs.getString("tmdb_key", "") ?: ""
+        set(value) = prefs.edit().putString("tmdb_key", value).apply()
+
     /** Downloads: connections (1–16) and speed limit (MB/s, 0 = none), for your IPTV servers and for other links. */
     var dlConnServers: Int
         get() = prefs.getInt("dl_conn_servers", 1)

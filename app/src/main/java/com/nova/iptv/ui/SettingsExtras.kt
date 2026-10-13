@@ -219,6 +219,7 @@ fun ParentalSettings(vm: MainViewModel) {
     var askPinFor by remember { mutableStateOf<String?>(null) } // "list", "change", "remove"
     var setNewPin by remember { mutableStateOf(false) }
     var showList by remember { mutableStateOf(false) }
+    var pendingAge by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     SettingsCard("Hidden items & parental control", summary = "${hidden.size} hidden  ·  " + if (s.hasPin) "PIN on" else "no PIN") {
         Hint(
@@ -242,6 +243,7 @@ fun ParentalSettings(vm: MainViewModel) {
         Button(onClick = { if (s.hasPin && !PinGate.unlocked(true)) askPinFor = "list" else showList = true }) {
             Text("Hidden items (${hidden.size})")
         }
+        AgeFilterSettings(vm, guard = { action -> if (s.hasPin && !PinGate.unlocked(true)) { pendingAge = action; askPinFor = "age" } else action() })
     }
 
     askPinFor?.let { purpose ->
@@ -254,6 +256,7 @@ fun ParentalSettings(vm: MainViewModel) {
                 PinGate.unlockNow()
                 when (purpose) {
                     "list" -> showList = true
+                    "age" -> { pendingAge?.invoke(); pendingAge = null }
                     "change" -> setNewPin = true
                     "remove" -> {
                         vm.setPin(null)
@@ -727,3 +730,103 @@ private fun Modifier.pinGuard(): Modifier {
 
 /** Whether a parental PIN is set (provided by the Settings screen). */
 val LocalPinSet = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+
+// =============================================================================== AGE FILTER (USA ratings)
+
+@Composable
+private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
+    val context = LocalContext.current
+    val storage = (context.applicationContext as com.nova.iptv.NovaApp).storage
+    val ageV by com.nova.iptv.data.AgeFilter.version.collectAsStateWithLifecycle()
+    val checking by com.nova.iptv.data.AgeFilter.busy.collectAsStateWithLifecycle()
+    val status by vm.ageStatus.collectAsStateWithLifecycle()
+    val accounts by vm.accounts.collectAsStateWithLifecycle()
+    val level = remember(ageV) { storage.ageLevel }
+    val source = remember(ageV) { storage.ageSource }
+    val hideUnknown = remember(ageV) { storage.ageHideUnknown }
+    val liveMode = remember(ageV) { storage.ageLiveMode }
+    var key by remember { mutableStateOf(storage.tmdbKey) }
+    val summary = remember(ageV, checking) { com.nova.iptv.data.AgeFilter.summary(accounts) }
+    val green = androidx.compose.ui.graphics.Color(0xFF2EE66B)
+
+    Text("🛡 Age filter — USA ratings (MPA)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+    Hint("Choose the highest rating allowed. Everything above it is hidden from lists, Search, Recent and Favourites.")
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        com.nova.iptv.data.AgeFilter.LEVELS.forEachIndexed { i, name ->
+            val on = i == level
+            FocusBox(
+                onClick = { if (!on) guard { vm.setAge { it.ageLevel = i } } },
+                selected = on,
+                modifier = Modifier.fillMaxWidth().background(if (on) green.copy(alpha = 0.18f) else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(10.dp)),
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, fontWeight = FontWeight.ExtraBold, modifier = Modifier.width(64.dp), color = if (on) green else MaterialTheme.colorScheme.onSurface)
+                    Text((if (on) "✓ " else "") + com.nova.iptv.data.AgeFilter.LEVEL_NOTES[i], fontSize = 13.sp,
+                        color = if (on) green else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+    Hint("Series use the US TV ratings: G = TV-Y · TV-Y7 · TV-G  |  PG = TV-PG  |  PG-13 = TV-14  |  R / NC-17 = TV-MA")
+    if (level == 0) return
+
+    Text("Where the rating comes from", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+    ChoiceRow(listOf("tmdb" to "Film database (TMDB) · US rating", "rules" to "Genre & name rules"), source) { v ->
+        guard { vm.setAge { it.ageSource = v } }
+    }
+    if (source == "tmdb") {
+        TvTextField(
+            value = key, onValueChange = { key = it.trim(); storage.tmdbKey = key; com.nova.iptv.data.AgeFilter.configure(storage) },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+            label = { Text("TMDB key (free)") },
+            visualTransformation = PasswordVisualTransformation(),
+            trailingIcon = { PasteButton { key = it.trim(); storage.tmdbKey = key; com.nova.iptv.data.AgeFilter.configure(storage) } },
+        )
+        Hint("Free key: themoviedb.org → create an account → Settings → API (the “API Key” or the long “Read Access Token”). " +
+            "French titles and names like “FR_Le Roi Lion_4K (2019)” are cleaned and matched with the year.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { vm.checkAges() }, enabled = !checking && key.isNotBlank()) { Text(if (checking) "Checking…" else "⟳ Check now") }
+            TextButton(onClick = { guard { com.nova.iptv.data.AgeFilter.forget(context); vm.checkAges() } }, enabled = !checking) { Text("Check all again") }
+        }
+    }
+
+    Text("Titles with no age found", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+    ChoiceRow(listOf("show" to "Show them", "hide" to "Hide them (stricter)"), if (hideUnknown) "hide" else "show") { v ->
+        guard { vm.setAge { it.ageHideUnknown = v == "hide" } }
+    }
+
+    Text("Live channels", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+    ChoiceRow(listOf("name" to "Hide by name (Adult, XXX, 18+, Horror…)", "allow" to "Only groups I allow"), liveMode) { v ->
+        guard { vm.setAge { it.ageLiveMode = v } }
+    }
+    if (liveMode == "allow") {
+        val groups = remember(ageV) { vm.liveGroupsForAge() }
+        val allowed = remember(ageV) { storage.ageAllowedGroups }
+        val multi = accounts.size > 1
+        Hint("Tick the live groups the children may watch (${allowed.size} allowed). All other groups are hidden.")
+        if (groups.isEmpty()) Hint("Open Live TV once so the groups are loaded.")
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            itemsIndexed(groups) { _, g ->
+                val on = g.key in allowed
+                FocusBox(onClick = {
+                    guard { vm.setAge { st -> st.ageAllowedGroups = if (on) st.ageAllowedGroups - g.key else st.ageAllowedGroups + g.key } }
+                }, selected = on, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        (if (on) "☑  " else "☐  ") + g.name + (if (multi) "  ·  " + vm.accountName(g.accountId) else ""),
+                        color = if (on) green else MaterialTheme.colorScheme.onSurface, fontSize = 14.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    Text(
+        if (checking && status.isNotBlank()) status else if (status.startsWith("Age check stopped") || status.startsWith("Add your")) status else summary,
+        fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFBFF5D3),
+        modifier = Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color(0xFF0F2A1C), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 7.dp),
+    )
+    Text("🔒 Changing the level or turning it OFF asks for your PIN" + if (!vm.settings.value.hasPin) " (set a PIN above first)" else "",
+        fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFFFD27A))
+}

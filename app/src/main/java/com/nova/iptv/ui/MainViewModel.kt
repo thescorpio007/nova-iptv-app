@@ -658,7 +658,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return accounts.value.map { acc ->
             GroupSection(
                 account = acc,
-                groups = all.filter { it.accountId == acc.id && (showsHidden(edit) || "${z.code}|${it.key}" !in o.hiddenGroups) },
+                groups = all.filter {
+                    it.accountId == acc.id && (showsHidden(edit) || "${z.code}|${it.key}" !in o.hiddenGroups) &&
+                        !com.nova.iptv.data.AgeFilter.groupBlocked(z.code, it.key, it.name)
+                },
                 closed = "${z.code}|${acc.id}" in o.closedSections,
                 error = z.catErrors.value[acc.id],
             )
@@ -819,8 +822,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (showsHidden(edit)) ordered else ordered.filter { "${z.code}|${z.keyOf(it)}" !in o.hiddenItems }
             }
         }
-        if (edit || key == NEW || sort == "custom") return shown
-        return sortItems(z, shown, sort)
+        val names = if (com.nova.iptv.data.AgeFilter.level > 0) groupNamesOf(z) else emptyMap()
+        val allowed = if (com.nova.iptv.data.AgeFilter.level == 0) shown else shown.filter { !ageBlocked(z, it, names) }
+        if (edit || key == NEW || sort == "custom") return allowed
+        return sortItems(z, allowed, sort)
+    }
+
+    // ---------- parental age filter (USA ratings) ----------
+
+    private fun groupNamesOf(z: Zone<*>): Map<String, String> = z.cats.value.items.associate { it.key to it.name }
+
+    /** True when the age filter hides this item. */
+    fun <T> ageBlocked(z: Zone<T>, item: T, groupNames: Map<String, String>? = null): Boolean {
+        if (com.nova.iptv.data.AgeFilter.level == 0) return false
+        val key = z.keyOf(item)
+        val cat = z.categoryOf(item)
+        val gk = if (cat.isBlank()) null else key.substringBefore('|') + "|" + cat
+        val gname = gk?.let { (groupNames ?: groupNamesOf(z))[it] }
+        return if (z.code == "live") com.nova.iptv.data.AgeFilter.liveBlocked(key, z.nameOf(item), gname, gk)
+        else com.nova.iptv.data.AgeFilter.blocked(z.code, key, z.nameOf(item), gname)
+    }
+
+    /** Number of items of the open group hidden by age (for the small line above the list). */
+    fun <T> ageHiddenCount(z: Zone<T>, list: List<T>): Int {
+        if (com.nova.iptv.data.AgeFilter.level == 0) return 0
+        val names = groupNamesOf(z)
+        return list.count { ageBlocked(z, it, names) }
+    }
+
+    fun savedBlocked(s: SavedItem): Boolean = when (s.type) {
+        ItemType.LIVE -> com.nova.iptv.data.AgeFilter.liveBlocked(s.key, s.name, null, null)
+        ItemType.MOVIE -> com.nova.iptv.data.AgeFilter.blocked("movie", s.key, s.name, null)
+        ItemType.SERIES -> com.nova.iptv.data.AgeFilter.blocked("series", s.key, s.name, null)
+        else -> false
+    }
+
+    val ageStatus = com.nova.iptv.data.AgeFilter.status
+    private var ageJob: Job? = null
+
+    /** Saves the age settings and (re)starts the age check in the background. */
+    fun setAge(change: (com.nova.iptv.data.Storage) -> Unit) {
+        change(storage)
+        com.nova.iptv.data.AgeFilter.configure(storage)
+        checkAges()
+    }
+
+    fun checkAges() {
+        ageJob?.cancel()
+        ageJob = viewModelScope.launch(Dispatchers.IO) {
+            com.nova.iptv.data.AgeFilter.check(nova, nova.http, accounts.value)
+        }
+    }
+
+    /** Live groups of all accounts (for "Only groups I allow"). */
+    fun liveGroupsForAge(): List<Category> {
+        if (live.cats.value.items.isEmpty() && !live.cats.value.loading) loadCategories(live)
+        return live.cats.value.items
     }
 
     private fun <T> sortItems(z: Zone<T>, list: List<T>, sort: String): List<T> = when (sort) {
@@ -1173,11 +1230,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 val result = withContext(Dispatchers.Default) {
+                    val liveNames = groupNamesOf(live); val filmNames = groupNamesOf(films); val seriesNames = groupNamesOf(series)
                     fun hidden(code: String, key: String) = "$code|$key" in o.hiddenItems
                     SearchResults(
-                        channels = lives.filter { it.name.contains(text, true) && !hidden("live", it.key) }.take(150),
-                        movies = movies.filter { it.name.contains(text, true) && !hidden("movie", it.key) }.take(150),
-                        series = seriesList.filter { it.name.contains(text, true) && !hidden("series", it.key) }.take(150),
+                        channels = lives.filter { it.name.contains(text, true) && !hidden("live", it.key) && !ageBlocked(live, it, liveNames) }.take(150),
+                        movies = movies.filter { it.name.contains(text, true) && !hidden("movie", it.key) && !ageBlocked(films, it, filmNames) }.take(150),
+                        series = seriesList.filter { it.name.contains(text, true) && !hidden("series", it.key) && !ageBlocked(series, it, seriesNames) }.take(150),
                         error = failures.takeIf { it.isNotEmpty() }?.joinToString("\n"),
                     )
                 }
@@ -1688,19 +1746,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val accs = accounts.value
             com.nova.iptv.data.SearchIndex.load(nova, accs)
             val todo = accs.filter { force || com.nova.iptv.data.SearchIndex.needsUpdate(it) }
-            if (todo.isEmpty()) return@launch
+            if (todo.isEmpty()) { checkAges(); return@launch }
             com.nova.iptv.data.SearchIndex.busy.value = true
             try {
                 todo.forEach { com.nova.iptv.data.SearchIndex.update(nova, nova.http, { storage.userAgent }, it) }
             } finally {
                 com.nova.iptv.data.SearchIndex.busy.value = false
             }
+            checkAges()
             if (query.value.trim().length >= 2) withContext(Dispatchers.Main) { setQuery(query.value) }
         }
     }
 
     // Runs last, once every property above exists (the start-up check uses them).
     init {
+        com.nova.iptv.data.AgeFilter.configure(storage)
+        viewModelScope.launch(Dispatchers.IO) { com.nova.iptv.data.AgeFilter.load(nova) }
         if (accounts.value.isNotEmpty()) reloadEverything()
         runStartup()
         // Search index: load at start (and when accounts change), update quietly when older than a day.

@@ -52,6 +52,8 @@ data class Movie(
     val extension: String,
     val added: Long = 0L,
     val year: Int? = null,
+    /** The film's number in the TMDB film database (when the server gives it), for the age filter. */
+    val tmdb: String? = null,
 ) {
     val key: String get() = "$accountId|$streamId"
 }
@@ -66,6 +68,7 @@ data class Series(
     val rating: String?,
     val added: Long = 0L,
     val year: Int? = null,
+    val tmdb: String? = null,
 ) {
     val key: String get() = "$accountId|$seriesId"
 }

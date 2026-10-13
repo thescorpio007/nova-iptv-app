@@ -448,7 +448,8 @@ private fun <T> GroupPanel(
     val favs by vm.favorites.collectAsStateWithLifecycle()
     val accounts by vm.accounts.collectAsStateWithLifecycle()
     val multi = accounts.size > 1
-    val sections = remember(cats, errors, o, edit, accounts) { vm.sections(z, o, edit) }
+    val ageV by com.nova.iptv.data.AgeFilter.version.collectAsStateWithLifecycle()
+    val sections = remember(cats, errors, o, edit, accounts, ageV) { vm.sections(z, o, edit) }
     val moving by vm.movingKey.collectAsStateWithLifecycle()
     val picked by vm.pickedKey.collectAsStateWithLifecycle()
     val groupListState = rememberLazyListState()
@@ -711,7 +712,8 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
     val accounts by vm.accounts.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val sort = settings.sorts["live"] ?: "custom"
-    val shown = remember(state.items, o, edit, selected, sort) { vm.visibleItems(z, state.items, o, edit, sort) }
+    val ageV by com.nova.iptv.data.AgeFilter.version.collectAsStateWithLifecycle()
+    val shown = remember(state.items, o, edit, selected, sort, ageV) { vm.visibleItems(z, state.items, o, edit, sort) }
     val keys = remember(shown) { uniqueKeys(shown.map { it.key }) }
     val lastKey = recent.firstOrNull { it.type == ItemType.LIVE }?.key
     val listState = rememberLazyListState()
@@ -925,7 +927,8 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
     val sort = settings.sorts["movie"] ?: "custom"
     val favs by vm.favorites.collectAsStateWithLifecycle()
     val favKeys = remember(favs) { favs.map { "${it.type}|${it.accountId}|${it.id}" }.toSet() }
-    val shown = remember(state.items, o, edit, selected, sort) { vm.visibleItems(z, state.items, o, edit, sort) }
+    val ageV by com.nova.iptv.data.AgeFilter.version.collectAsStateWithLifecycle()
+    val shown = remember(state.items, o, edit, selected, sort, ageV) { vm.visibleItems(z, state.items, o, edit, sort) }
     val keys = remember(shown) { uniqueKeys(shown.map { it.key }) }
     val posterBack = rememberPosterReturn(vm, remember(shown) { shown.map { it.key } })
     // Double click / double OK on a poster: "Hide …?" (Yes / No).
@@ -939,6 +942,10 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
     val picked by vm.pickedKey.collectAsStateWithLifecycle()
     val canMove = selected != MainViewModel.NEW
 
+    val ageHidden = remember(state.items, selected, ageV) { vm.ageHiddenCount(z, state.items) }
+    Column(Modifier.fillMaxSize()) {
+    AgeBanner(ageHidden, "films")
+    Box(Modifier.weight(1f).fillMaxWidth()) {
     when {
         state.loading -> Loading()
         state.error != null -> ErrorBox(state.error ?: "", vm::reloadCurrent)
@@ -1002,6 +1009,8 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
             }
         }
     }
+    }
+    }
     // Drawn last: on top of the posters.
     hideAsk?.let { item ->
         HideAskDialog(item.name, item.icon, onYes = {
@@ -1029,7 +1038,8 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
     val sort = settings.sorts["series"] ?: "custom"
     val favs by vm.favorites.collectAsStateWithLifecycle()
     val favKeys = remember(favs) { favs.map { "${it.type}|${it.accountId}|${it.id}" }.toSet() }
-    val shown = remember(state.items, o, edit, selected, sort) { vm.visibleItems(z, state.items, o, edit, sort) }
+    val ageV by com.nova.iptv.data.AgeFilter.version.collectAsStateWithLifecycle()
+    val shown = remember(state.items, o, edit, selected, sort, ageV) { vm.visibleItems(z, state.items, o, edit, sort) }
     val keys = remember(shown) { uniqueKeys(shown.map { it.key }) }
     val posterBack = rememberPosterReturn(vm, remember(shown) { shown.map { it.key } })
     // Double click / double OK on a poster: "Hide …?" (Yes / No).
@@ -1041,6 +1051,10 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
     val picked by vm.pickedKey.collectAsStateWithLifecycle()
     val canMove = selected != MainViewModel.NEW
 
+    val ageHidden = remember(state.items, selected, ageV) { vm.ageHiddenCount(z, state.items) }
+    Column(Modifier.fillMaxSize()) {
+    AgeBanner(ageHidden, "series")
+    Box(Modifier.weight(1f).fillMaxWidth()) {
     when {
         state.loading -> Loading()
         state.error != null -> ErrorBox(state.error ?: "", vm::reloadCurrent)
@@ -1103,6 +1117,8 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
             }
         }
     }
+    }
+    }
     // Drawn last: on top of the posters.
     hideAsk?.let { item ->
         HideAskDialog(item.name, item.cover, onYes = {
@@ -1125,7 +1141,8 @@ private fun RecentScreen(vm: MainViewModel, onPlay: PlayFn) {
     val recent by vm.recent.collectAsStateWithLifecycle()
     val favs by vm.favorites.collectAsStateWithLifecycle()
     val accounts by vm.accounts.collectAsStateWithLifecycle()
-    val list = recent.filter { r -> accounts.any { it.id == r.accountId } }
+    val ageV by com.nova.iptv.data.AgeFilter.version.collectAsStateWithLifecycle()
+    val list = remember(recent, accounts, ageV) { recent.filter { r -> accounts.any { it.id == r.accountId } && !vm.savedBlocked(r) } }
 
     if (list.isEmpty()) {
         EmptyText("Nothing watched yet.")
@@ -1416,4 +1433,19 @@ private fun editLine(vm: MainViewModel, key: String, edit: Boolean): Pair<Modifi
         .focusGroup()
         .hoverable(hover)
     return mod to (active == key || picked == raw)
+}
+
+/** "🛡 PG · 9 films hidden in this group" (parental age filter). */
+@Composable
+private fun AgeBanner(count: Int, what: String) {
+    if (count <= 0) return
+    val lv = com.nova.iptv.data.AgeFilter.LEVELS.getOrElse(com.nova.iptv.data.AgeFilter.level) { "" }
+    Text(
+        "🛡 $lv · $count $what hidden in this group",
+        fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFBFF5D3),
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp)
+            .background(androidx.compose.ui.graphics.Color(0xFF0F2A1C), RoundedCornerShape(8.dp))
+            .border(1.dp, androidx.compose.ui.graphics.Color(0x552EE66B), RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
 }

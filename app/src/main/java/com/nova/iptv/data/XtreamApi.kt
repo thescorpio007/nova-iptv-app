@@ -118,6 +118,7 @@ class XtreamApi(
                 extension = o.str("container_extension") ?: "mp4",
                 added = o.str("added")?.toDoubleOrNull()?.toLong() ?: 0L,
                 year = yearOf(o, o.str("name")),
+                tmdb = (o.str("tmdb") ?: o.str("tmdb_id"))?.trim()?.takeIf { it.isNotEmpty() && it != "0" },
             )
         }
     }
@@ -138,6 +139,7 @@ class XtreamApi(
                 rating = ratingOf(o),
                 added = (o.str("last_modified") ?: o.str("added"))?.toDoubleOrNull()?.toLong() ?: 0L,
                 year = yearOf(o, o.str("name")),
+                tmdb = (o.str("tmdb") ?: o.str("tmdb_id"))?.trim()?.takeIf { it.isNotEmpty() && it != "0" },
             )
         }
     }

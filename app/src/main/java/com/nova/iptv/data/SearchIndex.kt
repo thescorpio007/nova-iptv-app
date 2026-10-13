@@ -50,8 +50,8 @@ object SearchIndex {
         GZIPOutputStream(tmp.outputStream().buffered()).bufferedWriter().use { w ->
             w.write("NOVAINDEX1\t${idx.builtAt}\n")
             idx.live.forEach { c -> w.write("L\t${c.streamId}\t${clean(c.name)}\t${clean(c.icon)}\t${c.categoryId}\t${c.num}\t${if (c.hasArchive) 1 else 0}\t${c.added}\n") }
-            idx.movies.forEach { m -> w.write("M\t${m.streamId}\t${clean(m.name)}\t${clean(m.icon)}\t${m.categoryId}\t${clean(m.rating)}\t${m.extension}\t${m.added}\t${m.year ?: ""}\n") }
-            idx.series.forEach { s -> w.write("S\t${s.seriesId}\t${clean(s.name)}\t${clean(s.cover)}\t${s.categoryId}\t${clean(s.rating)}\t${s.added}\t${s.year ?: ""}\n") }
+            idx.movies.forEach { m -> w.write("M\t${m.streamId}\t${clean(m.name)}\t${clean(m.icon)}\t${m.categoryId}\t${clean(m.rating)}\t${m.extension}\t${m.added}\t${m.year ?: ""}\t${m.tmdb.orEmpty()}\n") }
+            idx.series.forEach { s -> w.write("S\t${s.seriesId}\t${clean(s.name)}\t${clean(s.cover)}\t${s.categoryId}\t${clean(s.rating)}\t${s.added}\t${s.year ?: ""}\t${s.tmdb.orEmpty()}\n") }
         }
         file.delete()
         tmp.renameTo(file)
@@ -68,8 +68,8 @@ object SearchIndex {
                 when (p[0]) {
                     "NOVAINDEX1" -> builtAt = p.getOrNull(1)?.toLongOrNull() ?: 0
                     "L" -> live += LiveChannel(accountId, p[1], p[5].toIntOrNull() ?: 0, p[2], p[3].ifEmpty { null }, p[4], p[6] == "1", p[7].toLongOrNull() ?: 0)
-                    "M" -> movies += Movie(accountId, p[1], p[2], p[3].ifEmpty { null }, p[4], p[5].ifEmpty { null }, p[6], p[7].toLongOrNull() ?: 0, p[8].toIntOrNull())
-                    "S" -> series += Series(accountId, p[1], p[2], p[3].ifEmpty { null }, p[4], null, p[5].ifEmpty { null }, p[6].toLongOrNull() ?: 0, p[7].toIntOrNull())
+                    "M" -> movies += Movie(accountId, p[1], p[2], p[3].ifEmpty { null }, p[4], p[5].ifEmpty { null }, p[6], p[7].toLongOrNull() ?: 0, p[8].toIntOrNull(), p.getOrNull(9)?.ifEmpty { null })
+                    "S" -> series += Series(accountId, p[1], p[2], p[3].ifEmpty { null }, p[4], null, p[5].ifEmpty { null }, p[6].toLongOrNull() ?: 0, p[7].toIntOrNull(), p.getOrNull(8)?.ifEmpty { null })
                 }
             }
         }
