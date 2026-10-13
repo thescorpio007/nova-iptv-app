@@ -38,7 +38,7 @@ class HlsDownload(
 
     private val id = start.id
     private val file = File(start.path)
-    private val progressFile = File(start.path + ".parts")
+    private val progressFile = Sidecar.file(start.path, "parts")
     private val keys = HashMap<String, ByteArray>()
 
     private fun get(url: String): ByteArray {

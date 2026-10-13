@@ -70,6 +70,7 @@ class NovaApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.nova.iptv.download.Sidecar.dir = java.io.File(filesDir, "dl-progress")
         storage = Storage(this)
         Folders.customRoot = storage.storageRoot
         com.nova.iptv.data.Locations.init(this, storage)

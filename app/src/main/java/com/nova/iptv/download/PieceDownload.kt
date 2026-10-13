@@ -24,7 +24,7 @@ class PieceMap(val total: Long, private val sidecar: File) {
         fun of(d: DownloadItem): PieceMap? {
             live[d.id]?.let { return it }
             if (d.status == DownloadStatus.DONE) return null
-            val f = File(d.path + ".pieces")
+            val f = Sidecar.file(d.path, "pieces")
             if (!f.exists()) return null
             return runCatching { load(f) }.getOrNull()?.also { live[d.id] = it }
         }
@@ -142,7 +142,7 @@ class PieceDownload(
             DownloadCenter.update(id) { it.copy(connections = 1, note = "The website refused several connections → downloading with 1") }
             return false
         }
-        val sidecar = File(start.path + ".pieces")
+        val sidecar = Sidecar.file(start.path, "pieces")
         val map = PieceMap.of(start)?.takeIf { it.total == total } ?: PieceMap(total, sidecar).also {
             file.parentFile?.mkdirs()
             RandomAccessFile(file, "rw").use { raf -> raf.setLength(total) }

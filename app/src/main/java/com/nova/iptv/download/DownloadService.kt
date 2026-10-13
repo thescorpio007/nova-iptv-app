@@ -96,7 +96,14 @@ class DownloadService : Service() {
         return SpeedLimit(mb * 1024L * 1024L)
     }
 
-    private fun download(app: NovaApp, start: DownloadItem) {
+    private fun download(app: NovaApp, first: DownloadItem) {
+        // A file left by an earlier install can't be opened again (Permission denied): use another name.
+        val usable = Sidecar.usablePath(first.path)
+        val start = if (usable == first.path) first else {
+            android.util.Log.i("NovaTest", "DOWNLOAD old file not writable → ${File(usable).name}")
+            DownloadCenter.update(first.id) { it.copy(path = usable, note = "The old file could not be written (made by an earlier install) → saved as ${File(usable).name}") }
+            first.copy(path = usable)
+        }
         val conns = connectionsFor(app, start.url)
         val limit = speedFor(app, start.url)
         if (HlsDownload.isHls(start.url)) {
@@ -104,7 +111,7 @@ class DownloadService : Service() {
             return
         }
         // Several connections: pieces in watching order (falls back to one connection if the server refuses).
-        val inPieces = File(start.path + ".pieces").exists()
+        val inPieces = Sidecar.file(start.path, "pieces").exists()
         if ((inPieces || (conns > 1 && start.connections != 1)) &&
             PieceDownload(app, start, conns, limit) { title, total, done -> notifyProgress(title, total, done) }.run()
         ) return
