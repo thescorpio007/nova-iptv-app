@@ -2137,7 +2137,7 @@ class PlayerActivity : ComponentActivity() {
                     vod.seekLimitMs = if (inPieces) null else if (dur > 0) maxOf(0L, (frac * dur).toLong() - 5_000) else null
                     val state = when (d.status) {
                         com.nova.iptv.data.DownloadStatus.PAUSED -> "paused"
-                        com.nova.iptv.data.DownloadStatus.QUEUED -> "waiting"
+                        com.nova.iptv.data.DownloadStatus.QUEUED -> DownloadCenter.waitingNote(d)
                         com.nova.iptv.data.DownloadStatus.FAILED -> "failed"
                         else -> "downloading"
                     }

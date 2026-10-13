@@ -65,10 +65,37 @@ object DownloadCenter {
     /** A download being watched while it downloads: it goes first. */
     @Volatile private var priorityId: String? = null
 
-    /** Oldest waiting download (the list is newest first); a "Download & watch" one goes first. */
-    fun nextQueued(): DownloadItem? {
-        priorityId?.let { id -> _items.value.firstOrNull { it.id == id && it.status == DownloadStatus.QUEUED }?.let { return it } }
-        return _items.value.lastOrNull { it.status == DownloadStatus.QUEUED }
+    /**
+     * Two lanes run side by side: one download from your IPTV servers (they allow few connections)
+     * and one from other web links (they don't use your account's connections).
+     */
+    fun isServer(url: String): Boolean {
+        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: return false
+        return runCatching { storage.accounts }.getOrDefault(emptyList()).any { a ->
+            runCatching { java.net.URI(com.nova.iptv.data.XtreamApi.normalizeServer(a.server)).host }.getOrNull() == host
+        }
+    }
+
+    /** Oldest waiting download of this lane (the list is newest first); a "Download & watch" one goes first. */
+    fun nextQueued(server: Boolean): DownloadItem? {
+        priorityId?.let { id ->
+            _items.value.firstOrNull { it.id == id && it.status == DownloadStatus.QUEUED && isServer(it.url) == server }?.let { return it }
+        }
+        return _items.value.lastOrNull { it.status == DownloadStatus.QUEUED && isServer(it.url) == server }
+    }
+
+    fun nextQueued(): DownloadItem? = nextQueued(true) ?: nextQueued(false)
+
+    /** For a waiting download: "another download is finishing (27 s left)". */
+    fun waitingNote(d: DownloadItem): String {
+        val lane = isServer(d.url)
+        val running = _items.value.firstOrNull { it.id != d.id && it.status == DownloadStatus.DOWNLOADING && isServer(it.url) == lane }
+            ?: return "waiting for its turn"
+        val left = if (running.speed > 0 && running.totalBytes > running.doneBytes) {
+            val sec = (running.totalBytes - running.doneBytes) / running.speed
+            " (" + (if (sec >= 3600) "${sec / 3600} h ${sec % 3600 / 60} min" else if (sec >= 60) "${sec / 60} min" else "$sec s") + " left)"
+        } else ""
+        return "waiting — another download is finishing$left"
     }
 
     /**
@@ -91,7 +118,8 @@ object DownloadCenter {
         if (item.status == DownloadStatus.DONE) return item
         priorityId = item.id
         // Others that are downloading step back into the queue (they keep what they already have).
-        _items.value.filter { it.id != item.id && it.status == DownloadStatus.DOWNLOADING }
+        val lane = isServer(item.url)
+        _items.value.filter { it.id != item.id && it.status == DownloadStatus.DOWNLOADING && isServer(it.url) == lane }
             .forEach { other -> update(other.id) { o -> o.copy(status = DownloadStatus.QUEUED) } }
         if (get(item.id)?.status != DownloadStatus.DOWNLOADING) {
             update(item.id) { it.copy(status = DownloadStatus.QUEUED, error = null) }

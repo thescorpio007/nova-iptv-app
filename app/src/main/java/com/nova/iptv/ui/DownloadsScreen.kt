@@ -43,7 +43,7 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
         item {
             Text(
                 "Saved in: ${vm.downloadsFolder()}\n" +
-                    "Downloads use one connection of your IPTV account while they run. " +
+                    "Downloads from your IPTV servers use one connection of your account and run one at a time; downloads from other links run at the same time. " +
                     "Recordings are made from the Rec button in the player while you watch a channel.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
@@ -115,7 +115,7 @@ private fun DownloadRow(
             val parts = if (d.parts > 0) " · ${d.partsDone} / ${d.parts} parts" else ""
             (if (totalMb > 0) "Downloading · $mb / $totalMb MB (${((progress ?: 0f) * 100).toInt()}%)" else "Downloading · $mb MB") + parts + conn + speed + left
         }
-        DownloadStatus.QUEUED -> "Waiting…"
+        DownloadStatus.QUEUED -> "Waiting · " + com.nova.iptv.download.DownloadCenter.waitingNote(d).removePrefix("waiting — ").removePrefix("waiting ")
         DownloadStatus.PAUSED -> "Paused · $mb MB"
         DownloadStatus.FAILED -> "Failed: ${d.error ?: "unknown error"}"
         DownloadStatus.RECORDING -> "● Recording · $mb MB"

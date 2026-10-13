@@ -24,13 +24,15 @@ import java.io.FileOutputStream
 import java.io.IOException
 
 /**
- * Downloads movies and episodes one at a time (IPTV accounts usually allow few connections),
+ * Downloads movies and episodes: one at a time from your IPTV servers (they usually allow few connections)
+ * and, at the same time, one at a time from other web links,
  * resuming where it stopped if the connection drops.
  */
 class DownloadService : Service() {
 
     private val main = Handler(Looper.getMainLooper())
-    private var worker: Thread? = null
+    /** One worker for the IPTV servers, one for other links. */
+    private val workers = HashMap<Boolean, Thread>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -49,28 +51,32 @@ class DownloadService : Service() {
             notification("Preparing download…", -1, 0),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
         )
-        if (worker == null) startWorker()
+        main.post { startWorkers() }
         return START_NOT_STICKY
     }
 
-    private fun startWorker() {
-        worker = Thread({ runQueue() }, "NovaDownloads").also { it.start() }
+    /** Main thread only. */
+    private fun startWorkers() {
+        for (server in listOf(true, false)) {
+            if (workers[server] == null && DownloadCenter.nextQueued(server) != null) {
+                workers[server] = Thread({ runQueue(server) }, if (server) "NovaDownloads" else "NovaLinkDownloads").also { it.start() }
+            }
+        }
+        if (workers.isEmpty()) {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
-    private fun runQueue() {
+    private fun runQueue(server: Boolean) {
         val app = application as NovaApp
         while (true) {
-            val item = DownloadCenter.nextQueued() ?: break
-            download(app, item)
+            val item = DownloadCenter.nextQueued(server) ?: break
+            runCatching { download(app, item) }
         }
         main.post {
-            worker = null
-            if (DownloadCenter.nextQueued() != null) {
-                startWorker()
-            } else {
-                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            workers.remove(server)
+            startWorkers()
         }
     }
 
