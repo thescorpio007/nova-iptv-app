@@ -46,6 +46,7 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(vm: MainViewModel) {
     val accounts by vm.accounts.collectAsStateWithLifecycle()
@@ -152,7 +153,7 @@ fun SettingsScreen(vm: MainViewModel) {
             )
             Stepper("Safety cushion", "${s.cushionSeconds} s", { vm.setCushion(s.cushionSeconds - 1) }, { vm.setCushion(s.cushionSeconds + 1) })
             Text("Channel start", fontWeight = FontWeight.Medium)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Chip("Fast — start at live", s.liveStart == "fast", { vm.setLiveStart("fast") })
                 Chip("Safe — wait for the full cushion", s.liveStart == "safe", { vm.setLiveStart("safe") })
             }
@@ -167,6 +168,32 @@ fun SettingsScreen(vm: MainViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
             )
             Stepper("Read-ahead", "${s.maxBufferSeconds} s", { vm.setMaxBuffer(s.maxBufferSeconds - 10) }, { vm.setMaxBuffer(s.maxBufferSeconds + 10) })
+            // More protection without pausing.
+            val st = vm.appStorage
+            var grow by remember { mutableStateOf(st.liveGrowTarget) }
+            var switchSlow by remember { mutableStateOf(st.liveSwitchWhenSlow) }
+            Text("Grow the cushion while watching", fontWeight = FontWeight.Medium)
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(0 to "Off", 30 to "30 s", 60 to "60 s", 120 to "2 min").forEach { (v, l) ->
+                    Chip(l, grow == v, { grow = v; st.liveGrowTarget = v })
+                }
+            }
+            Text(
+                if (grow == 0) "Off: you stay ${s.cushionSeconds} s behind live."
+                else "Plays 4 % slower (sound unchanged) until you are $grow s behind live, then normal speed. " +
+                    "After a slow moment it refills the same way — no pause, no freeze.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.primary,
+            )
+            Text("When the line is too slow for a channel", fontWeight = FontWeight.Medium)
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip("Switch to my other server", switchSlow, { switchSlow = true; st.liveSwitchWhenSlow = true })
+                Chip("Stay", !switchSlow, { switchSlow = false; st.liveSwitchWhenSlow = false })
+            }
+            Text(
+                "If the signal stays below what the channel needs for ~20 s, Nova plays the same channel from your other server. " +
+                    "A warning shows when only 5 s of cushion is left.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         }

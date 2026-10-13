@@ -72,6 +72,16 @@ class Storage(context: Context) {
         get() = prefs.getInt("live_disk_mb", 600)
         set(value) = prefs.edit().putInt("live_disk_mb", value).apply()
 
+    /** Live TV: while watching, play 4 % slower until you are this many seconds behind live (0 = off). */
+    var liveGrowTarget: Int
+        get() = prefs.getInt("live_grow_target", 60)
+        set(value) = prefs.edit().putInt("live_grow_target", value).apply()
+
+    /** Live TV: when the line stays slower than the channel needs, switch to the same channel on your other server. */
+    var liveSwitchWhenSlow: Boolean
+        get() = prefs.getBoolean("live_switch_slow", true)
+        set(value) = prefs.edit().putBoolean("live_switch_slow", value).apply()
+
     /** Jump to the next channel automatically when a live channel doesn't work. */
     var autoSkip: Boolean
         get() = prefs.getBoolean("auto_skip", false)

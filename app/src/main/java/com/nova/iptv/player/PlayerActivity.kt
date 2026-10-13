@@ -1183,13 +1183,21 @@ class PlayerActivity : ComponentActivity() {
         clockView.text = android.text.format.DateFormat.getTimeFormat(this).format(java.util.Date())
     }
 
+    /** Seconds of video kept ahead of what you see (disk + memory): how far behind live you are. */
+    private fun behindLiveSeconds(): Int? {
+        val p = player ?: return null
+        val inMemory = ((p.bufferedPosition - p.currentPosition) / 1000).toInt().coerceAtLeast(0)
+        val r = relay ?: return (p.totalBufferedDuration / 1000).toInt()
+        val bps = mediaBps
+        return (if (bps > 0) (r.bytesAhead() / bps).toInt() else r.secondsAhead()) + inMemory
+    }
+
     private fun updateTimeLabel() {
         val r = relay ?: return
         if (timeView.visibility != View.VISIBLE) return
-        val inMemory = player?.let { ((it.bufferedPosition - it.currentPosition) / 1000).toInt() } ?: 0
         val bps = mediaBps
         // Seconds from the channel's real bitrate when known (the download speed misleads on a weak signal).
-        val behind = (if (bps > 0) (r.bytesAhead() / bps).toInt() else r.secondsAhead()) + inMemory
+        val behind = behindLiveSeconds() ?: 0
         val stored = if (bps > 0) (r.bytesStored() / bps).toInt() else r.secondsStored()
         val signal = if (bps > 0 && arrivalBps > 0) "   ·   Signal ${mbit(arrivalBps)} / needs ${mbit(bps)} Mbit/s" else ""
         timeView.text = if (stored <= 0) "Disk buffer: filling…"
@@ -1758,24 +1766,68 @@ class PlayerActivity : ComponentActivity() {
     private fun cushionTick() {
         val item = current
         val p = player
-        val want = if (weakChannel && app.storage.weakRefillSecs > 0) maxOf(app.storage.cushionSeconds, app.storage.weakRefillSecs) * 1000L
-        else app.storage.cushionSeconds * 1000L
-        val active = item != null && item.isLive && p != null && (app.storage.liveStart == "fast" || weakChannel) && !refilling &&
+        // Target: the cushion, grown while you watch up to "Grow while watching" (60 s by default).
+        val grow = app.storage.liveGrowTarget
+        val base = if (weakChannel && app.storage.weakRefillSecs > 0) maxOf(app.storage.cushionSeconds, app.storage.weakRefillSecs)
+        else app.storage.cushionSeconds
+        // In memory only (no disk buffer) the player can't hold more than its read-ahead.
+        val want = maxOf(base, grow).let { if (relay == null) minOf(it, maxOf(base, app.storage.maxBufferSeconds - 5)) else it } * 1000L
+        val active = item != null && item.isLive && !item.catchup && p != null &&
+            (app.storage.liveStart == "fast" || weakChannel || grow > base) && !refilling &&
             p.isPlaying && p.playbackState == Player.STATE_READY
         if (!active) {
             if (cushionSlow) p?.setPlaybackSpeed(1f)
             cushionSlow = false
             return
         }
-        val ahead = p!!.totalBufferedDuration
+        val ahead = (behindLiveSeconds() ?: 0) * 1000L
+        slowLineTick(item!!, ahead)
         if (!cushionSlow && ahead < want - 1500) {
             cushionSlow = true
-            p.setPlaybackSpeed(0.97f)
+            p!!.setPlaybackSpeed(0.96f)
             Log.i("NovaTest", "CUSHION building: ${ahead / 1000} s of ${want / 1000} s")
         } else if (cushionSlow && ahead >= want) {
             cushionSlow = false
-            p.setPlaybackSpeed(1f)
+            p!!.setPlaybackSpeed(1f)
             Log.i("NovaTest", "CUSHION ready: ${ahead / 1000} s")
+        }
+    }
+
+    private var slowSince = 0L
+    private var lowWarnAt = 0L
+    /** Channels already switched because the line was too slow (no back-and-forth). */
+    private val slowSwitched = HashSet<String>()
+
+    /**
+     * The line stays slower than the channel needs: warn when the cushion is almost used up, and after ~20 s
+     * play the same channel from your other server (once per channel).
+     */
+    private fun slowLineTick(item: PlayItem, aheadMs: Long) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val tooSlow = mediaBps > 0 && arrivalBps > 0 && arrivalBps < mediaBps * 0.9
+        if (aheadMs in 1..5_000 && everReady && now - lowWarnAt > 60_000) {
+            lowWarnAt = now
+            Toast.makeText(this, "⚠ Slow connection — only ${aheadMs / 1000} s of cushion left" +
+                (if (tooSlow) " (${mbit(arrivalBps)} of ${mbit(mediaBps)} Mbit/s)" else ""), Toast.LENGTH_SHORT).show()
+        }
+        if (!tooSlow) { slowSince = 0L; return }
+        if (slowSince == 0L) slowSince = now
+        val s = app.storage
+        if (now - slowSince < 20_000 || !s.liveSwitchWhenSlow || s.accounts.size < 2 || item.temporary) return
+        if (!slowSwitched.add(item.saved.key)) return
+        slowSince = 0L
+        val index = PlaybackQueue.index
+        lifecycleScope.launch {
+            val other = runCatching { LiveCatalog.sameChannelElsewhere(app, item) }.getOrNull()
+            if (other == null || current !== item) return@launch
+            slowSwitched.add(other.saved.key)
+            PlaybackQueue.items = PlaybackQueue.items.toMutableList().also { it[index] = other }
+            val from = s.accounts.firstOrNull { it.id == item.saved.accountId }?.name ?: "this server"
+            val acc = s.accounts.firstOrNull { it.id == other.saved.accountId }?.name ?: "another account"
+            logHealth(item, "line too slow (${mbit(arrivalBps)} of ${mbit(mediaBps)} Mbit/s)", "switched to “${other.title}” on $acc")
+            Log.i("NovaTest", "SLOW LINE ${item.title} -> ${other.title} on $acc")
+            Toast.makeText(this@PlayerActivity, "Switched to “${other.title}” ($acc) — $from too slow", Toast.LENGTH_LONG).show()
+            startPlayback(index, quiet = true, keepTweaks = false)
         }
     }
 
