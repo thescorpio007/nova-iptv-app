@@ -594,6 +594,31 @@ class Storage(context: Context) {
             .put("created", System.currentTimeMillis()).put("lists", values).toString(2)
     }
 
+    /** What a lists backup holds: "24 favorites · 6 groups in your order · 3 hidden" ("" = empty). */
+    fun listsSummary(text: String): String = runCatching {
+        val v = JSONObject(text).optJSONObject("lists") ?: return ""
+        summaryOf(v.keys().asSequence().associateWith { v.optString(it) })
+    }.getOrDefault("")
+
+    /** The same for what is in Nova now (to warn before saving nothing). */
+    fun currentListsSummary(): String =
+        summaryOf(prefs.all.filterKeys { isListKey(it) }.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }.toMap())
+
+    private fun summaryOf(values: Map<String, String>): String {
+        var favs = 0
+        values.filterKeys { it == "favorites_v2" || it.startsWith("fav_") }.values.forEach { t ->
+            favs += runCatching { JSONArray(t).length() }.getOrDefault(0)
+        }
+        val o = values["org"]?.let { runCatching { json.decodeFromString(OrgData.serializer(), it) }.getOrNull() }
+        val ordered = o?.let { it.groupOrder.size + it.itemOrder.size } ?: 0
+        val hidden = o?.let { it.hiddenGroups.size + it.hiddenItems.size } ?: 0
+        return listOfNotNull(
+            favs.takeIf { it > 0 }?.let { "$it favorites" },
+            ordered.takeIf { it > 0 }?.let { "$it lists in your order" },
+            hidden.takeIf { it > 0 }?.let { "$it hidden" },
+        ).joinToString(" · ")
+    }
+
     /** Puts back the lists only (servers and settings are not touched). */
     fun importLists(text: String) {
         val root = try { JSONObject(text) } catch (e: Exception) { throw IllegalArgumentException("This file is not a Nova lists backup") }

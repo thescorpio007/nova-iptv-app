@@ -1128,8 +1128,12 @@ private fun ListsBackup(vm: MainViewModel) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {
             scope.launch {
-                val f = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { vm.saveLists() }.getOrNull() }
-                Toast.makeText(context, if (f != null) "Lists saved: Download/NovaIPTV/Backups/${f.name}" else "Could not save the lists", Toast.LENGTH_LONG).show()
+                val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { vm.saveLists() }.getOrNull() }
+                Toast.makeText(context, when {
+                    r == null -> "Could not save the lists"
+                    r.first == null -> r.second
+                    else -> "Lists saved (${r.second}): Download/NovaIPTV/Backups/${r.first!!.name}"
+                }, Toast.LENGTH_LONG).show()
             }
         }) { Text("📋 Save my lists") }
         // Restoring can bring hidden items back: it asks for the PIN.
@@ -1148,11 +1152,17 @@ private fun ListsBackup(vm: MainViewModel) {
                     if (files.isEmpty()) Hint("No _list.bakL file in Download/NovaIPTV/Backups.")
                     LazyColumn(Modifier.heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         itemsIndexed(files) { _, f ->
+                            val what = remember(f) { vm.listsSummary(f) }
                             FocusBox(onClick = { chooser = false; ask = f.name to f.readText() }, modifier = Modifier.fillMaxWidth()) {
-                                Text("📋 " + f.name, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+                                Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                                    Text("📋 " + f.name, fontSize = 14.sp)
+                                    Text(what.ifBlank { "(empty — nothing to restore)" }, fontSize = 12.sp,
+                                        color = if (what.isBlank()) androidx.compose.ui.graphics.Color(0xFFFF8A80) else MaterialTheme.colorScheme.primary)
+                                }
                             }
                         }
                     }
+                    AllFilesNotice()
                 }
             },
             confirmButton = { TextButton(onClick = { chooser = false; pick.launch(arrayOf("*/*")) }) { Text("Other file…") } },
@@ -1254,4 +1264,20 @@ private fun AgeInfoDialog(vm: MainViewModel, row: com.nova.iptv.data.AgeFilter.H
 @Composable
 private fun BoxWithConstraintsInfo(content: @Composable (wide: Boolean) -> Unit) {
     androidx.compose.foundation.layout.BoxWithConstraints { content(maxWidth >= 560.dp) }
+}
+
+
+/** Files made by an earlier install of Nova are hidden by Android until "All files access" is allowed. */
+@Composable
+fun AllFilesNotice() {
+    if (com.nova.iptv.data.Folders.hasAllFilesAccess()) return
+    val context = LocalContext.current
+    Text(
+        "Files saved by an earlier install of Nova are hidden by Android. Allow “All files access” once to see them all — or use “Other file…”.",
+        fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFFFD27A),
+    )
+    TextButton(onClick = {
+        runCatching { context.startActivity(com.nova.iptv.data.Folders.allFilesAccessIntent(context).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { Toast.makeText(context, "Open Android Settings › Apps › Nova IPTV › All files access", Toast.LENGTH_LONG).show() }
+    }) { Text("🔓 Allow all files access") }
 }

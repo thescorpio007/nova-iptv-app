@@ -265,6 +265,7 @@ fun RestoreDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                             }
                         }
                         OutlinedButton(onClick = { openFrom.launch(arrayOf("*/*")) }) { Text("Choose a file…") }
+                        AllFilesNotice()
                     } else {
                         TvTextField(
                             link, { link = it; error = null }, singleLine = true, modifier = Modifier.fillMaxWidth(),

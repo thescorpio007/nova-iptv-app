@@ -1573,12 +1573,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "Nova-" + java.text.SimpleDateFormat("yyyy-MM-dd_HHmm", java.util.Locale.US).format(java.util.Date()) + "_list.bakL"
 
     /** Saves the lists only (order, favorites, hidden items) in Download/NovaIPTV/Backups. */
-    fun saveLists(): File {
+    /** Saves the lists; (null, why) when there is nothing to save yet. */
+    fun saveLists(): Pair<File?, String> {
+        val what = storage.currentListsSummary()
+        if (what.isBlank()) return null to "No favorites, order or hidden items to save yet"
         val f = File(backupDir(), listsFileName())
         f.writeText(storage.exportLists())
-        android.util.Log.i("NovaTest", "LISTS saved ${f.name}")
-        return f
+        android.util.Log.i("NovaTest", "LISTS saved ${f.name}: $what")
+        return f to what
     }
+
+    fun listsSummary(f: File): String = runCatching { storage.listsSummary(f.readText()) }.getOrDefault("")
 
     fun listsFiles(): List<File> =
         backupDir().listFiles { f -> f.name.endsWith(".bakL", ignoreCase = true) }?.sortedByDescending { it.lastModified() }.orEmpty()
