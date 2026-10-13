@@ -6,6 +6,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -117,12 +120,14 @@ private fun Hint(text: String) {
     Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ChoiceRow(options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        itemsIndexed(options) { _, (value, label) ->
-            Chip(label, value == selected, { onSelect(value) })
-        }
+    // Wraps onto a second line on a narrow screen (nothing is cut off).
+    androidx.compose.foundation.layout.FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        options.forEach { (value, label) -> Chip(label, value == selected, { onSelect(value) }) }
     }
 }
 
@@ -734,39 +739,43 @@ val LocalPinSet = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 // =============================================================================== AGE FILTER (USA ratings)
 
+private class AgeStats(val summary: String, val groupCounts: Map<String, Int>)
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
     val context = LocalContext.current
     val storage = (context.applicationContext as com.nova.iptv.NovaApp).storage
-    val ageV by com.nova.iptv.data.AgeFilter.version.collectAsStateWithLifecycle()
-    val checking by com.nova.iptv.data.AgeFilter.busy.collectAsStateWithLifecycle()
+    val AF = com.nova.iptv.data.AgeFilter
+    val ageV by AF.version.collectAsStateWithLifecycle()
+    val checking by AF.busy.collectAsStateWithLifecycle()
     val status by vm.ageStatus.collectAsStateWithLifecycle()
+    val diagnosis by AF.diagnosis.collectAsStateWithLifecycle()
     val accounts by vm.accounts.collectAsStateWithLifecycle()
     val level = remember(ageV) { storage.ageLevel }
     val source = remember(ageV) { storage.ageSource }
     val hideUnknown = remember(ageV) { storage.ageHideUnknown }
     val liveMode = remember(ageV) { storage.ageLiveMode }
     var key by remember { mutableStateOf(storage.tmdbKey) }
-    val summary = remember(ageV, checking) { com.nova.iptv.data.AgeFilter.summary(accounts) }
+    var showHidden by remember { mutableStateOf(false) }
+    var addTo by remember { mutableStateOf<com.nova.iptv.data.AgeFilter.WordGroup?>(null) }
+    // Counts are worked out in the background (tens of thousands of titles).
+    val stats by androidx.compose.runtime.produceState(AgeStats("", emptyMap()), ageV, checking, accounts) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            AgeStats(
+                AF.summary(accounts),
+                AF.WORD_GROUPS.associate { g -> g.id to AF.countWords(AF.wordsOf(storage, g), accounts).first },
+            )
+        }
+    }
     val green = androidx.compose.ui.graphics.Color(0xFF2EE66B)
+    val nf = remember { java.text.NumberFormat.getIntegerInstance() }
 
     Text("🛡 Age filter — USA ratings (MPA)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
-    Hint("Choose the highest rating allowed. Everything above it is hidden from lists, Search, Recent and Favourites.")
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        com.nova.iptv.data.AgeFilter.LEVELS.forEachIndexed { i, name ->
-            val on = i == level
-            FocusBox(
-                onClick = { if (!on) guard { vm.setAge { it.ageLevel = i } } },
-                selected = on,
-                modifier = Modifier.fillMaxWidth().background(if (on) green.copy(alpha = 0.18f) else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(10.dp)),
-            ) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(name, fontWeight = FontWeight.ExtraBold, modifier = Modifier.width(64.dp), color = if (on) green else MaterialTheme.colorScheme.onSurface)
-                    Text((if (on) "✓ " else "") + com.nova.iptv.data.AgeFilter.LEVEL_NOTES[i], fontSize = 13.sp,
-                        color = if (on) green else MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
+    Hint("The highest rating allowed: everything above it is hidden from lists, Search, Recent and Favourites. " +
+        "G = all ages · PG = parental guidance · PG-13 = not for under 13 · R = under 17 with a parent · NC-17 = adults (only 18+ / X hidden).")
+    ChoiceRow(AF.LEVELS.mapIndexed { i, n -> i.toString() to n }, level.toString()) { v ->
+        guard { vm.setAge { it.ageLevel = v.toInt() } }
     }
     Hint("Series use the US TV ratings: G = TV-Y · TV-Y7 · TV-G  |  PG = TV-PG  |  PG-13 = TV-14  |  R / NC-17 = TV-MA")
     if (level == 0) return
@@ -776,19 +785,22 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
         guard { vm.setAge { it.ageSource = v } }
     }
     if (source == "tmdb") {
+        val setKey = { v: String -> key = v.trim(); storage.tmdbKey = key; AF.configure(storage) }
         TvTextField(
-            value = key, onValueChange = { key = it.trim(); storage.tmdbKey = key; com.nova.iptv.data.AgeFilter.configure(storage) },
+            value = key, onValueChange = { setKey(it) },
             singleLine = true, modifier = Modifier.fillMaxWidth(),
-            label = { Text("TMDB key (free)") },
+            label = { Text("TMDB key") },
+            placeholder = { Text(if (AF.defaultKey.isNotBlank()) "Default key (built in)" else "No default key — paste yours") },
             visualTransformation = PasswordVisualTransformation(),
-            trailingIcon = { PasteButton { key = it.trim(); storage.tmdbKey = key; com.nova.iptv.data.AgeFilter.configure(storage) } },
+            trailingIcon = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PasteButton { setKey(it) }
+                    if (key.isNotEmpty() && AF.defaultKey.isNotBlank()) TextButton(onClick = { setKey("") }) { Text("↺ Default") }
+                }
+            },
         )
-        Hint("Free key: themoviedb.org → create an account → Settings → API (the “API Key” or the long “Read Access Token”). " +
+        Hint("Empty = Nova's default key. You can use your own free key: themoviedb.org → Settings → API. " +
             "French titles and names like “FR_Le Roi Lion_4K (2019)” are cleaned and matched with the year.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { vm.checkAges() }, enabled = !checking && key.isNotBlank()) { Text(if (checking) "Checking…" else "⟳ Check now") }
-            TextButton(onClick = { guard { com.nova.iptv.data.AgeFilter.forget(context); vm.checkAges() } }, enabled = !checking) { Text("Check all again") }
-        }
     }
 
     Text("Titles with no age found", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
@@ -822,11 +834,218 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
         }
     }
 
+    // ---- words in the name ----
+    Text("🔤 Hide films & series with these words in the name", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+    Hint("Upper/lower case and accents ignored · also found in “FR_Love_Story_4K” · plurals too (kiss → kisses) · ✕ removes a word.")
+    AF.WORD_GROUPS.forEach { g ->
+        val on = remember(ageV) { AF.groupOn(storage, g) }
+        val words = remember(ageV) { AF.wordsOf(storage, g) }
+        Column(
+            Modifier.fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(g.title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    if (!on) "  · off" else stats.groupCounts[g.id]?.let { "  · ${nf.format(it)} titles" } ?: "",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                )
+                Chip(if (on) "● On" else "○ Off", on, {
+                    guard {
+                        vm.setAge { st ->
+                            val cur = AF.WORD_GROUPS.filter { AF.groupOn(st, it) }.map { it.id }.toSet()
+                            st.ageWordGroupsOn = if (on) cur - g.id else cur + g.id
+                        }
+                    }
+                })
+            }
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                words.forEach { w ->
+                    FocusBox(onClick = { guard { vm.setAge { st -> st.setAgeWords(g.id, AF.wordsOf(st, g) - w) } } }, shape = RoundedCornerShape(12.dp)) {
+                        Text("$w ✕", fontSize = 12.sp, color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                    }
+                }
+                FocusBox(onClick = { guard { addTo = g } }, shape = RoundedCornerShape(12.dp)) {
+                    Text(if (words.isEmpty()) "＋ add a word" else "＋ add", fontSize = 12.sp, color = green, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                }
+                if (AF.wordsOf(storage, g) != g.defaults && g.defaults.isNotEmpty()) {
+                    FocusBox(onClick = { guard { vm.setAge { st -> st.setAgeWords(g.id, null) } } }, shape = RoundedCornerShape(12.dp)) {
+                        Text("↺ Nova's list", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- status ----
     Text(
-        if (checking && status.isNotBlank()) status else if (status.startsWith("Age check stopped") || status.startsWith("Add your")) status else summary,
+        when {
+            checking && status.isNotBlank() -> status
+            status.startsWith("Age check stopped") || status.startsWith("Add your") -> status
+            stats.summary.isBlank() -> "Counting…"
+            else -> stats.summary
+        },
         fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFBFF5D3),
         modifier = Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color(0xFF0F2A1C), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 7.dp),
     )
-    Text("🔒 Changing the level or turning it OFF asks for your PIN" + if (!vm.settings.value.hasPin) " (set a PIN above first)" else "",
+    if (source == "tmdb" && diagnosis.isNotBlank()) {
+        Text(
+            diagnosis, fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFFFE2A8),
+            modifier = Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color(0xFF2A2112), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 7.dp),
+        )
+    }
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Button(onClick = { guard { showHidden = true } }) { Text("👁 Show hidden by age") }
+        if (source == "tmdb") {
+            OutlinedButton(onClick = { vm.checkAges() }, enabled = !checking) { Text(if (checking) "Checking…" else "⟳ Check now") }
+            TextButton(onClick = { guard { AF.forget(context); vm.checkAges() } }, enabled = !checking) { Text("Check all again") }
+        }
+    }
+    Text("🔒 Changes ask for your PIN" + if (!vm.settings.value.hasPin) " (set a PIN above first)" else "",
         fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFFFD27A))
+
+    if (showHidden) AgeHiddenDialog(vm) { showHidden = false }
+    addTo?.let { g -> AddWordDialog(g, accounts, onDismiss = { addTo = null }) { w ->
+        vm.setAge { st -> st.setAgeWords(g.id, (AF.wordsOf(st, g) + w).distinct()) }
+        addTo = null
+    } }
+}
+
+@Composable
+private fun AddWordDialog(
+    g: com.nova.iptv.data.AgeFilter.WordGroup,
+    accounts: List<com.nova.iptv.data.Account>,
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit,
+) {
+    var word by remember { mutableStateOf("") }
+    val preview by androidx.compose.runtime.produceState<Pair<Int, List<String>>?>(null, word) {
+        val w = word.trim()
+        if (w.length < 2) { value = null; return@produceState }
+        kotlinx.coroutines.delay(400)
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.nova.iptv.data.AgeFilter.countWord(w, accounts) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add a word") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Group: " + g.title, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TvTextField(
+                    value = word, onValueChange = { word = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Word") }, trailingIcon = { PasteButton { word = it.trim() } },
+                )
+                preview?.let { (n, ex) ->
+                    Text(
+                        "Will hide ${java.text.NumberFormat.getIntegerInstance().format(n)} titles" +
+                            (if (ex.isNotEmpty()) ", e.g. " + ex.joinToString(", ") { "“$it”" } else "") + ".",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { if (word.trim().length >= 2) onAdd(word.trim()) }, enabled = word.trim().length >= 2) { Text("Add") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** "👁 Hidden by age": everything the filter hides, ☑ hidden / ☐ allowed anyway (an exception that stays). */
+@Composable
+private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
+    val AF = com.nova.iptv.data.AgeFilter
+    val accounts by vm.accounts.collectAsStateWithLifecycle()
+    val ageV by AF.version.collectAsStateWithLifecycle()
+    val names = remember { vm.ageGroupNames() }
+    val lists by androidx.compose.runtime.produceState<Map<String, List<com.nova.iptv.data.AgeFilter.HiddenRow>>?>(null) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { AF.hiddenList(accounts, names) }
+    }
+    var tab by remember { mutableStateOf("movie") }
+    var query by remember { mutableStateOf("") }
+    var onlyAllowed by remember { mutableStateOf(false) }
+    val exceptions = remember(ageV) { AF.exceptions }
+    val nf = remember { java.text.NumberFormat.getIntegerInstance() }
+    val green = androidx.compose.ui.graphics.Color(0xFF2EE66B)
+    val rows = remember(lists, tab, query, onlyAllowed, exceptions) {
+        val q = AF.normalize(query.trim())
+        lists?.get(tab).orEmpty().filter { r ->
+            (q.isEmpty() || AF.normalize(r.name).contains(q)) && (!onlyAllowed || r.exKey in exceptions)
+        }
+    }
+    val multi = accounts.size > 1
+    val state = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        androidx.compose.material3.Surface(
+            shape = RoundedCornerShape(18.dp), color = androidx.compose.ui.graphics.Color(0xFF1B2029),
+            modifier = Modifier.fillMaxWidth(0.94f).widthIn(max = 900.dp).fillMaxHeight(0.92f),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("👁 Hidden by age · up to " + AF.LEVELS.getOrElse(AF.level) { "" }, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                Text("☑ hidden · ☐ allowed anyway (an exception that stays). OK / tap to switch.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ChoiceRow(
+                    listOf("movie" to "🎬 Films", "series" to "🎞 Series", "live" to "📺 Channels").map { (k, l) ->
+                        k to (l + (lists?.get(k)?.let { " " + nf.format(it.size) } ?: ""))
+                    }, tab,
+                ) { tab = it }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TvTextField(value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.weight(1f),
+                        placeholder = { Text("🔍 Search a title…") })
+                    Chip("All", !onlyAllowed, { onlyAllowed = false })
+                    Chip("Allowed only (${exceptions.count { it.startsWith("$tab|") }})", onlyAllowed, { onlyAllowed = true })
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when {
+                        lists == null -> Text("Looking through all titles…", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+                        rows.isEmpty() -> Text(if (onlyAllowed) "No exceptions here." else "Nothing hidden here.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+                        else -> LazyColumn(
+                            Modifier.fillMaxSize().scrollBar(state), state = state,
+                            verticalArrangement = Arrangement.spacedBy(5.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 14.dp),
+                        ) {
+                            items(rows.size, key = { rows[it].exKey }) { i ->
+                                val r = rows[i]
+                                val allowed = r.exKey in exceptions
+                                FocusBox(
+                                    onClick = { vm.toggleAgeException(r.exKey) },
+                                    modifier = Modifier.fillMaxWidth().background(
+                                        if (allowed) androidx.compose.ui.graphics.Color(0xFF1D3326) else androidx.compose.ui.graphics.Color(0xFF232A35), RoundedCornerShape(10.dp),
+                                    ),
+                                ) {
+                                    Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(if (allowed) "☐" else "☑", fontSize = 18.sp, color = if (allowed) MaterialTheme.colorScheme.onSurfaceVariant else green, modifier = Modifier.width(28.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(r.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                            Text(
+                                                (if (multi) vm.accountName(r.accountId) else "") + (if (allowed) (if (multi) " · " else "") + "allowed (exception)" else ""),
+                                                fontSize = 11.5.sp, color = if (allowed) green else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                                            )
+                                        }
+                                        val bad = r.reason.startsWith("R") || r.reason.startsWith("NC") || r.reason.startsWith("18") || r.reason.contains("adult")
+                                        Text(
+                                            r.reason, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+                                            color = if (bad) androidx.compose.ui.graphics.Color(0xFFFFB3AD) else androidx.compose.ui.graphics.Color(0xFFFFD27A),
+                                            modifier = Modifier.background(androidx.compose.ui.graphics.Color(0x33FFFFFF), RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${exceptions.size} exceptions · Back = close", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    Button(onClick = onDismiss) { Text("Done") }
+                }
+            }
+        }
+    }
 }

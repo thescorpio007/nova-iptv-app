@@ -42,12 +42,96 @@ object AgeFilter {
     const val ADULT = 6
 
     // ---- settings (copied from Storage by [configure]) ----
-    @Volatile var level = 0; private set
+    @Volatile var level = 1; private set
     @Volatile var source = "tmdb"; private set
-    @Volatile var hideUnknown = true; private set
+    @Volatile var hideUnknown = false; private set
     @Volatile var liveMode = "name"; private set
     @Volatile var allowedGroups: Set<String> = emptySet(); private set
     @Volatile private var tmdbKey = ""
+    /** Titles allowed anyway (exceptions): "movie|acc|id" … */
+    @Volatile var exceptions: Set<String> = emptySet(); private set
+    /** Word groups switched on, with their words. */
+    @Volatile private var activeWords: List<Pair<WordGroup, Regex>> = emptyList()
+
+    /** The key used: yours, or the one built into Nova. */
+    val defaultKey: String get() = com.nova.iptv.BuildConfig.TMDB_KEY
+    fun effectiveKey(): String = tmdbKey.ifBlank { defaultKey }
+
+    // ---- TMDB diagnosis of the last check ----
+    val found = java.util.concurrent.atomic.AtomicInteger(0)
+    val notFound = java.util.concurrent.atomic.AtomicInteger(0)
+    val failed = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile var lastError: String? = null
+    val diagnosis = MutableStateFlow("")
+
+    // ------------------------------------------------------------------ words
+
+    class WordGroup(val id: String, val title: String, val defaultOn: Boolean, val defaults: List<String>)
+
+    val WORD_GROUPS = listOf(
+        WordGroup("romance", "💋 Romance & kissing", true, listOf(
+            "kiss", "kisses", "kissing", "love", "lover", "lovers", "romance", "romantic", "passion", "desire", "seduction", "seduce",
+            "temptation", "flirt", "crush", "valentine", "honeymoon", "affair", "mistress", "unfaithful", "adultery",
+            "amour", "amours", "amoureux", "amoureuse", "amant", "amante", "baiser", "bisou", "désir", "séduction", "séducteur",
+            "tentation", "passionnément", "saint-valentin", "lune de miel", "liaison", "maîtresse", "infidèle", "adultère", "coup de foudre",
+        )),
+        WordGroup("adult", "🔞 Sexual & adult", true, listOf(
+            "sex", "sexy", "sexual", "nude", "naked", "erotic", "lust", "sensual", "seductive", "stripper", "striptease", "escort",
+            "call girl", "gigolo", "prostitute", "lingerie", "fetish", "bdsm", "kamasutra", "fifty shades", "playboy", "xxx", "porn",
+            "18+", "uncensored", "unrated", "sexe", "sexuel", "sexuelle", "nu", "nue", "nues", "érotique", "sensuel", "sensuelle",
+            "désirs", "prostituée", "fétiche", "cinquante nuances", "interdit aux mineurs", "non censuré", "-18",
+        )),
+        WordGroup("horror", "🩸 Horror & violence", true, listOf(
+            "horror", "blood", "bloody", "killer", "kill", "massacre", "slasher", "gore", "zombie", "demon", "devil", "exorcist",
+            "possession", "haunted", "evil", "cannibal", "chainsaw", "psycho", "nightmare", "horreur", "sang", "sanglant", "tueur",
+            "tueuse", "démon", "diable", "exorciste", "hanté", "hantée", "maléfique", "cannibale", "cauchemar", "terreur", "épouvante",
+        )),
+        WordGroup("drugs", "💊 Drugs & crime", false, listOf(
+            "drug", "drugs", "cocaine", "heroin", "narcos", "cartel", "gangster", "mafia", "drogue", "cocaïne", "héroïne", "gang", "braquage",
+        )),
+        WordGroup("own", "✏️ My own words", true, emptyList()),
+    )
+
+    /** Lower case, no accents, "_" and "." as spaces: "FR_Amoür.Fou" → "fr amour fou". */
+    fun normalize(text: String): String =
+        java.text.Normalizer.normalize(text.lowercase(), java.text.Normalizer.Form.NFD)
+            .replace(Regex("""\p{Mn}+"""), "").replace('_', ' ').replace('.', ' ').replace('’', '\'')
+
+    /** One word list → one pattern (whole words, with plurals: love → loves). */
+    fun wordsPattern(words: List<String>): Regex? {
+        val parts = words.map { normalize(it).trim() }.filter { it.isNotEmpty() }.distinct()
+            .map { Regex.escape(it).replace(" ", """\E\s+\Q""") }
+        if (parts.isEmpty()) return null
+        return Regex("""(?<![\p{L}\p{N}])(""" + parts.joinToString("|") + """)(s|es|x)?(?![\p{L}\p{N}])""")
+    }
+
+    fun wordsOf(s: Storage, g: WordGroup): List<String> = s.ageWords(g.id) ?: g.defaults
+    fun groupOn(s: Storage, g: WordGroup): Boolean = s.ageWordGroupsOn?.contains(g.id) ?: g.defaultOn
+
+    /** The first word of the switched-on groups found in the name, or null. */
+    fun wordIn(name: String): String? {
+        val words = activeWords
+        if (words.isEmpty()) return null
+        val n = normalize(name)
+        for ((_, re) in words) re.find(n)?.let { return it.groupValues[1] }
+        return null
+    }
+
+    /** How many titles of the index these words would hide, with 2 examples (for "Add a word" and the group counts). */
+    fun countWord(word: String, accounts: List<Account>): Pair<Int, List<String>> = countWords(listOf(word), accounts)
+
+    fun countWords(list: List<String>, accounts: List<Account>): Pair<Int, List<String>> {
+        val re = wordsPattern(list) ?: return 0 to emptyList()
+        var n = 0
+        val examples = ArrayList<String>()
+        accounts.forEach { a ->
+            val idx = SearchIndex.get(a.id) ?: return@forEach
+            (idx.movies.map { it.name } + idx.series.map { it.name }).forEach { t ->
+                if (re.containsMatchIn(normalize(t))) { n++; if (examples.size < 2) examples += t }
+            }
+        }
+        return n to examples
+    }
 
     /** Changes each time something that changes the lists changes (screens recompute with it). */
     val version = MutableStateFlow(0)
@@ -71,7 +155,13 @@ object AgeFilter {
         liveMode = s.ageLiveMode
         allowedGroups = s.ageAllowedGroups
         tmdbKey = s.tmdbKey.trim()
-        if (changed) bump()
+        val ex = s.ageAllowed
+        val words = WORD_GROUPS.filter { groupOn(s, it) }.mapNotNull { g -> wordsPattern(wordsOf(s, g))?.let { g to it } }
+        val wordsChanged = words.map { it.second.pattern } != activeWords.map { it.second.pattern }
+        val exChanged = ex != exceptions
+        exceptions = ex
+        activeWords = words
+        if (changed || wordsChanged || exChanged) bump()
     }
 
     private fun bump() { version.value = version.value + 1 }
@@ -105,25 +195,42 @@ object AgeFilter {
         return if (r != null && r > 0) r else rule
     }
 
-    /** True when this film / series is above the chosen level (or unknown and "hide them" is chosen). */
-    fun blocked(code: String, key: String, name: String, group: String?): Boolean {
+    /** Why this film / series is hidden ("R", "no age found", "word: kiss"…), or null when it is shown. Exceptions not counted. */
+    fun reason(code: String, key: String, name: String, group: String?): String? {
         val lv = level
-        if (lv == 0) return false
-        if (code == "live") return liveBlocked(key, name, group)
-        if (code != "movie" && code != "series") return false
+        if (lv == 0) return null
+        if (code != "movie" && code != "series") return null
+        val rule = ruleRating(name, group)
         val r = ratingOf(code, key, name, group)
-        return if (r == 0) hideUnknown else r > lv
+        val fromRule = r == rule && (source == "rules" || items[if (code == "series") "series|$key" else "movie|$key"].let { it == null || it == 0 })
+        if (r > lv) return ratingLabel(r) + if (fromRule) " · name rule" else ""
+        wordIn(name)?.let { return "word: $it" }
+        if (r == 0 && hideUnknown) return "no age found"
+        return null
+    }
+
+    fun ratingLabel(r: Int): String = if (r >= ADULT) "18+" else LEVELS.getOrElse(r) { "?" }
+
+    /** True when this film / series is hidden (above the level, a word, or unknown with "hide them"), unless allowed anyway. */
+    fun blocked(code: String, key: String, name: String, group: String?): Boolean {
+        if (level == 0) return false
+        if (code == "live") return liveBlocked(key, name, group)
+        if ("$code|$key" in exceptions) return false
+        return reason(code, key, name, group) != null
     }
 
     /** Live channels: hidden by name (adult always; horror below R), or only the groups you allow. */
-    fun liveBlocked(key: String, name: String, group: String?, groupKey: String? = null): Boolean {
+    fun liveBlocked(key: String, name: String, group: String?, groupKey: String? = null): Boolean =
+        level != 0 && "live|$key" !in exceptions && liveReason(name, group, groupKey) != null
+
+    fun liveReason(name: String, group: String?, groupKey: String? = null): String? {
         val lv = level
-        if (lv == 0) return false
-        if (liveMode == "allow" && groupKey != null) return groupKey !in allowedGroups
+        if (lv == 0) return null
+        if (liveMode == "allow" && groupKey != null) return if (groupKey !in allowedGroups) "group not allowed" else null
         val text = name + " " + group.orEmpty()
-        if (adultWords.containsMatchIn(text)) return true
-        if (lv < 4 && horrorWords.containsMatchIn(text)) return true
-        return false
+        if (adultWords.containsMatchIn(text)) return "name rule: adult"
+        if (lv < 4 && horrorWords.containsMatchIn(text)) return "name rule: horror"
+        return null
     }
 
     /** Groups (categories): an adult group is hidden; with "only groups I allow", the others too. */
@@ -274,12 +381,42 @@ object AgeFilter {
         }
     }
 
+    private val nf0 = java.text.NumberFormat.getIntegerInstance()
+
     private fun ago(t: Long): String {
         val m = (System.currentTimeMillis() - t) / 60_000
         return when { m < 1 -> "just now"; m < 60 -> "$m min ago"; m < 48 * 60 -> "${m / 60} h ago"; else -> "${m / 1440} days ago" }
     }
 
     /** Count shown in Settings: "5 230 checked · 1 146 above PG hidden". */
+    class HiddenRow(val code: String, val key: String, val name: String, val accountId: String, val reason: String) {
+        val exKey: String get() = "$code|$key"
+    }
+
+    /** Everything the filter hides (exceptions included, so they can be ticked again): films, series, channels. */
+    fun hiddenList(accounts: List<Account>, groupNames: Map<String, String>): Map<String, List<HiddenRow>> {
+        val films = ArrayList<HiddenRow>(); val series = ArrayList<HiddenRow>(); val live = ArrayList<HiddenRow>()
+        if (level == 0) return mapOf("movie" to films, "series" to series, "live" to live)
+        accounts.forEach { a ->
+            val idx = SearchIndex.get(a.id) ?: return@forEach
+            idx.movies.forEach { m ->
+                val g = groupNames["movie|${a.id}|${m.categoryId}"]
+                reason("movie", m.key, m.name, g)?.let { films += HiddenRow("movie", m.key, m.name, a.id, it) }
+            }
+            idx.series.forEach { x ->
+                val g = groupNames["series|${a.id}|${x.categoryId}"]
+                reason("series", x.key, x.name, g)?.let { series += HiddenRow("series", x.key, x.name, a.id, it) }
+            }
+            idx.live.forEach { c ->
+                val gk = if (c.categoryId.isBlank()) null else "${a.id}|${c.categoryId}"
+                val g = gk?.let { groupNames["live|$it"] }
+                liveReason(c.name, g, gk)?.let { live += HiddenRow("live", c.key, c.name, a.id, it) }
+            }
+        }
+        val byName = compareBy<HiddenRow> { normalize(it.name) }
+        return mapOf("movie" to films.sortedWith(byName), "series" to series.sortedWith(byName), "live" to live.sortedWith(byName))
+    }
+
     fun summary(accounts: List<Account>): String {
         if (level == 0) return "Age filter is OFF"
         var total = 0; var hidden = 0; var unknown = 0
@@ -291,6 +428,7 @@ object AgeFilter {
         if (total == 0) return "The search index is not ready yet — the age check starts after it."
         val nf = java.text.NumberFormat.getIntegerInstance()
         return "✓ ${nf.format(total)} films & series · ${nf.format(hidden)} hidden (above ${LEVELS[level]}" +
+            (if (activeWords.isNotEmpty()) ", a word" else "") +
             (if (hideUnknown) " or no age found" else "") + ") · ${nf.format(unknown)} without age" +
             (if (source == "tmdb" && checkedAt > 0) " · checked ${ago(checkedAt)}" else "")
     }
@@ -299,7 +437,7 @@ object AgeFilter {
     suspend fun check(context: Context, http: OkHttpClient, accounts: List<Account>) = withContext(Dispatchers.IO) {
         load(context)
         if (level == 0 || source != "tmdb") { status.value = summary(accounts); return@withContext }
-        val key = tmdbKey
+        val key = effectiveKey()
         if (key.isBlank()) { status.value = "Add your free TMDB key to check the ages."; return@withContext }
         if (busy.value) return@withContext
         busy.value = true
@@ -314,7 +452,14 @@ object AgeFilter {
         Log.i(TAG, "AGES to check: ${todo.size}")
         if (todo.isEmpty()) { busy.value = false; status.value = summary(accounts); return@withContext }
         val done = java.util.concurrent.atomic.AtomicInteger(0)
-        val gate = Semaphore(4)
+        val gate = Semaphore(10)
+        found.set(0); notFound.set(0); failed.set(0); lastError = null
+        fun diag() {
+            diagnosis.value = "🔎 TMDB: ${nf0.format(found.get())} found · ${nf0.format(notFound.get())} not found · ${nf0.format(failed.get())} failed" +
+                (if (failed.get() > 0 && lastError != null) " — $lastError" else "") +
+                (if (failed.get() > (found.get() + notFound.get()) && failed.get() > 20)
+                    " (your internet may block themoviedb.org: try the VPN in Settings › 1 Account)" else "")
+        }
         val nf = java.text.NumberFormat.getIntegerInstance()
         try {
             coroutineScope {
@@ -347,10 +492,23 @@ object AgeFilter {
                                 } catch (e: IllegalStateException) {
                                     throw e
                                 } catch (e: Exception) {
+                                    lastError = when (e) {
+                                        is java.net.UnknownHostException -> "no connection to TMDB (name not found)"
+                                        is java.net.SocketTimeoutException -> "no answer from TMDB (timeout)"
+                                        is javax.net.ssl.SSLException -> "secure connection to TMDB refused"
+                                        is java.net.ConnectException -> "no connection to TMDB"
+                                        else -> e.message ?: e.javaClass.simpleName
+                                    }
                                     null // network problem: try again next time
+                                }
+                                when {
+                                    r == null -> failed.incrementAndGet()
+                                    r > 0 -> found.incrementAndGet()
+                                    else -> notFound.incrementAndGet()
                                 }
                                 if (r != null) items["${j.code}|${j.key}"] = r
                                 val n = done.incrementAndGet()
+                                if (n % 25 == 0) diag()
                                 if (n % 25 == 0) status.value = "Checking ages… ${nf.format(n)} / ${nf.format(todo.size)}"
                             }
                         }
@@ -360,12 +518,14 @@ object AgeFilter {
                     bump()
                 }
             }
+            diag()
             status.value = summary(accounts)
-            Log.i(TAG, "AGES checked ${done.get()}")
+            Log.i(TAG, "AGES checked ${done.get()}: ${diagnosis.value}")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             save(context)
+            diag()
             status.value = "Age check stopped: ${e.message}"
             Log.i(TAG, "AGES failed: $e")
         } finally {

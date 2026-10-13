@@ -18,6 +18,9 @@ android {
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         versionCode = build ?: 1
         versionName = if (build != null) "2.0 (build $build)" else "2.0"
+        // Default TMDB key for the age filter: added at build time from the TMDB_KEY secret (never in the code).
+        val tmdb = (System.getenv("TMDB_KEY") ?: "").trim().filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }
+        buildConfigField("String", "TMDB_KEY", "\"$tmdb\"")
     }
 
     signingConfigs {
@@ -55,6 +58,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     lint {
         abortOnError = false

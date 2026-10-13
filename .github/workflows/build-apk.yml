@@ -55,7 +55,10 @@ jobs:
 
       - name: Build the APK
         id: build
+        env:
+          TMDB_KEY: ${{ secrets.TMDB_KEY }}
         run: |
+          if [ -n "$TMDB_KEY" ]; then echo "::notice title=TMDB key::built in (${#TMDB_KEY} characters)"; else echo "::warning title=TMDB key::the TMDB_KEY secret is not set"; fi
           chmod +x gradlew
           set -o pipefail
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log

@@ -874,6 +874,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** "movie|acc|catId" → group name, for the three zones (loads the groups when needed). */
+    fun ageGroupNames(): Map<String, String> {
+        val out = HashMap<String, String>()
+        listOf(live, films, series).forEach { z ->
+            if (z.cats.value.items.isEmpty() && !z.cats.value.loading && accounts.value.isNotEmpty()) loadCategories(z)
+            z.cats.value.items.forEach { out["${z.code}|${it.key}"] = it.name }
+        }
+        return out
+    }
+
+    /** Allows a hidden title anyway (or hides it again). */
+    fun toggleAgeException(exKey: String) {
+        val cur = storage.ageAllowed
+        storage.ageAllowed = if (exKey in cur) cur - exKey else cur + exKey
+        com.nova.iptv.data.AgeFilter.configure(storage)
+    }
+
     /** Live groups of all accounts (for "Only groups I allow"). */
     fun liveGroupsForAge(): List<Category> {
         if (live.cats.value.items.isEmpty() && !live.cats.value.loading) loadCategories(live)
@@ -1625,6 +1642,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Settings → Reset all settings to Nova defaults (servers, favorites, order… are kept). */
     fun resetSettings() {
         storage.resetSettings()
+        com.nova.iptv.data.AgeFilter.configure(storage)
         Folders.customRoot = storage.storageRoot
         settings.value = readSettings()
     }

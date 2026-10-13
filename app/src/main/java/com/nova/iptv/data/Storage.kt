@@ -243,6 +243,7 @@ class Storage(context: Context) {
             "accounts", "active_account", "favorites_v2", "recent_v2", "org", "downloads",
             "pin_hash", "pin_salt", "drive_names", "drive_order", "health_log",
             "last_backup_link", "last_backup_link_at", "accounts_link", "accounts_link_pw", "accounts_link_checked", "accounts_link_note",
+            "age_allowed",
         )
         val e = prefs.edit()
         prefs.all.keys.filter { k ->
@@ -289,14 +290,14 @@ class Storage(context: Context) {
 
     /** Parental age filter (USA ratings): 0 OFF, 1 G, 2 PG, 3 PG-13, 4 R, 5 NC-17 = the highest rating allowed. */
     var ageLevel: Int
-        get() = prefs.getInt("age_level", 0)
+        get() = prefs.getInt("age_level", 1)
         set(value) = prefs.edit().putInt("age_level", value).apply()
     /** "tmdb" (film database) or "rules" (genre & name). */
     var ageSource: String
         get() = prefs.getString("age_source", "tmdb") ?: "tmdb"
         set(value) = prefs.edit().putString("age_source", value).apply()
     var ageHideUnknown: Boolean
-        get() = prefs.getBoolean("age_hide_unknown", true)
+        get() = prefs.getBoolean("age_hide_unknown", false)
         set(value) = prefs.edit().putBoolean("age_hide_unknown", value).apply()
     /** Live channels: "name" (hide Adult, XXX, 18+, Horror…) or "allow" (only the groups you allow). */
     var ageLiveMode: String
@@ -305,9 +306,23 @@ class Storage(context: Context) {
     var ageAllowedGroups: Set<String>
         get() = prefs.getString("age_allowed_groups", "")!!.split('\n').filter { it.isNotBlank() }.toSet()
         set(value) = prefs.edit().putString("age_allowed_groups", value.joinToString("\n")).apply()
+    /** Your own TMDB key; empty = the default key built into Nova. */
     var tmdbKey: String
         get() = prefs.getString("tmdb_key", "") ?: ""
         set(value) = prefs.edit().putString("tmdb_key", value).apply()
+    /** Titles allowed anyway (exceptions): "movie|acc|id", "series|acc|id", "live|acc|id". */
+    var ageAllowed: Set<String>
+        get() = prefs.getString("age_allowed", "")!!.split('\n').filter { it.isNotBlank() }.toSet()
+        set(value) = prefs.edit().putString("age_allowed", value.joinToString("\n")).apply()
+    /** Word groups switched on (null = the default ones). */
+    var ageWordGroupsOn: Set<String>?
+        get() = prefs.getString("age_word_groups_on", null)?.split(',')?.filter { it.isNotBlank() }?.toSet()
+        set(value) = prefs.edit().putString("age_word_groups_on", value?.joinToString(",")).apply()
+    /** The words of a group (null = Nova's list). */
+    fun ageWords(group: String): List<String>? =
+        prefs.getString("age_words_$group", null)?.split('\n')?.filter { it.isNotBlank() }
+    fun setAgeWords(group: String, words: List<String>?) =
+        prefs.edit().putString("age_words_$group", words?.joinToString("\n")).apply()
 
     /** Downloads: connections (1–16) and speed limit (MB/s, 0 = none), for your IPTV servers and for other links. */
     var dlConnServers: Int
