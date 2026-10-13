@@ -1188,6 +1188,7 @@ private fun ConfirmOverlayDialog(title: String, text: String, yes: String, onYes
 
 // =============================================================================== FILM PAGE (Hidden by age › ℹ Info)
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun AgeInfoDialog(vm: MainViewModel, row: com.nova.iptv.data.AgeFilter.HiddenRow, onDismiss: () -> Unit) {
     val AF = com.nova.iptv.data.AgeFilter
