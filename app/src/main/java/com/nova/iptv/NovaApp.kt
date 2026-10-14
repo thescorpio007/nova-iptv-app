@@ -77,5 +77,6 @@ class NovaApp : Application() {
         DownloadCenter.init(storage)
         com.nova.iptv.data.CrashLog.install(this)
         com.nova.iptv.data.StreamCheck.init(this)
+        com.nova.iptv.data.PlaybackLog.init(this)
     }
 }

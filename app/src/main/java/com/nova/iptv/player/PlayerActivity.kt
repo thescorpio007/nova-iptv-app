@@ -45,6 +45,7 @@ import com.nova.iptv.NovaApp
 import com.nova.iptv.data.Folders
 import com.nova.iptv.data.RemoteKeys
 import com.nova.iptv.data.StreamCheck
+import com.nova.iptv.data.PlaybackLog
 import com.nova.iptv.data.XtreamApi
 import com.nova.iptv.download.DownloadCenter
 import com.nova.iptv.download.Recorder
@@ -80,6 +81,7 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var clockView: TextView
     private lateinit var aspectButton: TextView
     private lateinit var favButton: TextView
+    private lateinit var similarButton: TextView
     private lateinit var prevButton: TextView
     private lateinit var nextButton: TextView
     private lateinit var recButton: TextView
@@ -309,11 +311,12 @@ class PlayerActivity : ComponentActivity() {
         favButton = pill("♡ Favorite") { toggleFavorite() }
         val tracksButton = pill("CC Audio & subtitles") { vod.openPanel() }
         val infoButton = pill("ℹ Video info") { showVideoInfo() }
+        similarButton = pill("≈ Similar") { showSimilar(auto = false) }
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, recButton, tracksButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -563,6 +566,8 @@ class PlayerActivity : ComponentActivity() {
         val item = items[i]
         current = item
         if (otherAppOpen) closeOtherApp()
+        if (similarOpen) closeSimilar()
+        startSession(item)
         // Status dots: this server's connection is now the player's (a check running there stops).
         StreamCheck.playing(if (item.isLocal) null else item.saved.accountId)
         hideNextCard()
@@ -614,7 +619,7 @@ class PlayerActivity : ComponentActivity() {
                 tap = { b, off, len -> Recorder.write(b, off, len) },
             ).also {
                 it.maxSeconds = app.storage.liveDiskMinutes * 60
-                it.balanced = true
+                it.balanced = false
             }
         }
 
@@ -664,6 +669,7 @@ class PlayerActivity : ComponentActivity() {
         liveButton.visibility = timeshiftVisible
         timeView.visibility = timeshiftVisible
         recButton.visibility = if (item.isLive) View.VISIBLE else View.GONE
+        similarButton.visibility = if (item.isLive && !item.catchup && !item.temporary && item.saved.accountId.isNotBlank()) View.VISIBLE else View.GONE
         downloadButton.visibility = if (!item.isLive && !item.isLocal && item.downloadExt != null) View.VISIBLE else View.GONE
         favButton.visibility = if (item.isLocal || item.temporary) View.GONE else View.VISIBLE
         updateRecButton()
@@ -743,10 +749,23 @@ class PlayerActivity : ComponentActivity() {
                     if (!everReady) {
                         Log.i("NovaTest", "READY ${current?.title}")
                         current?.let { c -> checkKey(c)?.let { StreamCheck.played(it, videoDecoded = player?.videoFormat != null) } }
+                        session?.let { ss ->
+                            if (ss.startMs < 0) ss.startMs = System.currentTimeMillis() - ss.startedAt
+                            ss.mode = playerMode?.name?.lowercase()?.replace('_', ' ').orEmpty()
+                            player?.videoFormat?.let { f ->
+                                ss.video = listOfNotNull(
+                                    if (f.width > 0) "${f.width}×${f.height}" else null,
+                                    f.sampleMimeType?.substringAfter('/')?.uppercase(),
+                                    f.codecs,
+                                ).joinToString(" ")
+                            }
+                            ss.decoder = videoDecoderName.orEmpty()
+                        }
                         // Remember the channel for "Recent" and the recently watched bar.
                         current?.takeIf { it.isLive && !it.catchup && !it.temporary }?.let { app.storage.addRecent(it.saved) }
                     }
                     retryCount = 0
+                    if (bufferingAt > 0) { session?.let { it.rebufferMs += android.os.SystemClock.elapsedRealtime() - bufferingAt }; bufferingAt = 0L }
                     everReady = true
                     autoSkips = 0
                     handler.removeCallbacks(startTimeoutTask)
@@ -756,6 +775,7 @@ class PlayerActivity : ComponentActivity() {
                     if (everReady) {
                         Log.i("NovaTest", "BUFFERING ${current?.title}")
                         val t = android.os.SystemClock.elapsedRealtime()
+                        session?.let { it.rebuffers++; bufferingAt = t }
                         rebuffers.addLast(t)
                         while (rebuffers.isNotEmpty() && t - rebuffers.first() > 180_000) rebuffers.removeFirst()
                     }
@@ -950,6 +970,7 @@ class PlayerActivity : ComponentActivity() {
             )
             if (tryRecover(item, error)) return
             checkKey(item)?.let { StreamCheck.deviceFailed(it, detail ?: "format") }
+            session?.fail("DEVICE", "can't decode ${detail ?: "the format"}")
             val dolby = detail?.contains("Dolby Vision") == true
             val reason = if (dolby) "\nThis device can't play Dolby Vision (your TV box can). Look for the same film in HD / without “4K”, or use VLC / MX Player."
                 else detail?.let { "\nThis device can't decode the $it." }.orEmpty()
@@ -987,6 +1008,7 @@ class PlayerActivity : ComponentActivity() {
             val limit = if (httpCode == 401 || httpCode == 403 || httpCode == 404) 3 else 30
             if (retryCount > limit) {
                 if (httpCode == 404) checkKey(item)?.let { StreamCheck.failed(it, "not found") }
+                session?.fail("FAIL", if (httpCode != null) "server answered HTTP $httpCode" else "video unavailable")
                 showStatus(
                     when (httpCode) {
                         401, 403 -> "Server refused the video (HTTP $httpCode). Check the account or its connection limit."
@@ -1101,6 +1123,7 @@ class PlayerActivity : ComponentActivity() {
         val items = PlaybackQueue.items
         val maxSkips = minOf(items.size - 1, 25)
         Log.i("NovaTest", "SKIP ${item.title}: $reason")
+        session?.fail(if (reason.contains("format")) "DEVICE" else "FAIL", reason + if (app.storage.autoSkip && items.size > 1) " · skipped automatically" else "")
         if (app.storage.autoSkip && items.size > 1 && autoSkips < maxSkips) {
             autoSkips++
             Toast.makeText(this, "“${item.title}” isn't working ($reason) — next channel", Toast.LENGTH_SHORT).show()
@@ -1113,6 +1136,170 @@ class PlayerActivity : ComponentActivity() {
                 else "“${item.title}” isn't working ($reason).\nPress OK to retry, or change channel."
             )
             retryCount = 1 // lets OK retry
+        }
+    }
+
+    // ------------------------------------------------------------------ playback report (Settings › Last problem)
+
+    private var session: PlaybackLog.Session? = null
+    private var bufferingAt = 0L
+
+    private fun startSession(item: PlayItem) {
+        endSession()
+        val server = app.storage.accounts.firstOrNull { it.id == item.saved.accountId }?.name
+            ?: if (item.isLocal) "this device" else "link"
+        val group = if (item.isLive) LiveCatalog.groupName(PlaybackQueue.groupKey) else null
+        session = PlaybackLog.Session(item.title, item.kind, server, group).also {
+            // Only the file type, never the address (it holds the login).
+            it.container = item.url.substringBefore('?').substringAfterLast('.', "").takeIf { e -> e.length in 2..5 }?.uppercase().orEmpty()
+        }
+        bufferingAt = 0L
+    }
+
+    private fun endSession() {
+        session?.let { PlaybackLog.end(it) }
+        session = null
+    }
+
+    // ------------------------------------------------------------------ ≈ Similar: same channel, same server, other groups
+
+    private var similarPanel: LinearLayout? = null
+    private var similarCloseTask: Runnable? = null
+    private val similarOpen: Boolean get() = similarPanel?.visibility == View.VISIBLE
+
+    private fun showSimilar(auto: Boolean) {
+        val item = current ?: return
+        if (!item.isLive || item.saved.accountId.isBlank()) return
+        playerView.hideController()
+        val server = app.storage.accounts.firstOrNull { it.id == item.saved.accountId }?.name ?: "this server"
+        val panel = similarPanel ?: LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat(); setColor(0xF00A0E14.toInt()); setStroke(dp(2), 0xFFFFA31A.toInt())
+            }
+            layoutParams = FrameLayout.LayoutParams(
+                (resources.displayMetrics.widthPixels * 0.46f).toInt().coerceIn(dp(300), dp(560)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP,
+            ).apply { setMargins(dp(20), dp(30), dp(24), dp(20)) }
+            (playerView.parent as ViewGroup).addView(this)
+            similarPanel = this
+        }
+        panel.removeAllViews()
+        fun text(t: CharSequence, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+            text = t; setTextColor(color); setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
+            if (bold) setTypeface(typeface, Typeface.BOLD)
+        }
+        panel.addView(text(if (auto) "⚠ The line is too slow for “${item.title}”" else "≈ Same channel on $server, other groups", 17f, Color.WHITE, true))
+        if (auto && mediaBps > 0) panel.addView(text(
+            "Arriving ${mbit(arrivalBps)} of ${mbit(mediaBps)} Mbit/s · cushion left ${behindLiveSeconds() ?: 0} s · same channel on $server:",
+            13f, 0xFFFFD08A.toInt(),
+        ).apply { setPadding(0, dp(2), 0, dp(8)) })
+        val loading = text("Looking in all groups of $server…", 13f, 0xFFBBBBBB.toInt()).apply { setPadding(0, dp(6), 0, dp(6)) }
+        panel.addView(loading)
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(rows)
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, 0) }
+        fun button(t: String, action: () -> Unit) = pill(t) {}.apply {
+            setOnClickListener { action() }
+            (layoutParams as? LinearLayout.LayoutParams)?.setMargins(0, 0, dp(10), 0)
+        }
+        val stay = button("Stay on this one") { closeSimilar() }
+        buttons.addView(stay)
+        if (app.storage.accounts.size > 1) buttons.addView(button("Try my other server") { closeSimilar(); switchToOtherServer(item) })
+        panel.addView(buttons)
+        panel.visibility = View.VISIBLE
+        stay.requestFocus()
+        armSimilarClose(auto)
+        lifecycleScope.launch {
+            val found = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.similarOnSameServer(app, item) }
+            }.getOrDefault(emptyList())
+            if (!similarOpen || current !== item) return@launch
+            Log.i("NovaTest", "SIMILAR ${item.title}: ${found.size} on $server")
+            if (found.isEmpty()) {
+                loading.text = "No other version of this channel on $server." + if (app.storage.accounts.size > 1) " Try your other server." else ""
+                return@launch
+            }
+            panel.removeView(loading)
+            var sepAdded = false
+            var first: View? = null
+            found.take(10).forEach { sim ->
+                if (!sim.lighter && !sepAdded && found.any { it.lighter }) {
+                    sepAdded = true
+                    rows.addView(text("Same quality (usually the same source — rarely faster):", 12f, 0xFF999999.toInt()).apply { setPadding(0, dp(8), 0, dp(2)) })
+                }
+                val sb = android.text.SpannableStringBuilder()
+                checkKey(sim.item)?.let { k ->
+                    val st = StreamCheck.status(k).state
+                    val c = when (st) { StreamCheck.State.OK -> 0xFF2EE66B.toInt(); StreamCheck.State.BAD -> 0xFFFF4D4D.toInt(); StreamCheck.State.DEVICE -> 0xFFFFA31A.toInt(); else -> 0xFF8A9099.toInt() }
+                    sb.append("● ", android.text.style.ForegroundColorSpan(c), 0)
+                }
+                sb.append(sim.item.title)
+                if (sim.qualityLabel.isNotBlank()) {
+                    val s0 = sb.length
+                    sb.append("  ").append(sim.qualityLabel)
+                    sb.setSpan(android.text.style.StyleSpan(Typeface.BOLD), s0, sb.length, 0)
+                }
+                if (sim.group.isNotBlank()) {
+                    val s0 = sb.length
+                    sb.append("   ·  ").append(sim.group)
+                    sb.setSpan(android.text.style.RelativeSizeSpan(0.8f), s0, sb.length, 0)
+                    sb.setSpan(android.text.style.ForegroundColorSpan(0xFFAABBCC.toInt()), s0, sb.length, 0)
+                }
+                val row = pill("") {}.apply {
+                    text = sb
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(3), 0, dp(3)) }
+                    setOnClickListener { closeSimilar(); playSimilar(item, sim) }
+                }
+                rows.addView(row)
+                if (first == null) first = row
+            }
+            first?.requestFocus()
+        }
+    }
+
+    /** Auto-opened (line too slow): closes by itself after 20 s without a choice. */
+    private fun armSimilarClose(auto: Boolean) {
+        similarCloseTask?.let { handler.removeCallbacks(it) }
+        if (!auto) return
+        val t = Runnable { if (similarOpen) closeSimilar() }
+        similarCloseTask = t
+        handler.postDelayed(t, 20_000)
+    }
+
+    private fun closeSimilar() {
+        similarCloseTask?.let { handler.removeCallbacks(it) }
+        similarCloseTask = null
+        similarPanel?.visibility = View.GONE
+        if (::keySink.isInitialized) keySink.requestFocus()
+    }
+
+    private fun playSimilar(from: PlayItem, sim: LiveCatalog.Similar) {
+        val index = PlaybackQueue.index
+        if (PlaybackQueue.items.getOrNull(index) !== from) return
+        session?.action("similar → ${sim.item.title}${if (sim.group.isNotBlank()) " (${sim.group})" else ""}")
+        slowSwitched.add(sim.item.saved.key)
+        logHealth(from, "chose a similar channel", "“${sim.item.title}” ${sim.group}")
+        PlaybackQueue.items = PlaybackQueue.items.toMutableList().also { it[index] = sim.item }
+        startPlayback(index, quiet = false, keepTweaks = false)
+    }
+
+    private fun switchToOtherServer(item: PlayItem) {
+        val index = PlaybackQueue.index
+        lifecycleScope.launch {
+            val other = runCatching { LiveCatalog.sameChannelElsewhere(app, item) }.getOrNull()
+            if (current !== item) return@launch
+            if (other == null) {
+                Toast.makeText(this@PlayerActivity, "“${item.title}” wasn't found on your other server", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            slowSwitched.add(other.saved.key)
+            PlaybackQueue.items = PlaybackQueue.items.toMutableList().also { it[index] = other }
+            startPlayback(index, quiet = false, keepTweaks = false)
         }
     }
 
@@ -1979,9 +2166,16 @@ class PlayerActivity : ComponentActivity() {
         val base = if (weakChannel && app.storage.weakRefillSecs > 0) maxOf(app.storage.cushionSeconds, app.storage.weakRefillSecs)
         else app.storage.cushionSeconds
         relay?.let { r -> if (mediaBps > 0) r.mediaBytesPerSec = mediaBps }
-        // Disk buffer: grow up to half of it (the play point in the middle). Memory only: at most the read-ahead,
-        // and on HLS channels at most what the server still keeps (or the player would be sent back to live).
-        var want = if (relay != null) (if (grow > 0) maxOf(base, app.storage.liveDiskMinutes * 30) else base) * 1000L
+        session?.let { ss ->
+            if (item != null && item.isLive && p != null && p.isPlaying) {
+                if (mediaBps > 0) ss.needMbit = mediaBps * 8 / 1_000_000
+                if (arrivalBps > 0) ss.arrival(arrivalBps * 8 / 1_000_000)
+                ss.cushion(behindLiveSeconds() ?: -1)
+            }
+        }
+        // Disk buffer: grow to the chosen cushion (the disk keeps the rest for rewind / pauses, up to its length).
+        // Memory only: at most the read-ahead, and on HLS channels at most what the server still keeps.
+        var want = if (relay != null) minOf(maxOf(base, grow), app.storage.liveDiskMinutes * 60 - 30) * 1000L
         else minOf(maxOf(base, grow), maxOf(base, app.storage.maxBufferSeconds - 5)) * 1000L
         if (relay == null && p != null) serverWindowMs(p)?.let { w -> if (w > 20_000) want = minOf(want, maxOf(base * 1000L, w - 10_000)) }
         lastGrowWantMs = want
@@ -2037,6 +2231,14 @@ class PlayerActivity : ComponentActivity() {
         if (!tooSlow) { slowSince = 0L; return }
         if (slowSince == 0L) slowSince = now
         val s = app.storage
+        if (now - slowSince >= 20_000) session?.let { ss ->
+            if (ss.result == "OK") { ss.result = "SLOW"; ss.note = "line too slow: ${mbit(arrivalBps)} of ${mbit(mediaBps)} Mbit/s" }
+        }
+        if (now - slowSince >= 20_000 && s.liveSlowAction == "similar" && !item.temporary && !similarOpen && slowSwitched.add(item.saved.key)) {
+            slowSince = 0L
+            showSimilar(auto = true)
+            return
+        }
         if (now - slowSince < 20_000 || !s.liveSwitchWhenSlow || s.accounts.size < 2 || item.temporary) return
         if (!slowSwitched.add(item.saved.key)) return
         slowSince = 0L
@@ -2369,6 +2571,7 @@ class PlayerActivity : ComponentActivity() {
     private fun logHealth(item: PlayItem, problem: String, action: String) {
         val time = java.text.SimpleDateFormat("dd/MM HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
         Log.i("NovaTest", "WATCHDOG ${item.title}: $problem -> $action")
+        if (current === item) session?.action("$problem → $action")
         app.storage.addHealthEvent("$time|${item.title}|$problem|$action")
     }
 
@@ -2510,6 +2713,16 @@ class PlayerActivity : ComponentActivity() {
 
         // A key whose press Nova used: its release must not click the button under the focus.
         if (event.action == KeyEvent.ACTION_UP && swallowUp.remove(code)) return true
+
+        // "≈ Similar" list: arrows / OK on its rows, Back closes it.
+        if (similarOpen) {
+            armSimilarClose(false) // you are choosing: it no longer closes by itself
+            if (code == KeyEvent.KEYCODE_BACK) {
+                if (down) { swallowUp += code; closeSimilar() }
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
 
         // "Open in another app" offer: arrows / OK on its buttons, Back = Stay in Nova.
         if (otherAppOpen) {
@@ -2689,6 +2902,7 @@ class PlayerActivity : ComponentActivity() {
     override fun onDestroy() {
         StreamCheck.playing(null)
         StreamCheck.playerClosed()
+        endSession()
         handler.removeCallbacksAndMessages(null)
         epgJob?.cancel()
         if (Recorder.isRecording) Recorder.stop()

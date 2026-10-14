@@ -1,6 +1,8 @@
 package com.nova.iptv.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.focusable
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -1125,6 +1127,95 @@ fun LastProblemSettings() {
                     runCatching { context.startActivity(android.content.Intent.createChooser(send, "Share the problem").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 }) { Text("Share") }
                 OutlinedButton(onClick = { com.nova.iptv.data.CrashLog.clear(context); text = null }) { Text("Clear") }
+            }
+        }
+        PlaybackReportSection()
+    }
+}
+
+/** Settings › System › Last problem › Playback report: share a .txt for development (no logins inside). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PlaybackReportSection() {
+    val context = LocalContext.current
+    val app = context.applicationContext as com.nova.iptv.NovaApp
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var days by remember { mutableStateOf(3) }
+    var glance by remember { mutableStateOf("") }
+    var view by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(days) {
+        glance = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.nova.iptv.data.PlaybackLog.glance(days) }
+    }
+    fun build(): String {
+        val st = app.storage
+        val settings = listOf(
+            if (st.liveDiskBuffer) "disk buffer ${st.liveDiskMinutes} min" else "memory buffer",
+            "cushion ${st.cushionSeconds} s ${st.liveStart}",
+            "grow ${st.liveGrowTarget} s",
+            "read-ahead ${st.maxBufferSeconds} s",
+            "live format ${st.liveFormat}",
+            "watchdog ${if (st.watchdog) st.watchdogMode else "off"}",
+            if (st.autoSkip) "skip after ${st.skipTimeoutSec} s" else "stay and retry",
+            "slow line: ${st.liveSlowAction}",
+            "other app: ${if (st.failApp == "none") "none" else st.failApp + " (" + st.failAppWhen + ")"}",
+            "films read-ahead ${st.readAheadMb} MB",
+            "accounts ${st.accounts.size}",
+        ).joinToString(" · ")
+        return com.nova.iptv.data.PlaybackLog.report(context, days, settings, st.healthLog)
+    }
+    Text("Playback report", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+    Hint(
+        "One line for every channel, film and episode you play: start time, picture quality, decoder, line speed vs what it needs, " +
+            "cushion, interruptions, watchdog actions and the result. App problems and your main settings are added at the end. " +
+            "Kept 7 days. No usernames, passwords or stream addresses — servers appear by their account name."
+    )
+    Text("Period", fontWeight = FontWeight.Medium)
+    ChoiceRow(listOf("1" to "Today", "3" to "Last 3 days", "7" to "Last 7 days"), days.toString()) { days = it.toInt() }
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Chip("⤴ Share report (.txt)", true, {
+            scope.launch {
+                val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val text = build()
+                        val public = runCatching { com.nova.iptv.data.PlaybackLog.save(context, text) }.getOrNull()
+                        val dir = java.io.File(context.filesDir, "reports").apply { mkdirs() }
+                        dir.listFiles()?.forEach { it.delete() }
+                        val name = public?.name ?: ("nova-report-" + java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()) + ".txt")
+                        val f = java.io.File(dir, name).apply { writeText(text) }
+                        f to public
+                    }.getOrNull()
+                }
+                if (r == null) { Toast.makeText(context, "Could not make the report", Toast.LENGTH_LONG).show(); return@launch }
+                val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", r.first)
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    .putExtra(android.content.Intent.EXTRA_SUBJECT, r.first.name)
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                runCatching {
+                    context.startActivity(android.content.Intent.createChooser(send, "Share ${r.first.name}").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+                if (r.second != null) Toast.makeText(context, "Also saved: Download/NovaIPTV/Logs/${r.second!!.name}", Toast.LENGTH_LONG).show()
+            }
+        })
+        Chip("👁 View", false, {
+            scope.launch { view = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { build() }.getOrNull() } }
+        })
+        Chip("🗑 Clear", false, { com.nova.iptv.data.PlaybackLog.clear(); glance = "Nothing played yet in this period." })
+    }
+    Text("This period at a glance", fontWeight = FontWeight.Medium)
+    Text(glance, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    view?.let { t ->
+        androidx.compose.ui.window.Dialog(onDismissRequest = { view = null }) {
+            androidx.compose.foundation.layout.Box(
+                Modifier.fillMaxWidth().fillMaxHeight(0.9f)
+                    .background(MaterialTheme.colorScheme.surface, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+            ) {
+                val sc = androidx.compose.foundation.rememberScrollState()
+                Text(
+                    t, fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    modifier = Modifier.fillMaxSize().verticalScroll(sc).focusable(),
+                )
             }
         }
     }

@@ -82,7 +82,7 @@ class Storage(context: Context) {
 
     /** Live TV: while watching, play 4 % slower until you are this many seconds behind live (0 = off). */
     var liveGrowTarget: Int
-        get() = prefs.getInt("live_grow_target", 60)
+        get() = prefs.getInt("live_grow_target", 120)
         set(value) = prefs.edit().putInt("live_grow_target", value).apply()
 
     /** Search index: also save index-latest.novaindex in Download/NovaIPTV/Index after every update. */
@@ -110,8 +110,14 @@ class Storage(context: Context) {
 
     /** Live TV: when the line stays slower than the channel needs, switch to the same channel on your other server. */
     var liveSwitchWhenSlow: Boolean
-        get() = prefs.getBoolean("live_switch_slow", true)
-        set(value) = prefs.edit().putBoolean("live_switch_slow", value).apply()
+        get() = liveSlowAction == "switch"
+        set(value) { liveSlowAction = if (value) "switch" else "stay" }
+
+    /** When the line is too slow for a channel: "switch" (other server), "similar" (popup, same server) or "stay". */
+    var liveSlowAction: String
+        get() = prefs.getString("live_slow_action", null)
+            ?: if (prefs.contains("live_switch_slow") && prefs.getBoolean("live_switch_slow", false)) "switch" else "stay"
+        set(value) = prefs.edit().putString("live_slow_action", value).apply()
 
     /** Jump to the next channel automatically when a live channel doesn't work. */
     /** Status dots on channels, films and episodes (quiet checks in the background). */
@@ -120,7 +126,7 @@ class Storage(context: Context) {
         set(value) = prefs.edit().putBoolean("status_dots", value).apply()
 
     var autoSkip: Boolean
-        get() = prefs.getBoolean("auto_skip", false)
+        get() = prefs.getBoolean("auto_skip", true)
         set(value) = prefs.edit().putBoolean("auto_skip", value).apply()
 
     /** Seconds a channel may take to start before it counts as "not working". */
@@ -326,7 +332,7 @@ class Storage(context: Context) {
 
     /** Live channel start: "fast" (start near live, build the cushion while watching) or "safe" (wait for the full cushion). */
     var liveStart: String
-        get() = prefs.getString("live_start", "safe") ?: "safe"
+        get() = prefs.getString("live_start", "fast") ?: "fast"
         set(value) = prefs.edit().putString("live_start", value).apply()
 
     /** Weak signal (video still arriving, too slowly): pause and refill this many seconds before playing on. 0 = off. */
@@ -548,7 +554,7 @@ class Storage(context: Context) {
      * Earlier versions: "When the built-in player can't play a format → Open the external player".
      */
     var failApp: String
-        get() = prefs.getString("fail_app", null) ?: if (externalOnError) {
+        get() = prefs.getString("fail_app", null) ?: if (prefs.contains("external_on_error") && externalOnError) {
             playerFor("live").takeIf { it != "builtin" } ?: "ask"
         } else "none"
         set(value) = prefs.edit().putString("fail_app", value).apply()

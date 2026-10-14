@@ -172,7 +172,7 @@ fun SettingsScreen(vm: MainViewModel) {
             // More protection without pausing.
             val st = vm.appStorage
             var grow by remember { mutableStateOf(st.liveGrowTarget) }
-            var switchSlow by remember { mutableStateOf(st.liveSwitchWhenSlow) }
+            var slowAction by remember { mutableStateOf(st.liveSlowAction) }
             Text("Grow the cushion while watching", fontWeight = FontWeight.Medium)
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(0 to "Off", 30 to "30 s", 60 to "60 s", 120 to "2 min").forEach { (v, l) ->
@@ -181,8 +181,8 @@ fun SettingsScreen(vm: MainViewModel) {
             }
             Text(
                 if (grow == 0) "Off: you stay ${s.cushionSeconds} s behind live."
-                else if (s.liveDiskBuffer) "Plays 4 % slower (sound unchanged) until the cushion is half of the disk buffer " +
-                    "(${vm.appStorage.liveDiskMinutes * 30} s with ${vm.appStorage.liveDiskMinutes} min), then normal speed. " +
+                else if (s.liveDiskBuffer) "Plays 4 % slower (sound unchanged) until you are ${if (grow >= 60) "${grow / 60} min" else "$grow s"} behind live, " +
+                    "then normal speed — the disk keeps up to ${vm.appStorage.liveDiskMinutes} min for rewind and pauses. " +
                     "After a slow moment it refills the same way — no pause, no freeze, never a jump to live."
                 else "Plays 4 % slower (sound unchanged) until you are $grow s behind live (at most your read-ahead), then normal speed. " +
                     "After a slow moment it refills the same way — no pause, no freeze.",
@@ -190,12 +190,17 @@ fun SettingsScreen(vm: MainViewModel) {
             )
             Text("When the line is too slow for a channel", fontWeight = FontWeight.Medium)
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Chip("Switch to my other server", switchSlow, { switchSlow = true; st.liveSwitchWhenSlow = true })
-                Chip("Stay", !switchSlow, { switchSlow = false; st.liveSwitchWhenSlow = false })
+                Chip("Switch to my other server", slowAction == "switch", { slowAction = "switch"; st.liveSlowAction = "switch" })
+                Chip("Propose similar channels", slowAction == "similar", { slowAction = "similar"; st.liveSlowAction = "similar" })
+                Chip("Stay", slowAction == "stay", { slowAction = "stay"; st.liveSlowAction = "stay" })
             }
             Text(
-                "If the signal stays below what the channel needs for ~20 s, Nova plays the same channel from your other server. " +
-                    "A warning shows when only 5 s of cushion is left.",
+                when (slowAction) {
+                    "switch" -> "If the signal stays below what the channel needs for ~20 s, Nova plays the same channel from your other server. "
+                    "similar" -> "If the signal stays below what the channel needs for ~20 s, a popup proposes the same channel from other " +
+                        "groups of the same server, lighter versions (HD / SD) first. Also any time with ≈ Similar in the player. "
+                    else -> "Nova stays on the channel (≈ Similar in the player still proposes the same channel from other groups). "
+                } + "A warning shows when only 5 s of cushion is left.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -219,11 +224,10 @@ fun SettingsScreen(vm: MainViewModel) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(5, 10, 15).forEach { m -> Chip("$m min", minutes == m, { minutes = m; vm.appStorage.liveDiskMinutes = m }) }
                 }
-                val half = if (minutes % 2 == 0) "${minutes / 2} min" else "${minutes / 2} min 30 s"
                 Text(
-                    "The play point stays in the middle of the buffer: up to $half already watched (for rewind) and up to $half " +
-                        "ahead of you as the cushion. Older parts are deleted automatically. The cushion grows while you watch " +
-                        "(4 % slower) or at once when you pause. Disk space at most: HD ≈ ${minutes * 60} MB · 4K ≈ ${"%.1f".format(minutes * 0.19)} GB.",
+                    "Up to $minutes min of the channel are kept on disk: the cushion ahead of you (see “Grow the cushion”) and " +
+                        "the rest for rewind and pauses. Older parts are deleted automatically. " +
+                        "Disk space at most: HD ≈ ${minutes * 60} MB · 4K ≈ ${"%.1f".format(minutes * 0.19)} GB.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp,
                 )
             }
