@@ -67,7 +67,15 @@ class Storage(context: Context) {
         get() = prefs.getBoolean("live_disk_buffer", true)
         set(value) = prefs.edit().putBoolean("live_disk_buffer", value).apply()
 
-    /** Disk space for the rolling live buffer, in MB. */
+    /**
+     * Live disk buffer length in minutes. The play point stays in the middle: what you watched (for rewind)
+     * is kept as long as the cushion ahead of you, everything older is deleted.
+     */
+    var liveDiskMinutes: Int
+        get() = prefs.getInt("live_disk_minutes", 15)
+        set(value) = prefs.edit().putInt("live_disk_minutes", value).apply()
+
+    /** Disk space for the rolling live buffer, in MB (earlier versions; now only a safety limit). */
     var liveDiskMb: Int
         get() = prefs.getInt("live_disk_mb", 600)
         set(value) = prefs.edit().putInt("live_disk_mb", value).apply()
@@ -533,6 +541,22 @@ class Storage(context: Context) {
     var externalOnError: Boolean
         get() = prefs.getBoolean("external_on_error", playerMode != "builtin")
         set(value) = prefs.edit().putBoolean("external_on_error", value).apply()
+
+    /**
+     * A channel / video that can't be played here: open it in another app.
+     * "none" = don't, "ask" = Android's chooser, otherwise the app's package name.
+     * Earlier versions: "When the built-in player can't play a format → Open the external player".
+     */
+    var failApp: String
+        get() = prefs.getString("fail_app", null) ?: if (externalOnError) {
+            playerFor("live").takeIf { it != "builtin" } ?: "ask"
+        } else "none"
+        set(value) = prefs.edit().putString("fail_app", value).apply()
+
+    /** When to open [failApp]: "format" (this device can't decode it) or "any" (any failure). */
+    var failAppWhen: String
+        get() = prefs.getString("fail_app_when", "format") ?: "format"
+        set(value) = prefs.edit().putString("fail_app_when", value).apply()
 
     /** "hardware" (the box's decoders first) or "software" (the app's software decoders first). */
     var videoDecoder: String

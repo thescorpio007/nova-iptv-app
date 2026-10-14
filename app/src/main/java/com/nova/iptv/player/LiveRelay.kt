@@ -65,6 +65,15 @@ class LiveRelay(
     /** Download speed from the provider, bytes per second (0 = not known yet). */
     val downloadBytesPerSec: Double get() = bytesPerSec
 
+    /** The channel's real bitrate (bytes per second), set by the player once known: for the time limits below. */
+    @Volatile var mediaBytesPerSec = 0.0
+
+    /** Keep at most this many seconds on disk (0 = only the size limit). */
+    @Volatile var maxSeconds = 0
+
+    /** Keep the play point in the middle: no more already-watched video than the cushion ahead. */
+    @Volatile var balanced = false
+
     @Volatile var lastError: String? = null
         private set
 
@@ -155,11 +164,16 @@ class LiveRelay(
         }
     }
 
-    /** Deletes the oldest files once the buffer is over its size limit. */
+    /** Deletes the oldest files: over the size / time limit, or more already watched than the cushion ahead. */
     private fun trimLocked() {
         while (segments.size > 2) {
             val first = segments.first()
-            if (written - first.start <= maxBytes) break
+            val bps = mediaBytesPerSec
+            val overSize = written - first.start > maxBytes
+            val overTime = maxSeconds > 0 && bps > 0 && written - first.start > maxSeconds * bps
+            // Without the oldest file, what you watched would still be at least as long as what is ahead of you.
+            val overBalance = balanced && readPos - segments.elementAt(1).start >= written - readPos
+            if (!overSize && !overTime && !overBalance) break
             segments.removeFirst()
             if (readerSegment === first) {
                 runCatching { reader?.close() }

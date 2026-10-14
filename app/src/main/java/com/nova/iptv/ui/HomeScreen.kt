@@ -130,7 +130,7 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
                 SeriesDetailScreen(vm, d, onPlay)
             } else {
                 when (tab) {
-                    Tab.LIVE -> ZoneLayout(vm, vm.live, showEpg = true, dots = true) { wide -> LiveList(vm, onPlay, wide) }
+                    Tab.LIVE -> ZoneLayout(vm, vm.live, showEpg = true) { wide -> LiveList(vm, onPlay, wide) }
                     Tab.FILMS -> ZoneLayout(vm, vm.films, showEpg = false, posters = true, tabs = tabs, dots = true) { wide -> FilmsContent(vm, wide) }
                     Tab.SERIES -> ZoneLayout(vm, vm.series, showEpg = false, posters = true, tabs = tabs) { wide -> SeriesContent(vm, wide) }
                     Tab.SEARCH -> SearchScreen(vm, onPlay)
@@ -754,7 +754,6 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
         }
     }
 
-    CheckList(shown) { if (edit) emptyList() else vm.liveTargets(shown) }
 
     val row: @Composable (Int, LiveChannel) -> Unit = { index, ch ->
         val saved = vm.saved(ch)
@@ -783,7 +782,9 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
             size = settings.liveRowSize,
             showImage = settings.liveLogos,
             extra = if (settings.liveNowLine && !edit) onAir?.let { "▶ " + XtreamApi.formatTime(it.start) + "  " + it.title } else null,
-            dot = if (!edit && dotsOn()) com.nova.iptv.data.StreamCheck.status(com.nova.iptv.data.StreamCheck.key(ItemType.LIVE, ch.accountId, ch.streamId)) else null,
+            // Live: the dot only comes from what you actually played (no background checks on live).
+            dot = if (!edit && dotsOn()) com.nova.iptv.data.StreamCheck.status(com.nova.iptv.data.StreamCheck.key(ItemType.LIVE, ch.accountId, ch.streamId))
+                .takeIf { it.state == com.nova.iptv.data.StreamCheck.State.OK || it.state == com.nova.iptv.data.StreamCheck.State.BAD || it.state == com.nova.iptv.data.StreamCheck.State.DEVICE } else null,
             trailing = {
                 if (edit) {
                     if (lineControls) EditControls(

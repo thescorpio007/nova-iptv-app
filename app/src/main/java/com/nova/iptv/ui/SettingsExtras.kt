@@ -472,6 +472,36 @@ private fun keep(f: File) = f
 
 // =============================================================================== PLAYERS
 
+/** Settings › Channels that don't work: open a channel / video that can't be played here in another app. */
+@Composable
+fun OtherAppSettings(vm: MainViewModel) {
+    val context = LocalContext.current
+    val st = vm.appStorage
+    val apps = remember { com.nova.iptv.player.ExternalPlayer.installed(context) }
+    var app by remember { mutableStateOf(st.failApp) }
+    var whenFail by remember { mutableStateOf(st.failAppWhen) }
+    Text("Open in another app", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+    Hint(
+        "When a channel (or film) can't be played here, hand it to another app on this device. Nova closes its player first, " +
+            "so the server connection is free for that app. When you leave that app, you are back in your Nova list."
+    )
+    val choices = listOf("none" to "Nothing", "ask" to "Ask each time") + apps.map { it.packageName to it.label }
+    ChoiceRow(if (choices.any { it.first == app }) choices else choices + (app to app), app) { app = it; st.failApp = it }
+    if (apps.isEmpty()) Hint("Only the video players installed on this device are shown (none yet: install VLC, MX Player or Just Player).")
+    else Hint("Only the video players installed on this device are shown.")
+    if (app != "none") {
+        Text("When", fontWeight = FontWeight.Medium)
+        ChoiceRow(
+            listOf("format" to "Format problems only (recommended)", "any" to "Any failure"),
+            whenFail,
+        ) { whenFail = it; st.failAppWhen = it }
+        Hint(
+            "Format problems = the channel arrives but this device can't decode it (orange dot): another app often succeeds. " +
+                "Any failure = also “no signal” and server errors: another app usually fails too."
+        )
+    }
+}
+
 @Composable
 fun PlayerSettings(vm: MainViewModel) {
     val s by vm.settings.collectAsStateWithLifecycle()
@@ -498,11 +528,7 @@ fun PlayerSettings(vm: MainViewModel) {
                 current,
             ) { vm.setPlayerFor(kind, it) }
         }
-        Text("When the built-in player can't play a format", fontWeight = FontWeight.Medium)
-        ChoiceRow(
-            listOf("on" to "Open the external player", "off" to "Show a message"),
-            if (s.externalOnError) "on" else "off",
-        ) { vm.setExternalOnError(it == "on") }
+        Hint("“When a channel can't be played here → open it in another app” is in Live TV › Channels that don't work.")
         if (apps.isEmpty()) {
             Hint("No external player is installed yet. Install VLC, MX Player or Just Player from the store, then come back.")
         }

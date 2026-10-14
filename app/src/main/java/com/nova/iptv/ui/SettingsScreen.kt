@@ -181,7 +181,10 @@ fun SettingsScreen(vm: MainViewModel) {
             }
             Text(
                 if (grow == 0) "Off: you stay ${s.cushionSeconds} s behind live."
-                else "Plays 4 % slower (sound unchanged) until you are $grow s behind live, then normal speed. " +
+                else if (s.liveDiskBuffer) "Plays 4 % slower (sound unchanged) until the cushion is half of the disk buffer " +
+                    "(${vm.appStorage.liveDiskMinutes * 30} s with ${vm.appStorage.liveDiskMinutes} min), then normal speed. " +
+                    "After a slow moment it refills the same way — no pause, no freeze, never a jump to live."
+                else "Plays 4 % slower (sound unchanged) until you are $grow s behind live (at most your read-ahead), then normal speed. " +
                     "After a slow moment it refills the same way — no pause, no freeze.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.primary,
             )
@@ -211,9 +214,16 @@ fun SettingsScreen(vm: MainViewModel) {
                 Chip("Disk (pause & rewind)", s.liveDiskBuffer, { vm.setLiveDiskBuffer(true) })
             }
             if (s.liveDiskBuffer) {
-                Stepper("Disk buffer size", "${s.liveDiskMb} MB", { vm.setLiveDiskMb(s.liveDiskMb - 200) }, { vm.setLiveDiskMb(s.liveDiskMb + 200) })
+                var minutes by remember { mutableStateOf(vm.appStorage.liveDiskMinutes) }
+                Text("Disk buffer length", fontWeight = FontWeight.Medium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(5, 10, 15).forEach { m -> Chip("$m min", minutes == m, { minutes = m; vm.appStorage.liveDiskMinutes = m }) }
+                }
+                val half = if (minutes % 2 == 0) "${minutes / 2} min" else "${minutes / 2} min 30 s"
                 Text(
-                    "About ${s.liveDiskMb / 37} minutes of a typical HD channel (5 Mbps). Older parts are deleted automatically.",
+                    "The play point stays in the middle of the buffer: up to $half already watched (for rewind) and up to $half " +
+                        "ahead of you as the cushion. Older parts are deleted automatically. The cushion grows while you watch " +
+                        "(4 % slower) or at once when you pause. Disk space at most: HD ≈ ${minutes * 60} MB · 4K ≈ ${"%.1f".format(minutes * 0.19)} GB.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp,
                 )
             }
@@ -246,12 +256,14 @@ fun SettingsScreen(vm: MainViewModel) {
                 Chip("Stay and retry", !s.autoSkip, { vm.setAutoSkip(false) })
             }
             Stepper("Wait before skipping", "${s.skipTimeoutSec} s", { vm.setSkipTimeout(s.skipTimeoutSec - 2) }, { vm.setSkipTimeout(s.skipTimeoutSec + 2) })
+            OtherAppSettings(vm)
             var dotsSetting by remember { mutableStateOf(vm.appStorage.statusDots) }
             Text("Status dots", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
             Text(
-                "A dot in front of each channel, film poster and episode: green works, red not working, orange works but " +
-                    "this device can't play its format, grey not checked yet. Only the open group / season is checked, " +
-                    "quietly one by one, never using more connections than your server allows. Results are kept 6 hours.",
+                "Green works, red not working, orange works but this device can't play its format, grey not checked yet. " +
+                    "Film posters and episodes of the open group / season are checked quietly one by one, only while nothing " +
+                    "is playing. Live channels are never checked in the background: their dot comes from what you actually watched. " +
+                    "Results are kept 6 hours.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

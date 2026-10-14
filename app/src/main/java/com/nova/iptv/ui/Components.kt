@@ -239,8 +239,11 @@ fun Chip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifie
     FocusBox(onClick = onClick, modifier = modifier, shape = RoundedCornerShape(20.dp), selected = selected) {
         Text(
             text,
-            modifier = Modifier.padding(horizontal = if (big) 20.dp else 14.dp, vertical = if (big) 10.dp else 8.dp),
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            // The chosen button: solid green with dark text, readable on any TV picture setting.
+            modifier = Modifier
+                .then(if (selected) Modifier.background(Accent, RoundedCornerShape(20.dp)) else Modifier)
+                .padding(horizontal = if (big) 20.dp else 14.dp, vertical = if (big) 10.dp else 8.dp),
+            color = if (selected) Color(0xFF00210B) else MaterialTheme.colorScheme.onSurface,
             fontWeight = if (selected || big) FontWeight.Bold else FontWeight.Normal,
             fontSize = if (big) 17.sp else 14.sp,
             maxLines = 1,

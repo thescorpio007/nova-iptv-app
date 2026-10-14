@@ -562,6 +562,7 @@ class PlayerActivity : ComponentActivity() {
         PlaybackQueue.index = i
         val item = items[i]
         current = item
+        if (otherAppOpen) closeOtherApp()
         // Status dots: this server's connection is now the player's (a check running there stops).
         StreamCheck.playing(if (item.isLocal) null else item.saved.accountId)
         hideNextCard()
@@ -569,7 +570,8 @@ class PlayerActivity : ComponentActivity() {
         extraSubtitle = null
         retryCount = 0
         everReady = false
-        if (!quiet) { startAttempts = 0; startOtherTried = false; weakChannel = false }
+        if (!quiet) { startAttempts = 0; startOtherTried = false; weakChannel = false; skipOtherApp = false; wdLiveFixes.clear() }
+        lastGrowWantMs = 0L
         refilling = false
         mediaBps = 0.0; bpsSampleBytes = -1L; arrivals.clear(); arrivalBps = 0.0
         rebuffers.clear(); notArrivingSince = 0L
@@ -599,14 +601,21 @@ class PlayerActivity : ComponentActivity() {
         if (oldRelay != null) handler.postDelayed({ oldRelay.close() }, 3000)
         if (mode == SourceMode.LIVE_RELAY) {
             Log.i("NovaTest", "RELAY new ${item.title}")
+            val liveDir = Folders.bufferDir(this, Folders.BUFFER_LIVE, app.storage.usePublicFolder)
+            // Time-based buffer (minutes); the size is only a safety limit, kept below the free space.
+            val free = runCatching { android.os.StatFs(liveDir.apply { mkdirs() }.absolutePath).availableBytes }.getOrDefault(4L shl 30)
+            val safety = minOf(6L shl 30, free - (500L shl 20)).coerceAtLeast(300L shl 20)
             relay = LiveRelay(
                 url = item.url,
                 client = app.http,
                 userAgent = app.storage.userAgent,
-                dir = Folders.bufferDir(this, Folders.BUFFER_LIVE, app.storage.usePublicFolder),
-                maxBytes = app.storage.liveDiskMb * 1024L * 1024L,
+                dir = liveDir,
+                maxBytes = safety,
                 tap = { b, off, len -> Recorder.write(b, off, len) },
-            )
+            ).also {
+                it.maxSeconds = app.storage.liveDiskMinutes * 60
+                it.balanced = true
+            }
         }
 
         // A fresh read-ahead per film / episode (the old one's segments are deleted).
@@ -944,10 +953,9 @@ class PlayerActivity : ComponentActivity() {
             val dolby = detail?.contains("Dolby Vision") == true
             val reason = if (dolby) "\nThis device can't play Dolby Vision (your TV box can). Look for the same film in HD / without “4K”, or use VLC / MX Player."
                 else detail?.let { "\nThis device can't decode the $it." }.orEmpty()
-            if (app.storage.externalOnError) {
-                // Codec problem: hand this channel / video to the external player.
-                Toast.makeText(this, "The built-in player can't play this format$reason\nOpening the external player…", Toast.LENGTH_LONG).show()
-                openExternal()
+            if (app.storage.failApp != "none") {
+                // Codec problem: offer this channel / video to the chosen app (3 s countdown, can be stopped).
+                offerOtherApp(item, if (dolby) "This device can't play Dolby Vision" else "This device can't decode its ${detail ?: "format"}", format = true)
             } else if (item.isLive) {
                 channelFailed("format not supported by this device")
             } else {
@@ -1084,6 +1092,12 @@ class PlayerActivity : ComponentActivity() {
                 else -> "no signal"
             })
         }
+        // "Open in another app" for any failure: offer it before skipping / retrying.
+        if (!skipOtherApp && app.storage.failApp != "none" && app.storage.failAppWhen == "any" && !reason.contains("format")) {
+            offerOtherApp(item, "It isn't working here ($reason)", format = false)
+            return
+        }
+        skipOtherApp = false
         val items = PlaybackQueue.items
         val maxSkips = minOf(items.size - 1, 25)
         Log.i("NovaTest", "SKIP ${item.title}: $reason")
@@ -1100,6 +1114,111 @@ class PlayerActivity : ComponentActivity() {
             )
             retryCount = 1 // lets OK retry
         }
+    }
+
+    // ------------------------------------------------------------------ open a channel that fails in another app
+
+    private var otherAppPanel: LinearLayout? = null
+    private var otherAppTask: Runnable? = null
+    /** "Stay in Nova" was chosen: the next failure of this channel goes the usual way (skip / retry). */
+    private var skipOtherApp = false
+
+    private val otherAppOpen: Boolean get() = otherAppPanel?.visibility == View.VISIBLE
+
+    private fun failAppLabel(): String {
+        val pkg = app.storage.failApp
+        if (pkg == "ask") return "another app"
+        return ExternalPlayer.installed(this).firstOrNull { it.packageName == pkg }?.label ?: "another app"
+    }
+
+    /** "… can't be played here · Opening in VLC in 3 s" with Open now / Stay in Nova / Next channel. */
+    private fun offerOtherApp(item: PlayItem, why: String, format: Boolean) {
+        cancelTimers()
+        player?.stop() // frees the server connection for the other app
+        hideStatus()
+        val label = failAppLabel()
+        Log.i("NovaTest", "OTHER APP offer ${item.title}: $why -> $label")
+        val panel = otherAppPanel ?: LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(26), dp(20), dp(26), dp(20))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat(); setColor(0xEE0A0E14.toInt()); setStroke(dp(2), 0xFFFFA31A.toInt())
+            }
+            layoutParams = FrameLayout.LayoutParams(
+                (resources.displayMetrics.widthPixels * 0.6f).toInt().coerceIn(dp(300), dp(680)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
+            )
+            (playerView.parent as ViewGroup).addView(this)
+            otherAppPanel = this
+        }
+        panel.removeAllViews()
+        panel.addView(TextView(this).apply {
+            text = "“${item.title}” can't be played here"
+            setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f); setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        val countdown = TextView(this).apply {
+            setTextColor(0xFFCCCCCC.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); gravity = Gravity.CENTER
+            setPadding(0, dp(6), 0, dp(10))
+        }
+        panel.addView(countdown)
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 30; progress = 0
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFFFFA31A.toInt())
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { bottomMargin = dp(14) }
+        }
+        panel.addView(bar)
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        fun button(text: String, action: () -> Unit) = pill(text) {}.apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setOnClickListener { action() }
+            (layoutParams as? LinearLayout.LayoutParams)?.setMargins(dp(6), 0, dp(6), 0)
+        }
+        val openNow = button("▶ Open in $label now") { closeOtherApp(); openFailApp(item) }
+        buttons.addView(openNow)
+        buttons.addView(button("Stay in Nova") {
+            closeOtherApp()
+            skipOtherApp = true
+            if (format) {
+                if (item.isLive) channelFailed("format not supported by this device")
+                else showStatus("The built-in player can't play this format.\n$why.")
+            } else channelFailed("not working")
+        })
+        if (item.isLive && PlaybackQueue.items.size > 1) buttons.addView(button("Next channel") { closeOtherApp(); zap(1, auto = false) })
+        panel.addView(buttons)
+        panel.visibility = View.VISIBLE
+        playerView.hideController()
+        openNow.requestFocus()
+        var ticks = 0
+        val task = object : Runnable {
+            override fun run() {
+                if (!otherAppOpen || current !== item) return
+                ticks++
+                bar.progress = ticks
+                val left = ((30 - ticks) + 9) / 10
+                countdown.text = "$why · Opening in $label in $left s…"
+                if (ticks >= 30) { closeOtherApp(); openFailApp(item) } else handler.postDelayed(this, 100)
+            }
+        }
+        countdown.text = "$why · Opening in $label in 3 s…"
+        otherAppTask = task
+        handler.postDelayed(task, 100)
+    }
+
+    private fun closeOtherApp() {
+        otherAppTask?.let { handler.removeCallbacks(it) }
+        otherAppTask = null
+        otherAppPanel?.visibility = View.GONE
+        if (::keySink.isInitialized) keySink.requestFocus()
+    }
+
+    private fun openFailApp(item: PlayItem) {
+        saveResumePosition()
+        player?.stop()
+        val pkg = app.storage.failApp.takeIf { it != "ask" && it != "none" }
+        Log.i("NovaTest", "OTHER APP open ${item.title} in ${pkg ?: "chooser"}")
+        if (ExternalPlayer.open(this, item, pkg)) finish()
     }
 
     private fun cancelTimers() {
@@ -1520,8 +1639,6 @@ class PlayerActivity : ComponentActivity() {
         if (g.key == overlayGroupKey && overlayChannels.isNotEmpty()) {
             if (focusChannels) {
                 panelColumn = 1; refreshOverlayCursor()
-                // OK on the open group: check its channels again (those not checked in the last 2 minutes).
-                if (StreamCheck.enabled) StreamCheck.retest(checkTargets(overlayChannels), fromPlayer = true, olderThanMs = 120_000)
             }
             return
         }
@@ -1547,7 +1664,6 @@ class PlayerActivity : ComponentActivity() {
             list.getOrNull(i)?.let { dotLabel(it, label, it.saved.key == playingKey) } ?: label
         }) { i -> list.getOrNull(i)?.saved?.key == playingKey }
         channelListView.setSelection(maxOf(0, channelCursor - 3))
-        if (StreamCheck.enabled) StreamCheck.want(checkTargets(list), fromPlayer = true)
         updateOverlayTitle()
     }
 
@@ -1559,15 +1675,14 @@ class PlayerActivity : ComponentActivity() {
         if (item.isLocal || item.catchup || item.temporary || item.saved.accountId.isBlank()) null
         else StreamCheck.key(item.saved.type, item.saved.accountId, item.saved.id)
 
-    private fun checkTargets(list: List<PlayItem>) = list.mapNotNull { p ->
-        checkKey(p)?.let { StreamCheck.Target(it, p.url, p.saved.accountId, p.isLive) }
-    }
 
     /** "●  12.  M6 4K   no signal" with the dot in its colour. */
     private fun dotLabel(item: PlayItem, label: String, watching: Boolean): CharSequence {
         if (!StreamCheck.enabled) return label
         val k = checkKey(item) ?: return label
         val st = if (watching && everReady) StreamCheck.Status(StreamCheck.State.OK) else StreamCheck.status(k)
+        // Live: only channels you actually played have a dot.
+        if (st.state != StreamCheck.State.OK && st.state != StreamCheck.State.BAD && st.state != StreamCheck.State.DEVICE) return label
         val sb = android.text.SpannableStringBuilder()
         val mark = if (st.state == StreamCheck.State.CHECKING) "◌" else "●"
         val color = when (st.state) {
@@ -1600,18 +1715,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun updateOverlayTitle() {
-        val t = overlayTitle ?: return
-        if (!StreamCheck.enabled || overlayChannels.isEmpty()) { t.text = "Groups  ·  Channels"; return }
-        val keys = overlayChannels.mapNotNull { checkKey(it) }
-        if (keys.isEmpty()) { t.text = "Groups  ·  Channels"; return }
-        val (done, total, busy) = StreamCheck.progress(keys)
-        val sb = android.text.SpannableStringBuilder("Groups  ·  Channels")
-        val start = sb.length
-        sb.append(if (busy) "      ⟳ Checking… $done / $total" else "      Checked $done / $total · OK on the group = check again")
-        sb.setSpan(android.text.style.RelativeSizeSpan(0.6f), start, sb.length, 0)
-        sb.setSpan(android.text.style.StyleSpan(Typeface.NORMAL), start, sb.length, 0)
-        sb.setSpan(android.text.style.ForegroundColorSpan(0xFFCCFFDD.toInt()), start, sb.length, 0)
-        t.text = sb
+        overlayTitle?.text = "Groups  ·  Channels"
     }
 
     private fun pickOverlayChannel(position: Int) {
@@ -1874,8 +1978,13 @@ class PlayerActivity : ComponentActivity() {
         val grow = app.storage.liveGrowTarget
         val base = if (weakChannel && app.storage.weakRefillSecs > 0) maxOf(app.storage.cushionSeconds, app.storage.weakRefillSecs)
         else app.storage.cushionSeconds
-        // In memory only (no disk buffer) the player can't hold more than its read-ahead.
-        val want = maxOf(base, grow).let { if (relay == null) minOf(it, maxOf(base, app.storage.maxBufferSeconds - 5)) else it } * 1000L
+        relay?.let { r -> if (mediaBps > 0) r.mediaBytesPerSec = mediaBps }
+        // Disk buffer: grow up to half of it (the play point in the middle). Memory only: at most the read-ahead,
+        // and on HLS channels at most what the server still keeps (or the player would be sent back to live).
+        var want = if (relay != null) (if (grow > 0) maxOf(base, app.storage.liveDiskMinutes * 30) else base) * 1000L
+        else minOf(maxOf(base, grow), maxOf(base, app.storage.maxBufferSeconds - 5)) * 1000L
+        if (relay == null && p != null) serverWindowMs(p)?.let { w -> if (w > 20_000) want = minOf(want, maxOf(base * 1000L, w - 10_000)) }
+        lastGrowWantMs = want
         val active = item != null && item.isLive && !item.catchup && p != null &&
             (app.storage.liveStart == "fast" || weakChannel || grow > base) && !refilling &&
             p.isPlaying && p.playbackState == Player.STATE_READY
@@ -1895,6 +2004,17 @@ class PlayerActivity : ComponentActivity() {
             p!!.setPlaybackSpeed(1f)
             Log.i("NovaTest", "CUSHION ready: ${ahead / 1000} s")
         }
+    }
+
+    /** The cushion the player is growing to (for the "drifting behind live" check). */
+    private var lastGrowWantMs = 0L
+
+    /** How much of a live HLS channel the server still keeps (its window), null when not known. */
+    private fun serverWindowMs(p: Player): Long? {
+        val tl = p.currentTimeline
+        if (tl.isEmpty) return null
+        val w = tl.getWindow(p.currentMediaItemIndex, androidx.media3.common.Timeline.Window())
+        return if (w.isLive() && w.durationMs != C.TIME_UNSET && w.durationMs > 0) w.durationMs else null
     }
 
     private var slowSince = 0L
@@ -1995,7 +2115,9 @@ class PlayerActivity : ComponentActivity() {
         // Drifting behind live (memory buffer only; the disk buffer is behind on purpose).
         if (playerMode != SourceMode.LIVE_RELAY) {
             val offset = p.currentLiveOffset
-            if (offset != androidx.media3.common.C.TIME_UNSET && offset > 60_000) {
+            // Never below the cushion being grown (+30 s): growing it must not count as "drifting".
+            val driftLimit = maxOf(60_000L, lastGrowWantMs + 30_000L, app.storage.cushionSeconds * 1000L + 30_000L)
+            if (offset != androidx.media3.common.C.TIME_UNSET && offset > driftLimit) {
                 p.seekToDefaultPosition()
                 logHealth(item, "${offset / 1000} s behind live", "jumped back to live")
                 wdGraceUntil = now + 10_000
@@ -2007,6 +2129,8 @@ class PlayerActivity : ComponentActivity() {
      * "Live button only" watchdog: does exactly what the Live ⏭ button does (jump to live in the disk buffer and
      * restart the picture there), at most once every 20 s. Renews the connection only after 30 s with no video at all.
      */
+    private val wdLiveFixes = ArrayDeque<Long>()
+
     private fun liveOnlyFix(item: PlayItem, problem: String) {
         val now = android.os.SystemClock.elapsedRealtime()
         val r = relay
@@ -2026,9 +2150,16 @@ class PlayerActivity : ComponentActivity() {
             // stuck: jump to live (below).
             r != null && mediaBps > 0 && problem.startsWith("stuck loading") && arrivalBps < mediaBps * 0.9 &&
                 r.bytesAhead() / mediaBps * 1000 + (player?.totalBufferedDuration ?: 0L) < 2000 -> null
+            // First time: restart the picture at the same place (the cushion is kept). Again within 2 minutes:
+            // 10 s further on. Only a third time: back to live (still the safety cushion behind it).
             else -> {
-                goLive()
-                "jumped to live"
+                while (wdLiveFixes.isNotEmpty() && now - wdLiveFixes.first() > 120_000) wdLiveFixes.removeFirst()
+                wdLiveFixes.addLast(now)
+                when {
+                    r != null && wdLiveFixes.size == 1 -> { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
+                    r != null && wdLiveFixes.size == 2 -> { r.moveBy(10); restartFromRelay(); "skipped 10 s (cushion kept)" }
+                    else -> { goLive(); "jumped to live" }
+                }
             }
         }
         wdReset(now)
@@ -2379,6 +2510,21 @@ class PlayerActivity : ComponentActivity() {
 
         // A key whose press Nova used: its release must not click the button under the focus.
         if (event.action == KeyEvent.ACTION_UP && swallowUp.remove(code)) return true
+
+        // "Open in another app" offer: arrows / OK on its buttons, Back = Stay in Nova.
+        if (otherAppOpen) {
+            if (code == KeyEvent.KEYCODE_BACK) {
+                if (down) {
+                    swallowUp += code
+                    val cur = current
+                    closeOtherApp()
+                    skipOtherApp = true
+                    if (cur != null && cur.isLive) channelFailed("not working")
+                }
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
 
         // Menus opened on purpose keep the arrows and OK for moving inside them.
         if (channelPanelOpen) {

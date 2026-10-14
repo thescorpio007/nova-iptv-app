@@ -153,7 +153,8 @@ object StreamCheck {
     /** Playback starts on this account (null = stopped): a check running there is stopped at once. */
     fun playing(accountId: String?) {
         playingAccount = accountId?.ifBlank { null }
-        if (accountId != null && accountId == checkingAccount) runCatching { call?.cancel() }
+        // Nothing is checked while something plays (a check could disturb the picture): stop a running one.
+        if (accountId != null) runCatching { call?.cancel() }
     }
 
     /** The item played (picture or sound came): green. Clears a format problem when the video decoded. */
@@ -195,7 +196,8 @@ object StreamCheck {
     private suspend fun worker() {
         while (true) {
             val now = System.currentTimeMillis()
-            val q = if (enabled) queue else emptyList()
+            // Never while the player is open: live channels and films play undisturbed.
+            val q = if (enabled && playingAccount == null) queue.filter { !it.live } else emptyList()
             var picked: Target? = null
             var waitChanged = false
             for (t in q) {
