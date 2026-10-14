@@ -330,7 +330,9 @@ fun SettingsScreen(vm: MainViewModel) {
         var confirmReset by remember { mutableStateOf(false) }
         Card("Reset") {
             Text(
-                "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer, 15 s cushion (safe start), stay and retry on channels that don't work, age filter NC-17 with words, 500 MB disk read-ahead, " +
+                "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer 15 min, 15 s cushion (fast start) growing to 2 min, " +
+                    "skip channels that don't work after 8 s, propose similar channels when the line is too slow, open in another app: ask (format problems), " +
+                    "age filter NC-17 with words, 200 MB disk read-ahead, " +
                     "app audio decoders, Back twice to leave live TV, films sorted by rating, storage in the box's Download/NovaIPTV folder…). " +
                     "Your servers, favorites, order, hidden items, PIN and downloads are kept.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
@@ -419,11 +421,25 @@ private fun Card(title: String, summary: String? = null, content: @Composable ()
 
 @Composable
 private fun Stepper(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, modifier = Modifier.width(140.dp))
-        OutlinedButton(onClick = onMinus) { Text("−") }
-        Text(value, modifier = Modifier.width(90.dp).padding(horizontal = 8.dp), fontWeight = FontWeight.Bold)
-        OutlinedButton(onClick = onPlus) { Text("+") }
+    // Narrow screens (phones): the label above, so − value + always fit.
+    androidx.compose.foundation.layout.BoxWithConstraints {
+        val narrow = maxWidth < 420.dp
+        val buttons: @Composable () -> Unit = {
+            OutlinedButton(onClick = onMinus) { Text("−") }
+            Text(value, modifier = Modifier.width(90.dp).padding(horizontal = 8.dp), fontWeight = FontWeight.Bold)
+            OutlinedButton(onClick = onPlus) { Text("+") }
+        }
+        if (narrow) {
+            androidx.compose.foundation.layout.Column {
+                Text(label)
+                Row(verticalAlignment = Alignment.CenterVertically) { buttons() }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label, modifier = Modifier.width(140.dp))
+                buttons()
+            }
+        }
     }
 }
 

@@ -116,7 +116,7 @@ class Storage(context: Context) {
     /** When the line is too slow for a channel: "switch" (other server), "similar" (popup, same server) or "stay". */
     var liveSlowAction: String
         get() = prefs.getString("live_slow_action", null)
-            ?: if (prefs.contains("live_switch_slow") && prefs.getBoolean("live_switch_slow", false)) "switch" else "stay"
+            ?: if (prefs.contains("live_switch_slow")) (if (prefs.getBoolean("live_switch_slow", false)) "switch" else "stay") else "similar"
         set(value) = prefs.edit().putString("live_slow_action", value).apply()
 
     /** Jump to the next channel automatically when a live channel doesn't work. */
@@ -203,7 +203,7 @@ class Storage(context: Context) {
 
     /** Disk read-ahead for films & series in MB (0 = off): one connection fills segments ahead of the player. */
     var readAheadMb: Int
-        get() = prefs.getInt("read_ahead_mb", 500)
+        get() = prefs.getInt("read_ahead_mb", 200)
         set(value) = prefs.edit().putInt("read_ahead_mb", value).apply()
 
     /** How see-through the overlays over live TV are (group list, recent bar), in %. */
@@ -556,7 +556,7 @@ class Storage(context: Context) {
     var failApp: String
         get() = prefs.getString("fail_app", null) ?: if (prefs.contains("external_on_error") && externalOnError) {
             playerFor("live").takeIf { it != "builtin" } ?: "ask"
-        } else "none"
+        } else if (prefs.contains("external_on_error")) "none" else "ask"
         set(value) = prefs.edit().putString("fail_app", value).apply()
 
     /** When to open [failApp]: "format" (this device can't decode it) or "any" (any failure). */

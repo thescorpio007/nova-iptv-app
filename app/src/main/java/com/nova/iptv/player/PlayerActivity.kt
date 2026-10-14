@@ -567,7 +567,7 @@ class PlayerActivity : ComponentActivity() {
         current = item
         if (otherAppOpen) closeOtherApp()
         if (similarOpen) closeSimilar()
-        startSession(item)
+        startSession(item, quiet)
         // Status dots: this server's connection is now the player's (a check running there stops).
         StreamCheck.playing(if (item.isLocal) null else item.saved.accountId)
         hideNextCard()
@@ -575,7 +575,8 @@ class PlayerActivity : ComponentActivity() {
         extraSubtitle = null
         retryCount = 0
         everReady = false
-        if (!quiet) { startAttempts = 0; startOtherTried = false; weakChannel = false; skipOtherApp = false; wdLiveFixes.clear() }
+        if (!quiet) { startAttempts = 0; startOtherTried = false; weakChannel = false; skipOtherApp = false; wdLiveFixes.clear(); containerRetries = 0 }
+        lastErrorName = null
         lastGrowWantMs = 0L
         refilling = false
         mediaBps = 0.0; bpsSampleBytes = -1L; arrivals.clear(); arrivalBps = 0.0
@@ -941,10 +942,32 @@ class PlayerActivity : ComponentActivity() {
     private fun scheduleReconnect(error: PlaybackException?) {
         val item = current ?: return
         val code = error?.errorCode
+        lastErrorName = error?.let { e ->
+            e.errorCodeName.removePrefix("ERROR_CODE_") + (generateSequence(e.cause) { it.cause }.lastOrNull()?.let { c -> " (${c.javaClass.simpleName}: ${c.message?.take(80)})" } ?: "")
+        }
+        // "Stream not recognised": usually the first data arrived broken or empty (server hiccup), not this device.
+        // Retry quietly; only after that is it reported as a file the player can't read.
+        if (code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED) {
+            if (containerRetries < 3) {
+                containerRetries++
+                Log.i("NovaTest", "UNRECOGNISED ${item.title}: retry $containerRetries ($lastErrorName)")
+                session?.action("stream not recognised → retry $containerRetries")
+                val pos = if (item.isLive) 0L else (player?.currentPosition ?: 0L).coerceAtLeast(0L)
+                handler.postDelayed({
+                    if (current !== item) return@postDelayed
+                    if (item.isLive) startPlayback(PlaybackQueue.index, quiet = true, keepTweaks = true) else restartAt(item, pos)
+                }, 1200L * containerRetries)
+                return
+            }
+            session?.fail(if (item.isLive) "FAIL" else "FILE", "stream / file not readable by Nova [$lastErrorName]")
+            if (item.isLive) { channelFailed("stream not recognised"); return }
+            if (app.storage.failApp != "none") offerOtherApp(item, "Nova can't read this file's format", format = true)
+            else showStatus("Nova can't read this file's format (not a problem of this device).\nPress OK (or tap here) to open it in an external player.").also { externalSuggested = true }
+            return
+        }
         if (code == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
             code == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
             code == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
-            code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
             (code == PlaybackException.ERROR_CODE_DECODING_FAILED && !item.isLive) ||
             // Sound output problems (often Dolby/DTS passthrough or offload) on films: try the fixes.
             (!item.isLive && code in listOf(
@@ -970,7 +993,7 @@ class PlayerActivity : ComponentActivity() {
             )
             if (tryRecover(item, error)) return
             checkKey(item)?.let { StreamCheck.deviceFailed(it, detail ?: "format") }
-            session?.fail("DEVICE", "can't decode ${detail ?: "the format"}")
+            session?.fail("DEVICE", "can't decode ${detail ?: "the format"} [$lastErrorName]")
             val dolby = detail?.contains("Dolby Vision") == true
             val reason = if (dolby) "\nThis device can't play Dolby Vision (your TV box can). Look for the same film in HD / without “4K”, or use VLC / MX Player."
                 else detail?.let { "\nThis device can't decode the $it." }.orEmpty()
@@ -1008,7 +1031,7 @@ class PlayerActivity : ComponentActivity() {
             val limit = if (httpCode == 401 || httpCode == 403 || httpCode == 404) 3 else 30
             if (retryCount > limit) {
                 if (httpCode == 404) checkKey(item)?.let { StreamCheck.failed(it, "not found") }
-                session?.fail("FAIL", if (httpCode != null) "server answered HTTP $httpCode" else "video unavailable")
+                session?.fail("FAIL", (if (httpCode != null) "server answered HTTP $httpCode" else "video unavailable") + (lastErrorName?.let { " [$it]" } ?: ""))
                 showStatus(
                     when (httpCode) {
                         401, 403 -> "Server refused the video (HTTP $httpCode). Check the account or its connection limit."
@@ -1123,7 +1146,8 @@ class PlayerActivity : ComponentActivity() {
         val items = PlaybackQueue.items
         val maxSkips = minOf(items.size - 1, 25)
         Log.i("NovaTest", "SKIP ${item.title}: $reason")
-        session?.fail(if (reason.contains("format")) "DEVICE" else "FAIL", reason + if (app.storage.autoSkip && items.size > 1) " · skipped automatically" else "")
+        session?.fail(if (reason.contains("format")) "DEVICE" else "FAIL", reason + (lastErrorName?.let { " [$it]" } ?: "") +
+            if (app.storage.autoSkip && items.size > 1) " · skipped automatically" else "")
         if (app.storage.autoSkip && items.size > 1 && autoSkips < maxSkips) {
             autoSkips++
             Toast.makeText(this, "“${item.title}” isn't working ($reason) — next channel", Toast.LENGTH_SHORT).show()
@@ -1142,14 +1166,25 @@ class PlayerActivity : ComponentActivity() {
     // ------------------------------------------------------------------ playback report (Settings › Last problem)
 
     private var session: PlaybackLog.Session? = null
+    /** Last player error, for the report ("DECODING_FORMAT_UNSUPPORTED (MediaCodec…: …)"). */
+    private var lastErrorName: String? = null
+    /** "Stream not recognised" retries for the item playing. */
+    private var containerRetries = 0
     private var bufferingAt = 0L
 
-    private fun startSession(item: PlayItem) {
+    private fun startSession(item: PlayItem, quiet: Boolean) {
+        // A quiet restart of the same channel / film (retry, watchdog) stays in the same report line.
+        if (quiet && session?.key == item.key) return
         endSession()
         val server = app.storage.accounts.firstOrNull { it.id == item.saved.accountId }?.name
             ?: if (item.isLocal) "this device" else "link"
         val group = if (item.isLive) LiveCatalog.groupName(PlaybackQueue.groupKey) else null
-        session = PlaybackLog.Session(item.title, item.kind, server, group).also {
+        if (item.isLive && group == null && PlaybackQueue.groupKey?.contains('|') == true) lifecycleScope.launch {
+            runCatching { LiveCatalog.groups(app) }
+            val ss = session ?: return@launch
+            if (ss.title == item.title) ss.group = LiveCatalog.groupName(PlaybackQueue.groupKey)
+        }
+        session = PlaybackLog.Session(item.title, item.kind, server, group, item.key).also {
             // Only the file type, never the address (it holds the login).
             it.container = item.url.substringBefore('?').substringAfterLast('.', "").takeIf { e -> e.length in 2..5 }?.uppercase().orEmpty()
         }
@@ -1204,10 +1239,12 @@ class PlayerActivity : ComponentActivity() {
             setOnClickListener { action() }
             (layoutParams as? LinearLayout.LayoutParams)?.setMargins(0, 0, dp(10), 0)
         }
+        similarCountdown = text("", 12f, 0xFFFFD08A.toInt()).apply { setPadding(0, dp(8), 0, 0); visibility = View.GONE }
         val stay = button("Stay on this one") { closeSimilar() }
         buttons.addView(stay)
         if (app.storage.accounts.size > 1) buttons.addView(button("Try my other server") { closeSimilar(); switchToOtherServer(item) })
         panel.addView(buttons)
+        panel.addView(similarCountdown)
         panel.visibility = View.VISIBLE
         stay.requestFocus()
         armSimilarClose(auto)
@@ -1265,11 +1302,24 @@ class PlayerActivity : ComponentActivity() {
     /** Auto-opened (line too slow): closes by itself after 20 s without a choice. */
     private fun armSimilarClose(auto: Boolean) {
         similarCloseTask?.let { handler.removeCallbacks(it) }
-        if (!auto) return
-        val t = Runnable { if (similarOpen) closeSimilar() }
+        similarCloseTask = null
+        if (!auto) { similarCountdown?.text = ""; similarCountdown?.visibility = View.GONE; return }
+        var left = 10
+        val t = object : Runnable {
+            override fun run() {
+                if (!similarOpen) return
+                if (left <= 0) { closeSimilar(); return }
+                similarCountdown?.visibility = View.VISIBLE
+                similarCountdown?.text = "Staying on this channel in $left s — press any key to choose"
+                left--
+                handler.postDelayed(this, 1000)
+            }
+        }
         similarCloseTask = t
-        handler.postDelayed(t, 20_000)
+        t.run()
     }
+
+    private var similarCountdown: TextView? = null
 
     private fun closeSimilar() {
         similarCloseTask?.let { handler.removeCallbacks(it) }
@@ -1311,6 +1361,16 @@ class PlayerActivity : ComponentActivity() {
     private var skipOtherApp = false
 
     private val otherAppOpen: Boolean get() = otherAppPanel?.visibility == View.VISIBLE
+    private var otherAppCountdown: TextView? = null
+    private var otherAppWhy = ""
+
+    /** A key pressed in a popup: its countdown stops, you choose calmly. */
+    private fun stopOtherAppCountdown() {
+        val t = otherAppTask ?: return
+        handler.removeCallbacks(t)
+        otherAppTask = null
+        otherAppCountdown?.text = "$otherAppWhy · Choose below"
+    }
 
     private fun failAppLabel(): String {
         val pkg = app.storage.failApp
@@ -1351,7 +1411,7 @@ class PlayerActivity : ComponentActivity() {
         }
         panel.addView(countdown)
         val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 30; progress = 0
+            max = 100; progress = 0
             progressTintList = android.content.res.ColorStateList.valueOf(0xFFFFA31A.toInt())
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { bottomMargin = dp(14) }
         }
@@ -1383,12 +1443,14 @@ class PlayerActivity : ComponentActivity() {
                 if (!otherAppOpen || current !== item) return
                 ticks++
                 bar.progress = ticks
-                val left = ((30 - ticks) + 9) / 10
+                val left = ((100 - ticks) + 9) / 10
                 countdown.text = "$why · Opening in $label in $left s…"
-                if (ticks >= 30) { closeOtherApp(); openFailApp(item) } else handler.postDelayed(this, 100)
+                if (ticks >= 100) { closeOtherApp(); openFailApp(item) } else handler.postDelayed(this, 100)
             }
         }
-        countdown.text = "$why · Opening in $label in 3 s…"
+        countdown.text = "$why · Opening in $label in 10 s…"
+        otherAppCountdown = countdown
+        otherAppWhy = why
         otherAppTask = task
         handler.postDelayed(task, 100)
     }
@@ -2726,6 +2788,7 @@ class PlayerActivity : ComponentActivity() {
 
         // "Open in another app" offer: arrows / OK on its buttons, Back = Stay in Nova.
         if (otherAppOpen) {
+            if (down && code != KeyEvent.KEYCODE_BACK) stopOtherAppCountdown()
             if (code == KeyEvent.KEYCODE_BACK) {
                 if (down) {
                     swallowUp += code

@@ -28,7 +28,8 @@ object PlaybackLog {
         val title: String,
         val kind: String, // live, movie, series, catchup, recordings
         val server: String,
-        val group: String?,
+        var group: String?,
+        val key: String = "",
     ) {
         val startedAt = System.currentTimeMillis()
         var mode = ""
@@ -106,9 +107,11 @@ object PlaybackLog {
         val ok = r.count { it.optString("res") == "OK" || it.optString("res") == "SLOW" }
         val failed = r.count { it.optString("res") == "FAIL" }
         val device = r.count { it.optString("res") == "DEVICE" }
+        val file = r.count { it.optString("res") == "FILE" }
         val starts = r.mapNotNull { it.optLong("start").takeIf { s -> s >= 0 } }
         val avgStart = if (starts.isEmpty()) "–" else "%.1f s".format(starts.average() / 1000)
-        return "Played ${r.size} · OK $ok · failed $failed · can't decode here $device · average start $avgStart\n" + serverLines(r).joinToString("\n")
+        return "Played ${r.size} · OK $ok · failed $failed · can't decode here $device" + (if (file > 0) " · file not readable $file" else "") +
+            " · average start $avgStart\n" + serverLines(r).joinToString("\n")
     }
 
     private fun serverLines(r: List<JSONObject>): List<String> = r.groupBy { it.optString("srv") }.map { (srv, list) ->
@@ -135,18 +138,32 @@ object PlaybackLog {
         else {
             sb.appendLine(glance(days).lineSequence().first())
             val fails = r.filter { it.optString("res") == "FAIL" }.groupBy { it.optString("t") }
-                .entries.sortedByDescending { it.value.size }.take(8)
-                .joinToString(" · ") { (t, l) -> "$t (${l.size}× ${l.first().optString("note").take(30)})" }
+                .entries.sortedByDescending { it.value.size }.take(15)
+                .joinToString("\n              ") { (t, l) -> "$t (${l.size}× ${l.first().optString("note")})" }
             if (fails.isNotBlank()) sb.appendLine("Failed most : $fails")
-            val dev = r.filter { it.optString("res") == "DEVICE" }.map { it.optString("t") + " (" + it.optString("note").take(30) + ")" }.distinct().take(8)
-            if (dev.isNotEmpty()) sb.appendLine("Can't decode: " + dev.joinToString(" · "))
+            val dev = r.filter { it.optString("res") == "DEVICE" }.groupBy { it.optString("t") }
+                .map { (t, l) -> "$t (${l.size}× ${l.first().optString("note")})" }
+            if (dev.isNotEmpty()) sb.appendLine("Can't decode: " + dev.joinToString("\n              "))
+            val files = r.filter { it.optString("res") == "FILE" }.groupBy { it.optString("t") }
+                .map { (t, l) -> "$t (${l.size}× ${l.first().optString("note")})" }
+            if (files.isNotEmpty()) sb.appendLine("Not readable: " + files.joinToString("\n              "))
             val slow = r.filter { it.optString("res") == "SLOW" || it.optString("act").contains("slow") }.map { it.optString("t") }.distinct().take(8)
             if (slow.isNotEmpty()) sb.appendLine("Line too slow: " + slow.joinToString(" · "))
             serverLines(r).forEach { sb.appendLine("Server      : $it") }
         }
         sb.appendLine("──────────────── PLAYBACK (newest first) ─")
-        r.sortedByDescending { it.optLong("at") }.forEach { o ->
-            val res = o.optString("res").padEnd(6)
+        // The same failure several times in a row (tries) is one block "×6".
+        val sorted = r.sortedByDescending { it.optLong("at") }
+        val blocks = mutableListOf<Pair<JSONObject, Int>>()
+        sorted.forEach { o ->
+            val last = blocks.lastOrNull()
+            if (last != null && o.optString("res") != "OK" && last.first.optString("t") == o.optString("t") &&
+                last.first.optString("res") == o.optString("res") && last.first.optLong("at") - o.optLong("at") < 15 * 60_000
+            ) blocks[blocks.lastIndex] = last.first to last.second + 1
+            else blocks += o to 1
+        }
+        blocks.forEach { (o, times) ->
+            val res = (o.optString("res") + if (times > 1) " ×$times" else "").padEnd(6)
             val grp = o.optString("grp").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             sb.appendLine("${df.format(Date(o.optLong("at")))} $res ${o.optString("t")} · ${o.optString("srv")} · ${o.optString("k")}$grp")
             val tech = listOf(o.optString("mode"), o.optString("cont"), o.optString("vid"), o.optString("dec")).filter { it.isNotBlank() }
