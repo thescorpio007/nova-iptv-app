@@ -116,7 +116,7 @@ object StreamCheck {
     fun progress(keys: List<String>): Triple<Int, Int, Boolean> {
         val now = System.currentTimeMillis()
         val done = keys.count { k -> net[k]?.let { now - it.at < FRESH_MS } == true || device.containsKey(k) }
-        val busy = keys.any { it == checkingKey } || queue.any { t -> t.key in keys && t.key !in waiting && needs(t, now) }
+        val busy = keys.any { it == checkingKey } || queue.any { t -> t.key in keys && !waiting.containsKey(t.key) && needs(t, now) }
         return Triple(done, keys.size, busy)
     }
 
