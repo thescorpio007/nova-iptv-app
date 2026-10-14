@@ -292,6 +292,7 @@ fun PosterCard(
     favorite: Boolean = false,
     modifier: Modifier = Modifier,
     onDoubleClick: (() -> Unit)? = null,
+    dot: com.nova.iptv.data.StreamCheck.Status? = null,
 ) {
     FocusBox(modifier = modifier, onClick = onClick, onLongClick = onLongClick, onDoubleClick = onDoubleClick, scaleOnFocus = true, shape = RoundedCornerShape(12.dp), selected = active) { focused ->
         Column(Modifier.fillMaxWidth().padding(4.dp)) {
@@ -312,6 +313,9 @@ fun PosterCard(
                             .background(Color(0xAA000000), RoundedCornerShape(6.dp))
                             .padding(horizontal = 5.dp, vertical = 1.dp),
                     )
+                }
+                if (dot != null) {
+                    StatusDot(dot, size = 13.dp, modifier = Modifier.align(Alignment.BottomEnd).padding(7.dp))
                 }
                 if (badge != null) {
                     Text(
@@ -444,6 +448,8 @@ fun RowItem(
     showImage: Boolean = true,
     /** Extra line under the subtitle, e.g. the programme on air now. */
     extra: String? = null,
+    /** Status dot (works / not working / can't play here / not checked), null = no dot. */
+    dot: com.nova.iptv.data.StreamCheck.Status? = null,
 ) {
     val padV = when (size) { "compact" -> 3.dp; "large" -> 13.dp; else -> 8.dp }
     val logoW = when (size) { "compact" -> 44.dp; "large" -> 76.dp; else -> 56.dp }
@@ -469,6 +475,7 @@ fun RowItem(
                         fontSize = 13.sp,
                     )
                 }
+                if (dot != null) StatusDot(dot, modifier = Modifier.padding(end = 9.dp))
                 if (showImage) Logo(image, title, Modifier.size(width = logoW, height = logoH).clip(RoundedCornerShape(6.dp)))
                 Column(Modifier.padding(start = if (showImage) 10.dp else 0.dp).weight(1f)) {
                     Text(
@@ -499,6 +506,7 @@ fun RowItem(
                         )
                     }
                 }
+                if (dot != null) DotNoteText(dot, Modifier.padding(start = 8.dp))
             }
         }
         if (trailing != null) trailing()

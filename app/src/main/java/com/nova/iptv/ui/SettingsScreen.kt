@@ -246,6 +246,18 @@ fun SettingsScreen(vm: MainViewModel) {
                 Chip("Stay and retry", !s.autoSkip, { vm.setAutoSkip(false) })
             }
             Stepper("Wait before skipping", "${s.skipTimeoutSec} s", { vm.setSkipTimeout(s.skipTimeoutSec - 2) }, { vm.setSkipTimeout(s.skipTimeoutSec + 2) })
+            var dotsSetting by remember { mutableStateOf(vm.appStorage.statusDots) }
+            Text("Status dots", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+            Text(
+                "A dot in front of each channel, film poster and episode: green works, red not working, orange works but " +
+                    "this device can't play its format, grey not checked yet. Only the open group / season is checked, " +
+                    "quietly one by one, never using more connections than your server allows. Results are kept 6 hours.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("On", dotsSetting, { dotsSetting = true; vm.appStorage.statusDots = true })
+                Chip("Off", !dotsSetting, { dotsSetting = false; vm.appStorage.statusDots = false })
+            }
         }
 
         }

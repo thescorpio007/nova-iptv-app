@@ -1352,6 +1352,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---- status dots: what to check for the list on screen
+    fun liveTargets(list: List<LiveChannel>): List<com.nova.iptv.data.StreamCheck.Target> {
+        val fmt = storage.liveFormat
+        return list.mapNotNull { ch ->
+            val acc = account(ch.accountId) ?: return@mapNotNull null
+            com.nova.iptv.data.StreamCheck.Target(
+                com.nova.iptv.data.StreamCheck.key(ItemType.LIVE, ch.accountId, ch.streamId),
+                api.liveUrl(acc, ch.streamId, fmt), ch.accountId, live = true,
+            )
+        }
+    }
+
+    fun movieTargets(list: List<Movie>): List<com.nova.iptv.data.StreamCheck.Target> = list.mapNotNull { m ->
+        val acc = account(m.accountId) ?: return@mapNotNull null
+        com.nova.iptv.data.StreamCheck.Target(
+            com.nova.iptv.data.StreamCheck.key(ItemType.MOVIE, m.accountId, m.streamId),
+            api.movieUrl(acc, m.streamId, m.extension), m.accountId, live = false,
+        )
+    }
+
+    fun episodeTargets(info: SeriesInfo, season: Int): List<com.nova.iptv.data.StreamCheck.Target> {
+        val acc = account(info.series.accountId) ?: return emptyList()
+        return info.episodes[season].orEmpty().map { e ->
+            com.nova.iptv.data.StreamCheck.Target(
+                com.nova.iptv.data.StreamCheck.key(ItemType.EPISODE, acc.id, e.id),
+                api.episodeUrl(acc, e.id, e.extension), acc.id, live = false,
+            )
+        }
+    }
+
     fun movieItem(m: Movie): PlayItem? {
         val acc = account(m.accountId) ?: return null
         val url = api.movieUrl(acc, m.streamId, m.extension)

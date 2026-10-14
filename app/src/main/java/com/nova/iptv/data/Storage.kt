@@ -106,6 +106,11 @@ class Storage(context: Context) {
         set(value) = prefs.edit().putBoolean("live_switch_slow", value).apply()
 
     /** Jump to the next channel automatically when a live channel doesn't work. */
+    /** Status dots on channels, films and episodes (quiet checks in the background). */
+    var statusDots: Boolean
+        get() = prefs.getBoolean("status_dots", true)
+        set(value) = prefs.edit().putBoolean("status_dots", value).apply()
+
     var autoSkip: Boolean
         get() = prefs.getBoolean("auto_skip", false)
         set(value) = prefs.edit().putBoolean("auto_skip", value).apply()

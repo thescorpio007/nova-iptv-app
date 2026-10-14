@@ -44,6 +44,7 @@ import androidx.media3.ui.PlayerView
 import com.nova.iptv.NovaApp
 import com.nova.iptv.data.Folders
 import com.nova.iptv.data.RemoteKeys
+import com.nova.iptv.data.StreamCheck
 import com.nova.iptv.data.XtreamApi
 import com.nova.iptv.download.DownloadCenter
 import com.nova.iptv.download.Recorder
@@ -429,6 +430,12 @@ class PlayerActivity : ComponentActivity() {
         root.addView(vod.panel)
         buildChannelPanel(root)
         buildRecentBar(root)
+        // Status dots: redraw the open channel list when a check finishes.
+        lifecycleScope.launch {
+            StreamCheck.version.collect {
+                if (channelPanelOpen) { refreshOverlayCursor(); updateOverlayTitle() }
+            }
+        }
         numberView = TextView(this).apply {
             setTextColor(0xFF2EE66B.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 40f)
@@ -555,6 +562,8 @@ class PlayerActivity : ComponentActivity() {
         PlaybackQueue.index = i
         val item = items[i]
         current = item
+        // Status dots: this server's connection is now the player's (a check running there stops).
+        StreamCheck.playing(if (item.isLocal) null else item.saved.accountId)
         hideNextCard()
         nextCancelled = false
         extraSubtitle = null
@@ -709,7 +718,14 @@ class PlayerActivity : ComponentActivity() {
 
     private val listener = object : Player.Listener {
         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) { updateBadge() }
-        override fun onTracksChanged(tracks: androidx.media3.common.Tracks) { updateBadge() }
+        override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+            updateBadge()
+            // A picture is there but none of its formats can be decoded here: orange dot.
+            val video = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+            if (video.isNotEmpty() && video.none { g -> (0 until g.length).any { g.isTrackSupported(it) } }) {
+                current?.let { c -> checkKey(c)?.let { StreamCheck.deviceFailed(it, "video format") } }
+            }
+        }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
@@ -717,6 +733,7 @@ class PlayerActivity : ComponentActivity() {
                     if (everReady && player?.playWhenReady == true) Log.i("NovaTest", "PLAYING again ${current?.title}")
                     if (!everReady) {
                         Log.i("NovaTest", "READY ${current?.title}")
+                        current?.let { c -> checkKey(c)?.let { StreamCheck.played(it, videoDecoded = player?.videoFormat != null) } }
                         // Remember the channel for "Recent" and the recently watched bar.
                         current?.takeIf { it.isLive && !it.catchup && !it.temporary }?.let { app.storage.addRecent(it.saved) }
                     }
@@ -923,6 +940,7 @@ class PlayerActivity : ComponentActivity() {
                     generateSequence(error as Throwable?) { it.cause }.take(4).joinToString(" <- ") { "${it.javaClass.simpleName}: ${it.message}" },
             )
             if (tryRecover(item, error)) return
+            checkKey(item)?.let { StreamCheck.deviceFailed(it, detail ?: "format") }
             val dolby = detail?.contains("Dolby Vision") == true
             val reason = if (dolby) "\nThis device can't play Dolby Vision (your TV box can). Look for the same film in HD / without “4K”, or use VLC / MX Player."
                 else detail?.let { "\nThis device can't decode the $it." }.orEmpty()
@@ -960,6 +978,7 @@ class PlayerActivity : ComponentActivity() {
         } else {
             val limit = if (httpCode == 401 || httpCode == 403 || httpCode == 404) 3 else 30
             if (retryCount > limit) {
+                if (httpCode == 404) checkKey(item)?.let { StreamCheck.failed(it, "not found") }
                 showStatus(
                     when (httpCode) {
                         401, 403 -> "Server refused the video (HTTP $httpCode). Check the account or its connection limit."
@@ -1057,6 +1076,14 @@ class PlayerActivity : ComponentActivity() {
     /** A live channel doesn't work: move on to the next one, or explain. */
     private fun channelFailed(reason: String) {
         val item = current ?: return
+        if (!reason.contains("format")) checkKey(item)?.let { k ->
+            StreamCheck.failed(k, when {
+                reason.contains("404") || reason.contains("410") -> "not found"
+                reason.contains("HTTP 5") -> "server error"
+                reason.contains("HTTP") -> reason.replace("server answered ", "")
+                else -> "no signal"
+            })
+        }
         val items = PlaybackQueue.items
         val maxSkips = minOf(items.size - 1, 25)
         Log.i("NovaTest", "SKIP ${item.title}: $reason")
@@ -1340,10 +1367,15 @@ class PlayerActivity : ComponentActivity() {
         selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
     }
 
-    private fun overlayAdapter(labels: List<String>, cursor: () -> Int?, highlight: (Int) -> Boolean) =
+    private fun overlayAdapter(
+        labels: List<String>, cursor: () -> Int?,
+        decorate: ((Int, String) -> CharSequence)? = null,
+        highlight: (Int) -> Boolean,
+    ) =
         object : android.widget.ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val v = super.getView(position, convertView, parent) as TextView
+                if (decorate != null) labels.getOrNull(position)?.let { v.text = decorate(position, it) }
                 v.background = if (cursor() == position) GradientDrawable().apply {
                     cornerRadius = dp(8).toFloat(); setColor(0xCC59606A.toInt()); setStroke(dp(2), 0xFF2EE66B.toInt())
                 } else null
@@ -1373,6 +1405,7 @@ class PlayerActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
             addView(pill("←") { hideChannelPanel() })
             addView(TextView(this@PlayerActivity).apply {
+                overlayTitle = this
                 text = "Groups  ·  Channels"
                 setTextColor(Color.WHITE)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
@@ -1485,7 +1518,11 @@ class PlayerActivity : ComponentActivity() {
 
     private fun loadOverlayGroup(g: LiveCatalog.Group, delayMs: Long, focusChannels: Boolean = false) {
         if (g.key == overlayGroupKey && overlayChannels.isNotEmpty()) {
-            if (focusChannels) { panelColumn = 1; refreshOverlayCursor() }
+            if (focusChannels) {
+                panelColumn = 1; refreshOverlayCursor()
+                // OK on the open group: check its channels again (those not checked in the last 2 minutes).
+                if (StreamCheck.enabled) StreamCheck.retest(checkTargets(overlayChannels), fromPlayer = true, olderThanMs = 120_000)
+            }
             return
         }
         overlayJob?.cancel()
@@ -1506,8 +1543,75 @@ class PlayerActivity : ComponentActivity() {
         val labels = if (list.isEmpty()) listOf("(no channels)") else list.mapIndexed { i, it -> "${i + 1}.  ${it.title}" }
         val playing = list.indexOfFirst { it.saved.key == playingKey }
         channelCursor = playing.coerceAtLeast(0)
-        channelListView.adapter = overlayAdapter(labels, { channelCursorIfActive() }) { i -> list.getOrNull(i)?.saved?.key == playingKey }
+        channelListView.adapter = overlayAdapter(labels, { channelCursorIfActive() }, { i, label ->
+            list.getOrNull(i)?.let { dotLabel(it, label, it.saved.key == playingKey) } ?: label
+        }) { i -> list.getOrNull(i)?.saved?.key == playingKey }
         channelListView.setSelection(maxOf(0, channelCursor - 3))
+        if (StreamCheck.enabled) StreamCheck.want(checkTargets(list), fromPlayer = true)
+        updateOverlayTitle()
+    }
+
+    // ------------------------------------------------------------------ status dots in the channel list
+
+    private var overlayTitle: TextView? = null
+
+    private fun checkKey(item: PlayItem): String? =
+        if (item.isLocal || item.catchup || item.temporary || item.saved.accountId.isBlank()) null
+        else StreamCheck.key(item.saved.type, item.saved.accountId, item.saved.id)
+
+    private fun checkTargets(list: List<PlayItem>) = list.mapNotNull { p ->
+        checkKey(p)?.let { StreamCheck.Target(it, p.url, p.saved.accountId, p.isLive) }
+    }
+
+    /** "●  12.  M6 4K   no signal" with the dot in its colour. */
+    private fun dotLabel(item: PlayItem, label: String, watching: Boolean): CharSequence {
+        if (!StreamCheck.enabled) return label
+        val k = checkKey(item) ?: return label
+        val st = if (watching && everReady) StreamCheck.Status(StreamCheck.State.OK) else StreamCheck.status(k)
+        val sb = android.text.SpannableStringBuilder()
+        val mark = if (st.state == StreamCheck.State.CHECKING) "◌" else "●"
+        val color = when (st.state) {
+            StreamCheck.State.OK -> 0xFF2EE66B.toInt()
+            StreamCheck.State.BAD -> 0xFFFF4D4D.toInt()
+            StreamCheck.State.DEVICE -> 0xFFFFA31A.toInt()
+            StreamCheck.State.CHECKING -> Color.WHITE
+            else -> 0xFF8A9099.toInt()
+        }
+        sb.append(mark, android.text.style.ForegroundColorSpan(color), 0)
+        sb.append("  ").append(label)
+        if (watching) sb.append("   ▶")
+        val note = when (st.state) {
+            StreamCheck.State.BAD, StreamCheck.State.WAITING -> st.note
+            StreamCheck.State.DEVICE -> "this device can't play its format"
+            else -> null
+        }
+        if (note != null) {
+            val start = sb.length
+            sb.append("   ").append(note)
+            sb.setSpan(android.text.style.RelativeSizeSpan(0.72f), start, sb.length, 0)
+            sb.setSpan(
+                android.text.style.ForegroundColorSpan(
+                    when (st.state) { StreamCheck.State.BAD -> 0xFFFFB3B3.toInt(); StreamCheck.State.DEVICE -> 0xFFFFD08A.toInt(); else -> 0xFFBBBBBB.toInt() },
+                ),
+                start, sb.length, 0,
+            )
+        }
+        return sb
+    }
+
+    private fun updateOverlayTitle() {
+        val t = overlayTitle ?: return
+        if (!StreamCheck.enabled || overlayChannels.isEmpty()) { t.text = "Groups  ·  Channels"; return }
+        val keys = overlayChannels.mapNotNull { checkKey(it) }
+        if (keys.isEmpty()) { t.text = "Groups  ·  Channels"; return }
+        val (done, total, busy) = StreamCheck.progress(keys)
+        val sb = android.text.SpannableStringBuilder("Groups  ·  Channels")
+        val start = sb.length
+        sb.append(if (busy) "      ⟳ Checking… $done / $total" else "      Checked $done / $total · OK on the group = check again")
+        sb.setSpan(android.text.style.RelativeSizeSpan(0.6f), start, sb.length, 0)
+        sb.setSpan(android.text.style.StyleSpan(Typeface.NORMAL), start, sb.length, 0)
+        sb.setSpan(android.text.style.ForegroundColorSpan(0xFFCCFFDD.toInt()), start, sb.length, 0)
+        t.text = sb
     }
 
     private fun pickOverlayChannel(position: Int) {
@@ -2437,6 +2541,8 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        StreamCheck.playing(null)
+        StreamCheck.playerClosed()
         handler.removeCallbacksAndMessages(null)
         epgJob?.cancel()
         if (Recorder.isRecording) Recorder.stop()

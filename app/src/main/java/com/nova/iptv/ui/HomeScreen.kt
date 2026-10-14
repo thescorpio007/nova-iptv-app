@@ -130,8 +130,8 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
                 SeriesDetailScreen(vm, d, onPlay)
             } else {
                 when (tab) {
-                    Tab.LIVE -> ZoneLayout(vm, vm.live, showEpg = true) { wide -> LiveList(vm, onPlay, wide) }
-                    Tab.FILMS -> ZoneLayout(vm, vm.films, showEpg = false, posters = true, tabs = tabs) { wide -> FilmsContent(vm, wide) }
+                    Tab.LIVE -> ZoneLayout(vm, vm.live, showEpg = true, dots = true) { wide -> LiveList(vm, onPlay, wide) }
+                    Tab.FILMS -> ZoneLayout(vm, vm.films, showEpg = false, posters = true, tabs = tabs, dots = true) { wide -> FilmsContent(vm, wide) }
                     Tab.SERIES -> ZoneLayout(vm, vm.series, showEpg = false, posters = true, tabs = tabs) { wide -> SeriesContent(vm, wide) }
                     Tab.SEARCH -> SearchScreen(vm, onPlay)
                     Tab.RECENT -> RecentScreen(vm, onPlay)
@@ -268,6 +268,8 @@ private fun <T> ZoneLayout(
     showEpg: Boolean,
     posters: Boolean = false,
     tabs: TabFocus? = null,
+    /** Shows "Checked 9 / 18 · ⟳ Test again" (status dots) in the header. */
+    dots: Boolean = false,
     content: @Composable (wide: Boolean) -> Unit,
 ) {
     val edit by vm.editMode.collectAsStateWithLifecycle()
@@ -343,6 +345,7 @@ private fun <T> ZoneLayout(
                 ) { if (trap) focusGridAsk++ }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     ContentHeader(vm.groupTitle(z, selected), edit) {
+                        if (dots && !edit) DotsHeader(com.nova.iptv.data.StreamCheck.mainKeys(), { com.nova.iptv.data.StreamCheck.retestMain() }, Modifier.padding(end = 8.dp))
                         if (!edit && selected != MainViewModel.NEW) SortButton(vm, z.code)
                     }
                     Box(
@@ -410,6 +413,7 @@ private fun <T> ZoneLayout(
                         }
                         if (!edit && selected != MainViewModel.NEW) SortButton(vm, z.code, Modifier.padding(start = 6.dp))
                     }
+                    if (dots && !edit) DotsHeader(com.nova.iptv.data.StreamCheck.mainKeys(), { com.nova.iptv.data.StreamCheck.retestMain() }, Modifier.padding(start = 12.dp, bottom = 4.dp))
                     if (edit) EditHint()
                     Box(Modifier.weight(1f)) { content(false) }
                 }
@@ -750,6 +754,8 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
         }
     }
 
+    CheckList(shown) { if (edit) emptyList() else vm.liveTargets(shown) }
+
     val row: @Composable (Int, LiveChannel) -> Unit = { index, ch ->
         val saved = vm.saved(ch)
         val isFav = favs.any { it.sameAs(saved) }
@@ -777,6 +783,7 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
             size = settings.liveRowSize,
             showImage = settings.liveLogos,
             extra = if (settings.liveNowLine && !edit) onAir?.let { "▶ " + XtreamApi.formatTime(it.start) + "  " + it.title } else null,
+            dot = if (!edit && dotsOn()) com.nova.iptv.data.StreamCheck.status(com.nova.iptv.data.StreamCheck.key(ItemType.LIVE, ch.accountId, ch.streamId)) else null,
             trailing = {
                 if (edit) {
                     if (lineControls) EditControls(
@@ -968,6 +975,7 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
     val canMove = selected != MainViewModel.NEW
 
     val ageHidden = remember(state.items, selected, ageV) { vm.ageHiddenCount(z, state.items) }
+    CheckList(shown) { if (edit) emptyList() else vm.movieTargets(shown) }
     Column(Modifier.fillMaxSize()) {
     AgeBanner(ageHidden, "films")
     Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -1030,6 +1038,7 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
                     active = m.key == lastKey,
                     badge = posterBadge(vm, m.accountId, sort, m.year, m.rating),
                     showTitle = settings.posterTitles,
+                    dot = if (!edit && dotsOn()) com.nova.iptv.data.StreamCheck.status(com.nova.iptv.data.StreamCheck.key(ItemType.MOVIE, m.accountId, m.streamId)) else null,
                 )
             }
         }

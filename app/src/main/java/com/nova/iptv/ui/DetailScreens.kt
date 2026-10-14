@@ -325,6 +325,12 @@ fun SeriesDetailScreen(vm: MainViewModel, d: SeriesDetailState, onPlay: PlayFn) 
     val rating = det.rating ?: d.series.rating?.toDoubleOrNull()
     val resume = remember(info, recent) { info?.let { vm.resumeEpisode(it) } }
     var plotOpen by remember { mutableStateOf(false) }
+    // Status dots: the episodes of the season on screen are checked quietly.
+    val dotSeason = d.season ?: info?.seasons?.firstOrNull()
+    CheckList(Triple(d.series.key, info, dotSeason)) {
+        if (info == null || dotSeason == null) emptyList() else vm.episodeTargets(info, dotSeason)
+    }
+    val manyAccounts = vm.accounts.collectAsStateWithLifecycle().value.size > 1
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         val narrow = maxWidth < 560.dp
@@ -411,9 +417,21 @@ fun SeriesDetailScreen(vm: MainViewModel, d: SeriesDetailState, onPlay: PlayFn) 
                     }
                     val episodes = info.episodes[season].orEmpty()
                     val lastId = resume?.let { (s, i) -> info.episodes[s]?.getOrNull(i)?.id }
+                    item(key = "dots-$season") {
+                        val epKeys = remember(episodes) { episodes.map { com.nova.iptv.data.StreamCheck.key(com.nova.iptv.data.ItemType.EPISODE, d.series.accountId, it.id) } }
+                        DotsHeader(epKeys, {
+                            com.nova.iptv.data.StreamCheck.retest(vm.episodeTargets(info, season))
+                        }, Modifier.padding(start = 14.dp, top = 2.dp, bottom = 4.dp))
+                    }
                     itemsIndexed(episodes, key = { i, e -> "ep-$season-$i-${e.id}" }) { index, e ->
+                        val dot = if (dotsOn()) com.nova.iptv.data.StreamCheck.status(
+                            com.nova.iptv.data.StreamCheck.key(com.nova.iptv.data.ItemType.EPISODE, d.series.accountId, e.id),
+                        ) else null
                         RowItem(
                             title = "E${e.episodeNum}  ${e.title}",
+                            dot = dot,
+                            extra = if (dot?.state == com.nova.iptv.data.StreamCheck.State.BAD && manyAccounts)
+                                "Not working on ${vm.accountName(d.series.accountId)} — try this series on your other server" else null,
                             subtitle = e.plot,
                             image = e.image ?: d.series.cover,
                             onClick = { vm.allEpisodeItems(info, season, index).let { (l, i) -> onPlay(l, i) } },
