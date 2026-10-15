@@ -1475,7 +1475,8 @@ private fun editLine(vm: MainViewModel, key: String, edit: Boolean): Pair<Modifi
 @Composable
 private fun AgeBanner(count: Int, what: String) {
     if (count <= 0) return
-    val lv = com.nova.iptv.data.AgeFilter.LEVELS.getOrElse(com.nova.iptv.data.AgeFilter.level) { "" }
+    val level = com.nova.iptv.data.AgeFilter.level
+    val lv = if (level == 0) "🔤 words" else com.nova.iptv.data.AgeFilter.LEVELS.getOrElse(level) { "" }
     Text(
         "🛡 $lv · $count $what hidden in this group",
         fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFBFF5D3),

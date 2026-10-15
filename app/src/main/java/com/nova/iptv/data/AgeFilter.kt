@@ -53,6 +53,9 @@ object AgeFilter {
     /** Word groups switched on, with their words. */
     @Volatile private var activeWords: List<Pair<WordGroup, Regex>> = emptyList()
 
+    /** One of the two filters (age, words) is on. */
+    val active: Boolean get() = level != 0 || activeWords.isNotEmpty()
+
     /** The key used: yours, or the one built into Nova. */
     val defaultKey: String get() = com.nova.iptv.BuildConfig.TMDB_KEY
     fun effectiveKey(): String = tmdbKey.ifBlank { defaultKey }
@@ -174,7 +177,8 @@ object AgeFilter {
         allowedGroups = s.ageAllowedGroups
         tmdbKey = s.tmdbKey.trim()
         val ex = s.ageAllowed
-        val words = WORD_GROUPS.filter { groupOn(s, it) }.mapNotNull { g -> wordsPattern(wordsOf(s, g))?.let { g to it } }
+        val words = if (!s.ageWordsOn) emptyList()
+            else WORD_GROUPS.filter { groupOn(s, it) }.mapNotNull { g -> wordsPattern(wordsOf(s, g))?.let { g to it } }
         val wordsChanged = words.map { it.second.pattern } != activeWords.map { it.second.pattern }
         val exChanged = ex != exceptions
         exceptions = ex
@@ -230,7 +234,7 @@ object AgeFilter {
     /** Why this film / series is hidden ("R", "no age found", "word: kiss"…), or null when it is shown. Exceptions not counted. */
     fun reason(code: String, key: String, name: String, group: String?): String? {
         val lv = level
-        if (lv == 0) return null
+        if (lv == 0 && activeWords.isEmpty()) return null
         if (code != "movie" && code != "series") return null
         val ck = "$code|$key|${group.orEmpty()}"
         reasonCache[ck]?.let { return it.ifEmpty { null } }
@@ -238,6 +242,8 @@ object AgeFilter {
     }
 
     private fun reasonNow(code: String, key: String, name: String, group: String?, lv: Int): String? {
+        // Age filter OFF: only the word filter (a separate filter).
+        if (lv == 0) return wordIn(name)?.let { "word: $it" }
         val rule = ruleRating(name, group)
         val r = ratingOf(code, key, name, group)
         val fromRule = r == rule && (source == "rules" || items[if (code == "series") "series|$key" else "movie|$key"].let { it == null || it == 0 })
@@ -251,7 +257,7 @@ object AgeFilter {
 
     /** True when this film / series is hidden (above the level, a word, or unknown with "hide them"), unless allowed anyway. */
     fun blocked(code: String, key: String, name: String, group: String?): Boolean {
-        if (level == 0) return false
+        if (level == 0 && activeWords.isEmpty()) return false
         if (code == "live") return liveBlocked(key, name, group)
         if ("$code|$key" in exceptions) return false
         return reason(code, key, name, group) != null
@@ -477,7 +483,7 @@ object AgeFilter {
     /** Everything the filter hides (exceptions included, so they can be ticked again): films, series, channels. */
     fun hiddenList(accounts: List<Account>, groupNames: Map<String, String>): Map<String, List<HiddenRow>> {
         val films = ArrayList<HiddenRow>(); val series = ArrayList<HiddenRow>(); val live = ArrayList<HiddenRow>()
-        if (level == 0) return mapOf("movie" to films, "series" to series, "live" to live)
+        if (level == 0 && activeWords.isEmpty()) return mapOf("movie" to films, "series" to series, "live" to live)
         accounts.forEach { a ->
             val idx = SearchIndex.get(a.id) ?: return@forEach
             idx.movies.forEach { m ->
@@ -499,19 +505,27 @@ object AgeFilter {
     }
 
     fun summary(accounts: List<Account>): String {
-        if (level == 0) return "Age filter is OFF"
-        var total = 0; var hidden = 0; var unknown = 0
+        if (level == 0 && activeWords.isEmpty()) return "Age filter OFF · word filter OFF — nothing hidden by the filters"
+        var total = 0; var byAge = 0; var byWords = 0; var unknown = 0
+        fun count(code: String, key: String, name: String) {
+            total++
+            if (level != 0 && ratingOf(code, key, name, null) == 0) unknown++
+            if ("$code|$key" in exceptions) return
+            val r = reason(code, key, name, null) ?: return
+            if (r.startsWith("word:")) byWords++ else byAge++
+        }
         accounts.forEach { a ->
             val idx = SearchIndex.get(a.id) ?: return@forEach
-            idx.movies.forEach { m -> total++; val r = ratingOf("movie", m.key, m.name, null); if (r == 0) unknown++; if (blocked("movie", m.key, m.name, null)) hidden++ }
-            idx.series.forEach { s -> total++; val r = ratingOf("series", s.key, s.name, null); if (r == 0) unknown++; if (blocked("series", s.key, s.name, null)) hidden++ }
+            idx.movies.forEach { m -> count("movie", m.key, m.name) }
+            idx.series.forEach { s -> count("series", s.key, s.name) }
         }
-        if (total == 0) return "The search index is not ready yet — the age check starts after it."
+        if (total == 0) return "The search index is not ready yet — the filters start after it."
         val nf = java.text.NumberFormat.getIntegerInstance()
-        return "✓ ${nf.format(total)} films & series · ${nf.format(hidden)} hidden (above ${LEVELS[level]}" +
-            (if (activeWords.isNotEmpty()) ", a word" else "") +
+        val age = if (level == 0) "Age filter OFF" else "🔞 Hidden by age: ${nf.format(byAge)} (above ${LEVELS[level]}" +
             (if (hideUnknown) " or no age found" else "") + ") · ${nf.format(unknown)} without age" +
             (if (source == "tmdb" && checkedAt > 0) " · checked ${ago(checkedAt)}" else "")
+        val words = if (activeWords.isEmpty()) "word filter OFF" else "🔤 hidden by words: ${nf.format(byWords)}"
+        return "✓ ${nf.format(total)} films & series · $age · $words"
     }
 
     /** Looks up the US rating of every film and series of the search index that is not known yet. */

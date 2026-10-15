@@ -545,12 +545,7 @@ fun PlayerSettings(vm: MainViewModel) {
         Hint("Box first keeps Dolby / DTS going to a soundbar or receiver. App decoders first plays more audio formats (DTS, AC3, E-AC3, TrueHD) on any TV.")
         ChoiceRow(listOf("device" to "Box first (passthrough)", "ffmpeg" to "App decoders first"), s.audioDecoder, vm::setAudioDecoder)
 
-        Text("Buffer size limit", fontWeight = FontWeight.Medium)
-        Hint("Memory used to hold video ahead. More helps unstable connections; less is safer on boxes with little memory.")
-        ChoiceRow(
-            listOf(32, 64, 128, 256).map { it.toString() to "$it MB" },
-            s.bufferMb.toString(),
-        ) { vm.setBufferMb(it.toInt()) }
+        Hint("Memory size for live TV: Live TV › Live TV buffer (Memory).")
 
         Text("Hardware-accelerated audio", fontWeight = FontWeight.Medium)
         Hint("Sends audio to the box's audio processor (audio offload). Saves power; switch off if sound stutters or is missing.")
@@ -809,7 +804,7 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
         guard { vm.setAge { it.ageLevel = v.toInt() } }
     }
     Hint("Series use the US TV ratings: G = TV-Y · TV-Y7 · TV-G  |  PG = TV-PG  |  PG-13 = TV-14  |  R / NC-17 = TV-MA")
-    if (level == 0) return
+    if (level != 0) {
 
     Text("Where the rating comes from", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
     ChoiceRow(listOf("tmdb" to "Film database (TMDB) · US rating", "rules" to "Genre & name rules"), source) { v ->
@@ -865,11 +860,23 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
         }
     }
 
-    // ---- words in the name ----
-    Text("🔤 Hide films & series with these words in the name", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+    }
+
+    // ---- words in the name: a separate filter with its own On / Off (works with the age filter on or OFF) ----
+    val wordsOn = remember(ageV) { storage.ageWordsOn }
+    Row(
+        Modifier.fillMaxWidth().padding(top = 14.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("🔤 Word filter — hide films & series with these words in the name", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Chip(if (wordsOn) "● On" else "○ Off", wordsOn, { guard { vm.setAge { it.ageWordsOn = !wordsOn } } })
+    }
+    Hint(if (wordsOn) "Works on its own: with the age filter on or OFF." else "Word filter is off — no title is hidden because of its name.")
     val hasPin = vm.settings.collectAsStateWithLifecycle().value.hasPin
     var wordsOpen by remember { mutableStateOf(false) }
-    if (hasPin && !wordsOpen) {
+    if (!wordsOn) { /* nothing more to show */ } else if (hasPin && !wordsOpen) {
         // Locked: the words are not shown to the children.
         val onGroups = remember(ageV) { AF.WORD_GROUPS.filter { AF.groupOn(storage, it) } }
         val count = remember(ageV) { onGroups.sumOf { AF.wordsOf(storage, it).size } }
@@ -950,7 +957,7 @@ private fun AgeFilterSettings(vm: MainViewModel, guard: (() -> Unit) -> Unit) {
         )
     }
     androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Button(onClick = { guard { showHidden = true } }) { Text("👁 Show hidden by age") }
+        Button(onClick = { guard { showHidden = true } }) { Text("👁 Show hidden (age & words)") }
         if (source == "tmdb") {
             OutlinedButton(onClick = { vm.checkAges() }, enabled = !checking) { Text(if (checking) "Checking…" else "⟳ Check now") }
             TextButton(onClick = { guard { AF.forget(context); vm.checkAges() } }, enabled = !checking) { Text("Check all again") }
@@ -1022,10 +1029,12 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     val exceptions = remember(ageV) { AF.exceptions }
     val nf = remember { java.text.NumberFormat.getIntegerInstance() }
     val green = androidx.compose.ui.graphics.Color(0xFF2EE66B)
-    val rows = remember(lists, tab, query, onlyAllowed, exceptions) {
+    var by by remember { mutableStateOf("all") }
+    val rows = remember(lists, tab, query, onlyAllowed, exceptions, by) {
         val q = AF.normalize(query.trim())
         lists?.get(tab).orEmpty().filter { r ->
-            (q.isEmpty() || AF.normalize(r.name).contains(q)) && (!onlyAllowed || r.exKey in exceptions)
+            (q.isEmpty() || AF.normalize(r.name).contains(q)) && (!onlyAllowed || r.exKey in exceptions) &&
+                (by == "all" || (by == "words") == r.reason.startsWith("word:"))
         }
     }
     val multi = accounts.size > 1
@@ -1040,13 +1049,25 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
             modifier = Modifier.fillMaxWidth(0.94f).widthIn(max = 900.dp).fillMaxHeight(0.92f),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("👁 Hidden by age · up to " + AF.LEVELS.getOrElse(AF.level) { "" }, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                Text(
+                    "👁 Hidden · " + (if (AF.level == 0) "age filter OFF" else "age up to " + AF.LEVELS.getOrElse(AF.level) { "" }) +
+                        " · word filter " + (if (vm.appStorage.ageWordsOn) "on" else "OFF"),
+                    fontWeight = FontWeight.Bold, fontSize = 19.sp,
+                )
                 Text("☑ hidden · ☐ allowed anyway (an exception that stays). OK / tap to switch · ▶ ℹ Info = the film page.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 ChoiceRow(
                     listOf("movie" to "🎬 Films", "series" to "🎞 Series", "live" to "📺 Channels").map { (k, l) ->
                         k to (l + (lists?.get(k)?.let { " " + nf.format(it.size) } ?: ""))
                     }, tab,
                 ) { tab = it }
+                if (tab != "live") {
+                    val all = lists?.get(tab).orEmpty()
+                    val w = all.count { it.reason.startsWith("word:") }
+                    ChoiceRow(
+                        listOf("all" to "All ${nf.format(all.size)}", "age" to "🔞 Age ${nf.format(all.size - w)}", "words" to "🔤 Words ${nf.format(w)}"),
+                        by,
+                    ) { by = it }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TvTextField(value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.weight(1f),
                         placeholder = { Text("🔍 Search a title…") })

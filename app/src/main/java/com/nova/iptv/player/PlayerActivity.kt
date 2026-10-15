@@ -1242,20 +1242,36 @@ class PlayerActivity : ComponentActivity() {
         similarCountdown = text("", 12f, 0xFFFFD08A.toInt()).apply { setPadding(0, dp(8), 0, 0); visibility = View.GONE }
         val stay = button("Stay on this one") { closeSimilar() }
         buttons.addView(stay)
-        if (app.storage.accounts.size > 1) buttons.addView(button("Try my other server") { closeSimilar(); switchToOtherServer(item) })
         panel.addView(buttons)
         panel.addView(similarCountdown)
         panel.visibility = View.VISIBLE
         stay.requestFocus()
         armSimilarClose(auto)
         lifecycleScope.launch {
-            val found = runCatching {
+            val res = runCatching {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.similarOnSameServer(app, item) }
-            }.getOrDefault(emptyList())
+            }
+            // "Try my other server" only when the channel really is there.
+            val other = if (app.storage.accounts.size > 1) runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.sameChannelElsewhere(app, item) }
+            }.getOrNull() else null
             if (!similarOpen || current !== item) return@launch
-            Log.i("NovaTest", "SIMILAR ${item.title}: ${found.size} on $server")
+            if (other != null) {
+                val otherServer = app.storage.accounts.firstOrNull { it.id == other.saved.accountId }?.name ?: "my other server"
+                buttons.addView(button("Try $otherServer: ${other.title}") { closeSimilar(); playOther(item, other) })
+            }
+            val r = res.getOrNull()
+            if (r == null) {
+                loading.text = "Couldn't load the channel list from $server — try again in a moment."
+                session?.action("similar: list didn't load (${res.exceptionOrNull()?.javaClass?.simpleName})")
+                return@launch
+            }
+            val found = r.found
+            Log.i("NovaTest", "SIMILAR ${item.title} [${r.key}]: ${found.size} of ${r.searched} on $server")
+            session?.action("similar “${r.key}”: ${found.size} found in ${r.searched}" + (other?.let { " · also on another server" } ?: ""))
             if (found.isEmpty()) {
-                loading.text = "No other version of this channel on $server." + if (app.storage.accounts.size > 1) " Try your other server." else ""
+                loading.text = "Searched ${java.text.NumberFormat.getIntegerInstance().format(r.searched)} channels of $server for “${r.key}” — " +
+                    "no other version." + (if (other == null && app.storage.accounts.size > 1) " Not on your other server either." else "")
                 return@launch
             }
             panel.removeView(loading)
@@ -1335,6 +1351,15 @@ class PlayerActivity : ComponentActivity() {
         slowSwitched.add(sim.item.saved.key)
         logHealth(from, "chose a similar channel", "“${sim.item.title}” ${sim.group}")
         PlaybackQueue.items = PlaybackQueue.items.toMutableList().also { it[index] = sim.item }
+        startPlayback(index, quiet = false, keepTweaks = false)
+    }
+
+    private fun playOther(from: PlayItem, other: PlayItem) {
+        val index = PlaybackQueue.index
+        if (PlaybackQueue.items.getOrNull(index) !== from) return
+        slowSwitched.add(other.saved.key)
+        session?.action("other server → ${other.title}")
+        PlaybackQueue.items = PlaybackQueue.items.toMutableList().also { it[index] = other }
         startPlayback(index, quiet = false, keepTweaks = false)
     }
 

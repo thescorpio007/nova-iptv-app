@@ -298,7 +298,7 @@ object SearchIndex {
         }
     }
 
-    fun needsUpdate(acc: Account): Boolean = data[acc.id]?.let { System.currentTimeMillis() - it.builtAt > MAX_AGE } ?: true
+    fun needsUpdate(acc: Account, maxAge: Long = MAX_AGE): Boolean = data[acc.id]?.let { System.currentTimeMillis() - it.builtAt > maxAge } ?: true
 
     /**
      * (Re)builds the index of [acc]: the full lists, or group by group when a list is too big for the

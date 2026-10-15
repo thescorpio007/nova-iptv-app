@@ -823,7 +823,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         val names = if (com.nova.iptv.data.AgeFilter.level > 0) groupNamesOf(z) else emptyMap()
-        val allowed = if (com.nova.iptv.data.AgeFilter.level == 0) shown else shown.filter { !ageBlocked(z, it, names) }
+        val allowed = if (!com.nova.iptv.data.AgeFilter.active) shown else shown.filter { !ageBlocked(z, it, names) }
         if (edit || key == NEW || sort == "custom") return allowed
         return sortItems(z, allowed, sort)
     }
@@ -834,7 +834,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** True when the age filter hides this item. */
     fun <T> ageBlocked(z: Zone<T>, item: T, groupNames: Map<String, String>? = null): Boolean {
-        if (com.nova.iptv.data.AgeFilter.level == 0) return false
+        if (!com.nova.iptv.data.AgeFilter.active) return false
         val key = z.keyOf(item)
         val cat = z.categoryOf(item)
         val gk = if (cat.isBlank()) null else key.substringBefore('|') + "|" + cat
@@ -845,7 +845,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Number of items of the open group hidden by age (for the small line above the list). */
     fun <T> ageHiddenCount(z: Zone<T>, list: List<T>): Int {
-        if (com.nova.iptv.data.AgeFilter.level == 0) return 0
+        if (!com.nova.iptv.data.AgeFilter.active) return 0
         val names = groupNamesOf(z)
         return list.count { ageBlocked(z, it, names) }
     }
@@ -1914,7 +1914,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var indexJob: Job? = null
 
     /** Loads the saved index, then quietly updates the accounts whose index is missing or older than a day. */
-    fun refreshIndex(force: Boolean = false) {
+    fun refreshIndex(force: Boolean = false, atStart: Boolean = false) {
         if (indexJob?.isActive == true) return
         indexJob = viewModelScope.launch(Dispatchers.IO) {
             val accs = accounts.value
@@ -1923,7 +1923,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (indexTree != null && accs.any { com.nova.iptv.data.SearchIndex.get(it.id) == null }) runCatching {
                 treeIndexFiles().firstOrNull()?.let { f -> readUri(f.second)?.let { importIndex(it, fromIndexFolder = true) } }
             }
-            val todo = accs.filter { force || com.nova.iptv.data.SearchIndex.needsUpdate(it) }
+            // At app start: bring every server's index up to date right away (unless updated in the last 30 min),
+            // so search and the filters have no gap. Afterwards: once a day, or with the Update button.
+            val todo = accs.filter { force || com.nova.iptv.data.SearchIndex.needsUpdate(it, if (atStart) 30 * 60_000L else 24 * 3600_000L) }
             if (todo.isEmpty()) {
                 // First run after this feature arrived: make sure index-latest exists.
                 if (storage.autoExportIndex && !java.io.File(com.nova.iptv.data.SearchIndex.folder(nova), com.nova.iptv.data.SearchIndex.LATEST).exists()) autoExportIndex()
@@ -2071,7 +2073,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runStartup()
         // Search index: load at start (and when accounts change), update quietly when older than a day.
         viewModelScope.launch {
-            delay(4000)
+            delay(800)
+            refreshIndex(atStart = true)
             accounts.collect { refreshIndex() }
         }
         // Accounts link: re-read once a day while Nova is open.

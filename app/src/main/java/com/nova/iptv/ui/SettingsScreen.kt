@@ -164,11 +164,6 @@ fun SettingsScreen(vm: MainViewModel) {
                 else "Channels start once the full ${s.cushionSeconds} s cushion is collected: slower zapping, safest start.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.primary,
             )
-            Text(
-                "Read-ahead: how much the player keeps downloading ahead (held in memory, max ~128 MB).",
-                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
-            )
-            Stepper("Read-ahead", "${s.maxBufferSeconds} s", { vm.setMaxBuffer(s.maxBufferSeconds - 10) }, { vm.setMaxBuffer(s.maxBufferSeconds + 10) })
             // More protection without pausing.
             val st = vm.appStorage
             var grow by remember { mutableStateOf(st.liveGrowTarget) }
@@ -218,6 +213,22 @@ fun SettingsScreen(vm: MainViewModel) {
                 Chip("Memory", !s.liveDiskBuffer, { vm.setLiveDiskBuffer(false) })
                 Chip("Disk (pause & rewind)", s.liveDiskBuffer, { vm.setLiveDiskBuffer(true) })
             }
+            if (!s.liveDiskBuffer) {
+                Text("Memory size", fontWeight = FontWeight.Medium)
+                Text(
+                    "Memory used to hold video ahead. More helps unstable connections; less is safer on boxes with little memory.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(32, 64, 128, 256).forEach { mb -> Chip("$mb MB", s.bufferMb == mb, { vm.setBufferMb(mb) }) }
+                }
+                Stepper("Read-ahead", "${s.maxBufferSeconds} s", { vm.setMaxBuffer(s.maxBufferSeconds - 10) }, { vm.setMaxBuffer(s.maxBufferSeconds + 10) })
+                Text(
+                    "${s.bufferMb} MB holds about ${minOf(s.maxBufferSeconds, s.bufferMb * 8 / 5)} s of an HD channel, " +
+                        "${minOf(s.maxBufferSeconds, s.bufferMb * 8 / 25)} s of 4K — whichever limit comes first.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.primary,
+                )
+            }
             if (s.liveDiskBuffer) {
                 var minutes by remember { mutableStateOf(vm.appStorage.liveDiskMinutes) }
                 Text("Disk buffer length", fontWeight = FontWeight.Medium)
@@ -229,6 +240,13 @@ fun SettingsScreen(vm: MainViewModel) {
                         "the rest for rewind and pauses. Older parts are deleted automatically. " +
                         "Disk space at most: HD ≈ ${minutes * 60} MB · 4K ≈ ${"%.1f".format(minutes * 0.19)} GB.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp,
+                )
+                BufferFolderLine(com.nova.iptv.data.Folders.BUFFER_LIVE)
+                Text(
+                    "💾 Memory size: automatic (64 MB) — the disk holds the protection; the player keeps only a few seconds in memory. " +
+                        "Choose Memory above to set it yourself.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.background(Color(0xFF1C2633), RoundedCornerShape(8.dp)).padding(8.dp),
                 )
             }
         }
@@ -278,7 +296,7 @@ fun SettingsScreen(vm: MainViewModel) {
 
         }
         val readAheadCard: @Composable () -> Unit = {
-        Card("Films & series: disk read-ahead") {
+        Card("Films & series buffer (disk read-ahead)") {
             Text(
                 "One connection downloads the film ahead of you into small pieces on disk, and the player reads " +
                     "from there, so short internet drops don't stop the picture. Pieces you have watched are deleted " +
@@ -292,6 +310,7 @@ fun SettingsScreen(vm: MainViewModel) {
                 listOf(0 to "Off", 50 to "50 MB", 100 to "100 MB", 200 to "200 MB", 300 to "300 MB", 500 to "500 MB", 1000 to "1 GB", 2000 to "2 GB")
                     .forEach { (mb, label) -> Chip(label, s.readAheadMb == mb, { vm.setReadAheadMb(mb) }) }
             }
+            BufferFolderLine(com.nova.iptv.data.Folders.BUFFER_MOVIES)
             Text(
                 when (s.readAheadMb) {
                     0 -> "Off: films stream as before, through the normal cache below."
@@ -362,7 +381,7 @@ fun SettingsScreen(vm: MainViewModel) {
             "📡  LIVE TV" to { liveBufferCard(); rollingCard(); WatchdogSettings(vm); channelsCard() },
             "▶  PLAYER" to { PlayerSettings(vm); engineCard(); liveFormatCard() },
             "🎬  FILMS & DOWNLOADS" to { readAheadCard(); DownloadSettings(vm) },
-            "💾  STORAGE" to { StorageSettings(vm) },
+            "💾  STORAGE" to { StorageSettings(vm); BuffersSummary() },
             "🖥  SCREEN & REMOTE" to { DisplaySettings(vm); RemoteSettings(vm) },
             "🛠  SYSTEM" to {
                 advancedCard(); LastProblemSettings(); resetCard()
@@ -517,4 +536,80 @@ fun EditAccountDialog(vm: MainViewModel, acc: Account, onDone: () -> Unit) {
         },
         dismissButton = { TextButton(onClick = onDone, enabled = !busy) { Text("Cancel") } },
     )
+}
+
+
+// ---------------------------------------------------------------------------- buffers: folder and what they use now
+
+private fun dirBytes(f: java.io.File?): Long =
+    f?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+
+private fun mbText(b: Long): String = if (b >= 1L shl 30) "%.1f GB".format(b / 1073741824.0) else "${b / 1048576} MB"
+
+/** "Own folder: …/Buffers/live · now 380 MB" (refreshed every few seconds while shown). */
+@Composable
+fun BufferFolderLine(sub: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val app = context.applicationContext as com.nova.iptv.NovaApp
+    val info by androidx.compose.runtime.produceState("…", sub) {
+        while (true) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val d = com.nova.iptv.data.Folders.bufferDir(context, sub, app.storage.usePublicFolder)
+                    val extra = if (sub == com.nova.iptv.data.Folders.BUFFER_LIVE)
+                        dirBytes(com.nova.iptv.data.Folders.bufferDir(context, com.nova.iptv.data.Folders.BUFFER_LIVE_HLS, app.storage.usePublicFolder)) else 0L
+                    d.absolutePath.removePrefix("/storage/emulated/0/") + " · now " + mbText(dirBytes(d) + extra)
+                }.getOrDefault("—")
+            }
+            kotlinx.coroutines.delay(4000)
+        }
+    }
+    Text("Own folder: $info", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+}
+
+/** Settings › Storage › Buffers: both buffers at a glance, and "Clear both". */
+@Composable
+fun BuffersSummary() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val app = context.applicationContext as com.nova.iptv.NovaApp
+    var tick by remember { mutableStateOf(0) }
+    val text by androidx.compose.runtime.produceState("…", tick) {
+        while (true) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val st = app.storage
+                    val live = dirBytes(com.nova.iptv.data.Folders.bufferDir(context, com.nova.iptv.data.Folders.BUFFER_LIVE, st.usePublicFolder)) +
+                        dirBytes(com.nova.iptv.data.Folders.bufferDir(context, com.nova.iptv.data.Folders.BUFFER_LIVE_HLS, st.usePublicFolder))
+                    val films = dirBytes(com.nova.iptv.data.Folders.bufferDir(context, com.nova.iptv.data.Folders.BUFFER_MOVIES, st.usePublicFolder))
+                    val dir = com.nova.iptv.data.Folders.bufferDir(context, com.nova.iptv.data.Folders.BUFFER_LIVE, st.usePublicFolder)
+                    val free = android.os.StatFs(dir.absolutePath).availableBytes
+                    "📡 Live: ${mbText(live)}" + (if (st.liveDiskBuffer) " (disk, up to ${st.liveDiskMinutes} min)" else " (memory mode)") +
+                        "\n🎬 Films & series: ${mbText(films)}" + (if (st.readAheadMb > 0) " (read-ahead ${st.readAheadMb} MB + cache)" else " (cache)") +
+                        "\nFree on this device: ${mbText(free)}"
+                }.getOrDefault("—")
+            }
+            kotlinx.coroutines.delay(5000)
+        }
+    }
+    SettingsCard("Buffers") {
+        Text(
+            "Live TV and films & series use separate folders on disk; each is emptied when you leave the channel / film.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(text, fontSize = 13.sp)
+        OutlinedButton(onClick = {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                val st = app.storage
+                listOf(com.nova.iptv.data.Folders.BUFFER_LIVE, com.nova.iptv.data.Folders.BUFFER_LIVE_HLS).forEach { sub ->
+                    runCatching { com.nova.iptv.data.Folders.bufferDir(context, sub, st.usePublicFolder).listFiles()?.forEach { it.deleteRecursively() } }
+                }
+                runCatching {
+                    java.io.File(com.nova.iptv.data.Folders.bufferDir(context, com.nova.iptv.data.Folders.BUFFER_MOVIES, st.usePublicFolder), "readahead")
+                        .listFiles()?.forEach { it.deleteRecursively() }
+                }
+                tick++
+            }
+            Toast.makeText(context, "Buffers cleared (the film cache is cleared with “Clear cache now”)", Toast.LENGTH_SHORT).show()
+        }) { Text("🗑 Clear both") }
+    }
 }

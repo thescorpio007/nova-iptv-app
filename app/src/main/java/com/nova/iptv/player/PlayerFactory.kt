@@ -135,7 +135,8 @@ object PlayerFactory {
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(maxMs, maxMs, startMs, rebufferMs)
-            .setTargetBufferBytes((if (diskBacked) minOf(s.bufferMb, 64) else s.bufferMb).coerceIn(16, 512) * 1024 * 1024)
+            // Disk buffers (films read-ahead, live disk buffer) hold the protection: memory is automatic (64 MB).
+            .setTargetBufferBytes((if (diskBacked || mode == SourceMode.LIVE_RELAY) 64 else s.bufferMb).coerceIn(16, 512) * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(false)
             .setBackBuffer(if (live) 0 else 30_000, true)
             .build()

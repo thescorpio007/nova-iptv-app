@@ -121,6 +121,11 @@ class Storage(context: Context) {
 
     /** Jump to the next channel automatically when a live channel doesn't work. */
     /** Status dots on channels, films and episodes (quiet checks in the background). */
+    /** Word filter (hide films & series by words in the name): its own switch, independent of the age level. */
+    var ageWordsOn: Boolean
+        get() = prefs.getBoolean("age_words_on", true)
+        set(value) = prefs.edit().putBoolean("age_words_on", value).apply()
+
     var statusDots: Boolean
         get() = prefs.getBoolean("status_dots", true)
         set(value) = prefs.edit().putBoolean("status_dots", value).apply()
