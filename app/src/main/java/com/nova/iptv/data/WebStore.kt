@@ -55,6 +55,12 @@ object WebStore {
     val findVideos = MutableStateFlow(true)
     /** "bookmarks", "last" or "search". */
     val startPage = MutableStateFlow("bookmarks")
+    /** Sites where hiding page parts is off (ad addresses still blocked). */
+    val hideOffSites = MutableStateFlow<Set<String>>(emptySet())
+    fun toggleHideOff(site: String) {
+        hideOffSites.value = if (site in hideOffSites.value) hideOffSites.value - site else hideOffSites.value + site
+        save()
+    }
     /** Sites where blocking is off ("example.com"). */
     val allowSites = MutableStateFlow<Set<String>>(emptySet())
     /** A browser file from an earlier installation could be restored (ask the person once). */
@@ -72,7 +78,7 @@ object WebStore {
     /** ↺ Reset: Nova's defaults; [all] also clears bookmarks, own filter lists and own rules. */
     fun reset(all: Boolean) {
         adLevel.value = "maximum"; kidsMode.value = "adult"; flags.value = LinkedHashMap(FLAG_DEFAULTS)
-        findVideos.value = true; startPage.value = "bookmarks"; allowSites.value = emptySet()
+        findVideos.value = true; startPage.value = "bookmarks"; allowSites.value = emptySet(); hideOffSites.value = emptySet()
         newTab.value = "ask"; smartPlay.value = "ask"; badHosts.clear()
         if (all) bookmarks.value = emptyList()
         runCatching { FilterLists.reset(all) }
@@ -120,6 +126,7 @@ object WebStore {
         findVideos.value = prefs.getBoolean("find_videos", true)
         startPage.value = prefs.getString("start_page", "bookmarks") ?: "bookmarks"
         allowSites.value = prefs.getStringSet("allow_sites", emptySet())?.toSet() ?: emptySet()
+        hideOffSites.value = prefs.getStringSet("hide_off_sites", emptySet())?.toSet() ?: emptySet()
         newTab.value = prefs.getString("new_tab", "ask") ?: "ask"
         smartPlay.value = prefs.getString("smart_play", "ask") ?: "ask"
     }
@@ -131,6 +138,7 @@ object WebStore {
             .putBoolean("find_videos", findVideos.value)
             .putString("start_page", startPage.value)
             .putStringSet("allow_sites", allowSites.value)
+            .putStringSet("hide_off_sites", hideOffSites.value)
             .putString("kids_mode", kidsMode.value)
             .putString("new_tab", newTab.value)
             .putString("smart_play", smartPlay.value)
@@ -174,6 +182,7 @@ object WebStore {
         .put("findVideos", findVideos.value)
         .put("startPage", startPage.value)
         .put("allowSites", JSONArray(allowSites.value.toList()))
+        .put("hideOffSites", JSONArray(hideOffSites.value.toList()))
         .put("kidsMode", kidsMode.value)
         .put("newTab", newTab.value)
         .put("smartPlay", smartPlay.value)
@@ -197,6 +206,7 @@ object WebStore {
         startPage.value = o.optString("startPage", "bookmarks")
         val s = o.optJSONArray("allowSites") ?: JSONArray()
         allowSites.value = (0 until s.length()).map { s.getString(it) }.toSet()
+        hideOffSites.value = o.optJSONArray("hideOffSites")?.let { h -> (0 until h.length()).map { h.getString(it) }.toSet() } ?: emptySet()
         runCatching { FilterLists.fromJson(o.optJSONObject("filters")) }
         restoreOffer.value = false
         prefs.edit().putBoolean("offer_done", true).apply()

@@ -180,9 +180,15 @@ object AdBlock {
         "window.open=function(u){try{if(u&&window.top===window){var a=document.createElement('a');a.href=u;var act=navigator.userActivation?navigator.userActivation.isActive:false;" +
         "if(act&&a.hostname&&(a.hostname==location.hostname||a.hostname.split('.').slice(-2).join('.')==location.hostname.split('.').slice(-2).join('.'))){location.href=a.href;}}}catch(x){}return F;};}catch(e){}" +
         "var AD=/click here|cliquez|clique ici|install now|download app|sponsor|publicit|advertis|ads by|\\bad\\b|annonce/i;" +
-        "function clean(){if(!document.body)return;var n=0,w=innerWidth,h=innerHeight,vs=[].slice.call(document.querySelectorAll('video')).filter(function(v){var r=v.getBoundingClientRect();return r.width>120&&r.height>60;});" +
+        // Never removed: menus / navigation, and anything that appears just after you tap (a menu or panel you opened).
+        "var MENU='nav,header,[role=navigation],[role=menu],[role=dialog],[class*=menu],[id*=menu],[class*=nav],[id*=nav],[class*=sidebar],[class*=drawer],[class*=modal]';" +
+        "var tapAt=0,seen=new WeakSet(),keep=new WeakSet();document.addEventListener('click',function(){tapAt=Date.now();},true);" +
+        "document.addEventListener('touchstart',function(){tapAt=Date.now();},true);" +
+        "function mine(e){if(!seen.has(e)){seen.add(e);if(Date.now()-tapAt<4000)keep.add(e);}for(var x=e;x&&x!==document.body;x=x.parentElement){if(keep.has(x))return true;}" +
+        "try{return !!e.closest(MENU);}catch(y){return false;}}" +
+        "function clean(){if(!N.hideOn()||!document.body)return;var n=0,w=innerWidth,h=innerHeight,vs=[].slice.call(document.querySelectorAll('video')).filter(function(v){var r=v.getBoundingClientRect();return r.width>120&&r.height>60;});" +
         "document.querySelectorAll('body *').forEach(function(e){if(!e.isConnected||e.tagName=='VIDEO'||e.querySelector('video'))return;var s=getComputedStyle(e);" +
-        "if(s.position!='fixed'&&s.position!='absolute')return;var q=e.getBoundingClientRect();if(q.width<40||q.height<20)return;" +
+        "if(s.position!='fixed'&&s.position!='absolute')return;var q=e.getBoundingClientRect();if(q.width<40||q.height<20)return;if(mine(e))return;" +
         "if(parseInt(s.zIndex||0)>999&&q.width>w*0.6&&q.height>h*0.6&&((e.innerText||'').trim().length<40||e.tagName=='A'||e.tagName=='IFRAME')){e.remove();n++;return;}" +
         "for(var i=0;i<vs.length;i++){var r=vs[i].getBoundingClientRect();if(q.right<r.left||q.left>r.right||q.bottom<r.top||q.top>r.bottom)continue;" +
         "var a=e.tagName=='A'?e:e.querySelector('a[href]');var ext=a&&a.hostname&&a.hostname!=location.hostname;" +

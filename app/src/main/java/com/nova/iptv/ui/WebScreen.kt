@@ -179,8 +179,11 @@ private fun pageLevel(): String = if (AdBlock.siteOf(WebState.pageSite) in WebSt
 /** Called by the page script in every frame (the web engine's own thread). */
 private object FilterBridge {
     @android.webkit.JavascriptInterface fun level(): String = pageLevel()
-    @android.webkit.JavascriptInterface fun css(host: String?): String = runCatching { com.nova.iptv.data.FilterLists.cssFor(host) }.getOrDefault("")
-    @android.webkit.JavascriptInterface fun base(): String = if (pageLevel() == "normal") "" else AdBlock.HIDE_CSS
+    @android.webkit.JavascriptInterface fun css(host: String?): String =
+        if (!hideOn()) "" else runCatching { com.nova.iptv.data.FilterLists.cssFor(host) }.getOrDefault("")
+    @android.webkit.JavascriptInterface fun base(): String = if (pageLevel() == "normal" || !hideOn()) "" else AdBlock.HIDE_CSS
+    /** Hiding page parts (hide rules + clean-up) is on for this site. */
+    @android.webkit.JavascriptInterface fun hideOn(): Boolean = AdBlock.siteOf(WebState.pageSite) !in WebStore.hideOffSites.value
     @android.webkit.JavascriptInterface fun removed(n: Int) { WebState.removed.value += n }
     @android.webkit.JavascriptInterface fun retry(host: String?) { host?.let { WebStore.clearBad(it) } }
     @android.webkit.JavascriptInterface fun retryOn(): Boolean = WebStore.flag("retryButtons")
@@ -349,6 +352,8 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     val tabsVersion by WebState.tabsVersion.collectAsStateWithLifecycle()
     var tabsOpen by remember { mutableStateOf(false) }
     var askTab by remember { mutableStateOf<String?>(null) }
+    var shieldOpen by remember { mutableStateOf(false) }
+    val hideOff by WebStore.hideOffSites.collectAsStateWithLifecycle()
     /** "Retry buttons that don't react": the button to tap again after the reload. */
     var pendingClick by remember { mutableStateOf<String?>(null) }
     var lastRetry by remember { mutableStateOf("" to 0L) }
@@ -795,11 +800,12 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 SmallButton("★ List", { showPage = false; listOpen = false })
                 key(tabsVersion) { SmallButton("▢ ${WebState.tabs.size}", { tabsOpen = true }) }
                 Chip("🎬 ${found.size}", found.isNotEmpty(), { listOpen = !listOpen })
-                Text(
-                    if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}",
-                    fontSize = 13.sp, color = Color(0xFFBFF5D3),
-                    modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(14.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
-                )
+                FocusBox(onClick = { shieldOpen = true }, modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+                    Text(
+                        if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}" + if (site() in hideOff) " ◐" else "",
+                        fontSize = 13.sp, color = Color(0xFFBFF5D3), modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
                 if (kids != "off") Text("👶", fontSize = 15.sp)
                 SmallButton("⚙", {
                     if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { settingsOpen = true } else settingsOpen = true
@@ -880,6 +886,35 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     FocusBox(onClick = { choose = null }, modifier = Modifier.fillMaxWidth()) {
                         Text(if (webView in WebState.playerTabs) "Keep the site's player" else "Cancel", fontSize = 14.sp, color = Color(0xFFAAAAAA),
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
+                }
+            }
+        }
+
+        // ---- 🛡 this site: page hiding / all blocking on or off
+        if (shieldOpen) {
+            val st = site()
+            androidx.compose.ui.window.Dialog(onDismissRequest = { shieldOpen = false }) {
+                Column(
+                    Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                        .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(14.dp)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("🛡 $st", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("${blocked} addresses blocked · ${removedBoxes} boxes removed on this page", fontSize = 12.sp, color = Color(0xFFAAAAAA))
+                    Text("A menu or part of the page missing? Turn page hiding off for this site — ad addresses stay blocked.",
+                        fontSize = 12.sp, color = Color(0xFFAAAAAA))
+                    fun pin(f: () -> Unit) = if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f()
+                    FocusBox(onClick = { shieldOpen = false; pin { WebStore.toggleHideOff(st); webView.reload() } }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (st in hideOff) "◐  Turn page hiding back ON for $st" else "◐  Turn page hiding OFF for $st (keep blocking ads)",
+                            fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                    FocusBox(onClick = { shieldOpen = false; pin { WebStore.toggleAllowSite(st); webView.reload() } }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (st in allow) "🛡  Turn all blocking back ON for $st" else "🛡  Turn ALL blocking off for $st",
+                            fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                    FocusBox(onClick = { shieldOpen = false }, modifier = Modifier.fillMaxWidth()) {
+                        Text("✕  Close", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                     }
                 }
             }
