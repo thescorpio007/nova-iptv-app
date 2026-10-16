@@ -51,6 +51,7 @@ enum class Tab(val label: String, val zone: Boolean) {
     RECENT("Recent", false),
     DOWNLOADS("Downloads", false),
     LINK("🔗 Open link", false),
+    WEB("🌐 Web", false),
     SETTINGS("Settings", false),
 }
 

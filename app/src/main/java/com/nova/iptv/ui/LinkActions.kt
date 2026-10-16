@@ -120,26 +120,31 @@ object LinkActions {
     }
 
     /** Plays it like "Open with" does (an .m3u list opens as a temporary channel list). */
-    fun play(context: Context, url: String) {
+    /** [name]: the title to show (e.g. the web page's title) instead of the file name. */
+    fun play(context: Context, url: String, name: String? = null) {
         remember(context, url)
-        Log.i("NovaTest", "LINK play ${title(url)}")
+        Log.i("NovaTest", "LINK play ${name ?: title(url)}")
         val app = context.applicationContext
         checked(app, url, "play") {
             app.startActivity(
                 Intent(app, OpenWithActivity::class.java).setAction(Intent.ACTION_VIEW).setData(Uri.parse(url))
+                    .apply { if (!name.isNullOrBlank()) putExtra(OpenWithActivity.EXTRA_NAME, name) }
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }
     }
 
-    fun download(context: Context, url: String) {
+    fun download(context: Context, url: String, name: String? = null) {
         remember(context, url)
-        Log.i("NovaTest", "LINK download ${title(url)}")
+        Log.i("NovaTest", "LINK download ${name ?: title(url)}")
         val app = context.applicationContext
         checked(app, url, "download") { p ->
             when (p.kind) {
                 Kind.HLS_LIVE, Kind.M3U_LIST -> toast(app, if (p.kind == Kind.HLS_LIVE) "This is a live stream: it can be played, not downloaded." else "This is a channel list: open it with ▶ Play.")
-                else -> DownloadCenter.enqueue(app, title(url).substringBeforeLast('.'), url, ext(url), ItemType.MOVIE, null)
+                else -> {
+                    DownloadCenter.enqueue(app, name?.takeIf { it.isNotBlank() } ?: title(url).substringBeforeLast('.'), url, ext(url), ItemType.MOVIE, null)
+                    toast(app, "Download added — see the Downloads tab")
+                }
             }
         }
     }

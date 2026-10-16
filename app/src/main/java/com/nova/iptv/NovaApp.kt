@@ -78,5 +78,7 @@ class NovaApp : Application() {
         com.nova.iptv.data.CrashLog.install(this)
         com.nova.iptv.data.StreamCheck.init(this)
         com.nova.iptv.data.PlaybackLog.init(this)
+        com.nova.iptv.data.WebStore.init(this)
+        com.nova.iptv.data.AdBlock.init(this, http)
     }
 }

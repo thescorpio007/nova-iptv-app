@@ -208,7 +208,7 @@ class Storage(context: Context) {
 
     /** Disk read-ahead for films & series in MB (0 = off): one connection fills segments ahead of the player. */
     var readAheadMb: Int
-        get() = prefs.getInt("read_ahead_mb", 200)
+        get() = prefs.getInt("read_ahead_mb", 500)
         set(value) = prefs.edit().putInt("read_ahead_mb", value).apply()
 
     /** How see-through the overlays over live TV are (group list, recent bar), in %. */

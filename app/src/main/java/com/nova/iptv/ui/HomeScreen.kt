@@ -137,6 +137,7 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
                     Tab.RECENT -> RecentScreen(vm, onPlay)
                     Tab.DOWNLOADS -> DownloadsScreen(vm, onPlay)
                     Tab.LINK -> LinkScreen(vm)
+                    Tab.WEB -> WebScreen(vm)
                     Tab.SETTINGS -> SettingsScreen(vm)
                 }
             }

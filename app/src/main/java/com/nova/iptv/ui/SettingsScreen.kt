@@ -351,7 +351,7 @@ fun SettingsScreen(vm: MainViewModel) {
             Text(
                 "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer 15 min, 15 s cushion (fast start) growing to 2 min, " +
                     "skip channels that don't work after 8 s, propose similar channels when the line is too slow, open in another app: ask (format problems), " +
-                    "age filter NC-17 with words, 200 MB disk read-ahead, " +
+                    "age filter NC-17 with words, 500 MB disk read-ahead, " +
                     "app audio decoders, Back twice to leave live TV, films sorted by rating, storage in the box's Download/NovaIPTV folder…). " +
                     "Your servers, favorites, order, hidden items, PIN and downloads are kept.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
@@ -380,7 +380,7 @@ fun SettingsScreen(vm: MainViewModel) {
             "👤  ACCOUNTS & SAFETY" to { accountsCard(); BackupSettings(vm); ParentalSettings(vm); VpnSettings(vm) },
             "📡  LIVE TV" to { liveBufferCard(); rollingCard(); WatchdogSettings(vm); channelsCard() },
             "▶  PLAYER" to { PlayerSettings(vm); engineCard(); liveFormatCard() },
-            "🎬  FILMS & DOWNLOADS" to { readAheadCard(); DownloadSettings(vm) },
+            "🎬  FILMS & DOWNLOADS" to { readAheadCard(); DownloadSettings(vm); WebSettings() },
             "💾  STORAGE" to { StorageSettings(vm); BuffersSummary() },
             "🖥  SCREEN & REMOTE" to { DisplaySettings(vm); RemoteSettings(vm) },
             "🛠  SYSTEM" to {

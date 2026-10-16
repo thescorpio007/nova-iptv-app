@@ -163,6 +163,7 @@ class OpenWithActivity : ComponentActivity() {
     }
 
     private fun displayName(uri: Uri): String {
+        intent?.getStringExtra(EXTRA_NAME)?.takeIf { it.isNotBlank() }?.let { return it }
         if (uri.scheme == "content") {
             runCatching {
                 contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -202,6 +203,8 @@ class OpenWithActivity : ComponentActivity() {
     }
 
     companion object {
+        /** The title to show (Web tab: the page's title). */
+        const val EXTRA_NAME = "nova_name"
         private val VIDEO_EXT = Regex("""\.(mp4|mkv|avi|mov|webm|m4v|wmv|flv|mpg|mpeg)$""", RegexOption.IGNORE_CASE)
         private val ATTR = Regex("""([\w-]+)="([^"]*)"""")
 

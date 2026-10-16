@@ -67,6 +67,8 @@ fun TvTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     enabled: Boolean = true,
     maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    /** Called with the keyboard's Go / Done / Search key (e.g. open the typed web address). */
+    onSubmit: (() -> Unit)? = null,
 ) {
     val remote = LocalInputModeManager.current.inputMode == InputMode.Keyboard
     val focus = LocalFocusManager.current
@@ -100,10 +102,10 @@ fun TvTextField(
     if (editing) BackHandler { stop() }
 
     val actions = KeyboardActions(
-        onDone = { stop() },
-        onGo = { stop() },
-        onSearch = { stop() },
-        onSend = { stop() },
+        onDone = { stop(); onSubmit?.invoke() },
+        onGo = { stop(); onSubmit?.invoke() },
+        onSearch = { stop(); onSubmit?.invoke() },
+        onSend = { stop(); onSubmit?.invoke() },
         // Remote: to the next item (OK types there). Touch: the next box starts typing by itself.
         onNext = { stop(); focus.moveFocus(FocusDirection.Down) },
     )
