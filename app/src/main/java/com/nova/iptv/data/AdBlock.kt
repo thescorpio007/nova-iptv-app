@@ -164,6 +164,27 @@ object AdBlock {
         "var t=(e.innerText||'').trim();if(t.length<40||e.tagName=='A'||e.tagName=='IFRAME'){e.remove();}}}});}" +
         "clean();setInterval(clean,2000);})();"
 
+    /**
+     * Runs at the start of the page AND of every embedded frame (video players included), through the NovaFilters
+     * bridge: the filter lists' "hide" rules for that site, and at Maximum the clean-up (window.open stopped, full-screen
+     * click-catchers and boxes laid over the video — "Click here", links to other sites, ad frames — removed every 2 s).
+     */
+    const val FRAME_JS = "(function(){try{if(window.__nova)return;window.__nova=1;var N=window.NovaFilters;if(!N)return;" +
+        "var lv=N.level();if(lv=='off')return;var css=N.css(location.hostname);" +
+        "function add(){var s=document.createElement('style');s.textContent=css+'\\n'+N.base();(document.head||document.documentElement).appendChild(s);}" +
+        "if(document.documentElement)add();else document.addEventListener('DOMContentLoaded',add);" +
+        "if(lv!='maximum')return;try{window.open=function(){return null};}catch(e){}" +
+        "var AD=/click here|cliquez|clique ici|install now|download app|sponsor|publicit|advertis|ads by|\\bad\\b|annonce/i;" +
+        "function clean(){if(!document.body)return;var n=0,w=innerWidth,h=innerHeight,vs=[].slice.call(document.querySelectorAll('video')).filter(function(v){var r=v.getBoundingClientRect();return r.width>120&&r.height>60;});" +
+        "document.querySelectorAll('body *').forEach(function(e){if(!e.isConnected||e.tagName=='VIDEO'||e.querySelector('video'))return;var s=getComputedStyle(e);" +
+        "if(s.position!='fixed'&&s.position!='absolute')return;var q=e.getBoundingClientRect();if(q.width<40||q.height<20)return;" +
+        "if(parseInt(s.zIndex||0)>999&&q.width>w*0.6&&q.height>h*0.6&&((e.innerText||'').trim().length<40||e.tagName=='A'||e.tagName=='IFRAME')){e.remove();n++;return;}" +
+        "for(var i=0;i<vs.length;i++){var r=vs[i].getBoundingClientRect();if(q.right<r.left||q.left>r.right||q.bottom<r.top||q.top>r.bottom)continue;" +
+        "var a=e.tagName=='A'?e:e.querySelector('a[href]');var ext=a&&a.hostname&&a.hostname!=location.hostname;" +
+        "if(e.tagName=='IFRAME'||ext||AD.test((e.innerText||'').slice(0,300))){e.remove();n++;}break;}});" +
+        "if(n)try{N.removed(n);}catch(x){}}" +
+        "setTimeout(clean,600);setInterval(clean,2000);}catch(e){}})();"
+
     /** Hides the usual ad boxes left on a page (applied after the page loads). */
     const val HIDE_CSS = "ins.adsbygoogle,[id^='google_ads'],[id^='div-gpt-ad'],[class*='adsbox'],[class*=' ad-'],[class^='ad-']," +
         "[class*='banner-ad'],[id*='banner-ad'],[class*='sponsor'],[id*='popunder'],[class*='popunder']," +

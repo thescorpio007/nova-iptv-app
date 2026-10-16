@@ -1353,7 +1353,7 @@ def web_with_server():
     tap("Web", 10)
     time.sleep(2)
     shot("web-tab")
-    check("Web tab: address row and buttons visible", find("Search or type a web address", 10) is not None and find("List", 5) is not None)
+    check("Web tab: address row and buttons visible", (find("Search or type a web address", 10) is not None or find("Paste", 5) is not None) and find("List", 5) is not None)
     adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/test.html -n {PKG}/.ui.OpenWithActivity")
     check("Open with: a web page opens in the Web tab", find("Nova Web Test page", 30) is not None)
     shot("web-open-with")

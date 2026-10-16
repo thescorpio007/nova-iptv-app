@@ -83,6 +83,21 @@ private object WebState {
     @Volatile var pageUrl: String = ""
     @Volatile var pageSite: String = ""
     var webView: WebView? = null
+    /** The "hide this box" script is added at the start of every frame (newer web engines). */
+    @Volatile var frameScript = false
+    /** Ad boxes removed on the page (counted with the blocked addresses in 🛡). */
+    val removed = kotlinx.coroutines.flow.MutableStateFlow(0)
+}
+
+/** Blocking level for the page being shown ("off" on the sites where blocking is turned off). */
+private fun pageLevel(): String = if (AdBlock.siteOf(WebState.pageSite) in WebStore.allowSites.value) "off" else WebStore.adLevel.value
+
+/** Called by the page script in every frame (the web engine's own thread). */
+private object FilterBridge {
+    @android.webkit.JavascriptInterface fun level(): String = pageLevel()
+    @android.webkit.JavascriptInterface fun css(host: String?): String = runCatching { com.nova.iptv.data.FilterLists.cssFor(host) }.getOrDefault("")
+    @android.webkit.JavascriptInterface fun base(): String = if (pageLevel() == "normal") "" else AdBlock.HIDE_CSS
+    @android.webkit.JavascriptInterface fun removed(n: Int) { WebState.removed.value += n }
 }
 
 private val VIDEO_EXT = Regex("""\.(m3u8|mp4|mpd|webm|mkv|m4v|mov)$""", RegexOption.IGNORE_CASE)
@@ -121,6 +136,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     var showPage by remember { mutableStateOf(WebState.pageUrl.isNotBlank()) }
     var canBack by remember { mutableStateOf(false) }
     var blocked by remember { mutableIntStateOf(0) }
+    val removedBoxes by WebState.removed.collectAsStateWithLifecycle()
     var note by remember { mutableStateOf<String?>(null) }
     val found = remember { mutableStateListOf<FoundVideo>() }
     /** Video addresses already seen on this page (read from the web engine's own threads). */
@@ -145,7 +161,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     }
 
     fun site(): String = AdBlock.siteOf(WebState.pageSite)
-    fun level(): String = if (site() in WebStore.allowSites.value) "off" else WebStore.adLevel.value
+    fun level(): String = pageLevel()
     fun showNote(t: String) {
         if (!WebStore.flag("blockMsg")) return
         main.post { note = t; main.postDelayed({ if (note == t) note = null }, 4000) }
@@ -246,6 +262,13 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
             setBackgroundColor(android.graphics.Color.WHITE)
+            addJavascriptInterface(FilterBridge, "NovaFilters")
+            runCatching {
+                if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                    androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, AdBlock.FRAME_JS, setOf("*"))
+                    WebState.frameScript = true
+                }
+            }
             WebState.webView = this
         }
     }
@@ -286,7 +309,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 val empty = { WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))) }
                 if (!request.isForMainFrame) {
                     if (WebStore.kidsMode.value != "off" && AdBlock.isAdult(host, u.toString())) { main.post { blocked++ }; return empty() }
-                    if (AdBlock.isAd(host, level()) && AdBlock.siteOf(host) != site()) { main.post { blocked++ }; return empty() }
+                    if (AdBlock.siteOf(host) != site() && (AdBlock.isAd(host, level()) || (level() != "off" && com.nova.iptv.data.FilterLists.blocks(host)))) { main.post { blocked++ }; return empty() }
                 }
                 if (WebStore.findVideos.value) {
                     val s = u.toString()
@@ -338,7 +361,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 val newSite = AdBlock.siteOf(Uri.parse(url).host)
-                if (newSite != AdBlock.siteOf(WebState.pageSite)) blocked = 0
+                if (newSite != AdBlock.siteOf(WebState.pageSite)) { blocked = 0; WebState.removed.value = 0 }
                 WebState.pageUrl = url
                 WebState.pageSite = Uri.parse(url).host.orEmpty()
                 address = url
@@ -352,12 +375,8 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 canBack = view.canGoBack()
                 if (!WebStore.flag("privateMode")) WebStore.lastUrl = url
                 val lv = level()
-                if (lv != "off") {
-                    val js = "(function(){var s=document.createElement('style');s.innerHTML=\"" + AdBlock.HIDE_CSS.replace("\"", "\\\"") +
-                        "\";(document.head||document.documentElement).appendChild(s);})();"
-                    view.evaluateJavascript(js, null)
-                    if (lv == "maximum") view.evaluateJavascript(AdBlock.MAX_JS, null)
-                }
+                // Older web engines (no start-of-frame script): the same script, on the main page only.
+                if (lv != "off" && !WebState.frameScript) view.evaluateJavascript(AdBlock.FRAME_JS, null)
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
@@ -497,7 +516,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 SmallButton("★ List", { showPage = false; listOpen = false })
                 Chip("🎬 ${found.size}", found.isNotEmpty(), { listOpen = !listOpen })
                 Text(
-                    if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 $blocked",
+                    if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}",
                     fontSize = 13.sp, color = Color(0xFFBFF5D3),
                     modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(14.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
                 )
@@ -655,6 +674,93 @@ private fun StartPage(
     }
 }
 
+/** Web ⚙ › Ads › 🛡 Filter lists: lists on / off, own lists and rules, automatic update. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun FilterListsContent() {
+    val FL = com.nova.iptv.data.FilterLists
+    val enabled by FL.enabled.collectAsStateWithLifecycle()
+    val custom by FL.custom.collectAsStateWithLifecycle()
+    val info by FL.info.collectAsStateWithLifecycle()
+    val update by FL.update.collectAsStateWithLifecycle()
+    val updating by FL.updating.collectAsStateWithLifecycle()
+    val last by FL.lastUpdate.collectAsStateWithLifecycle()
+    val blockN by FL.blockCount.collectAsStateWithLifecycle()
+    val hideN by FL.hideCount.collectAsStateWithLifecycle()
+    val mine by FL.myRules.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val nf = remember { java.text.NumberFormat.getIntegerInstance() }
+    val df = remember { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT) }
+    var addOpen by remember { mutableStateOf(false) }
+    var newUrl by remember { mutableStateOf("") }
+    var rulesOpen by remember { mutableStateOf(false) }
+    var rulesText by remember(mine) { mutableStateOf(mine) }
+    Column(Modifier.fillMaxWidth().background(Color(0x14FFFFFF), RoundedCornerShape(12.dp)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text("Active rules: ${nf.format(blockN + hideN)} · block ${nf.format(blockN)} · hide ${nf.format(hideN)}", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(
+            (if (updating) "Updating now…" else if (last > 0) "Updated " + df.format(java.util.Date(last)) else "Not downloaded yet") +
+                " · \"hide\" rules also work inside the video players on the page. uBlock's special script rules are skipped.",
+            fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text("Automatic update", fontWeight = FontWeight.Medium, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("start" to "At every start", "daily" to "Daily", "weekly" to "Weekly", "manual" to "Manual").forEach { (k, l) -> Chip(l, update == k, { FL.setUpdate(k) }) }
+        }
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SmallButton(if (updating) "⟳ Updating…" else "⟳ Update now", { FL.updateNow(); Toast.makeText(context, "Updating the filter lists…", Toast.LENGTH_SHORT).show() })
+            SmallButton("＋ Add list by link", { addOpen = !addOpen })
+            SmallButton("✎ My rules" + (info["mine"]?.rules?.takeIf { it > 0 }?.let { " ($it)" } ?: ""), { rulesOpen = !rulesOpen })
+        }
+        if (addOpen) {
+            TvTextField(
+                value = newUrl, onValueChange = { newUrl = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("https://… filter list (EasyList / AdGuard / hosts)") },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                trailingIcon = { PasteButton { newUrl = it } },
+                onSubmit = { if (FL.addList(newUrl)) { newUrl = ""; addOpen = false } else Toast.makeText(context, "Paste a link starting with https://", Toast.LENGTH_SHORT).show() },
+            )
+            SmallButton("Add", { if (FL.addList(newUrl)) { newUrl = ""; addOpen = false } else Toast.makeText(context, "Paste a link starting with https://", Toast.LENGTH_SHORT).show() })
+        }
+        if (rulesOpen) {
+            Text("One rule per line, e.g.  ads.example.com   ·   ||tracker.net^   ·   vidara.to##.ad-box   ·   ##.popup-banner",
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TvTextField(value = rulesText, onValueChange = { rulesText = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp), maxLines = 8)
+            SmallButton("Save my rules", { FL.setMyRules(rulesText); Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() })
+        }
+        @Composable
+        fun row(id: String, name: String, onRemove: (() -> Unit)? = null) {
+            val on = enabled[id] ?: (FL.CATALOGUE.firstOrNull { it.id == id }?.defaultOn ?: true)
+            val i = info[id]
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FocusBox(onClick = { FL.setOn(id, !on) }, modifier = Modifier.weight(1f)) {
+                    Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(name, fontSize = 13.sp)
+                            val sub = when {
+                                i == null || (i.bytes == 0L && i.error.isBlank()) -> if (on) "will download at the next update" else "off"
+                                i.error.isNotBlank() && i.bytes == 0L -> "⚠ could not download (${i.error})"
+                                else -> "${nf.format(i.rules)} rules · ${if (i.bytes >= 1048576) "%.1f MB".format(i.bytes / 1048576.0) else "${i.bytes / 1024} KB"}" +
+                                    (if (i.updated > 0) " · " + df.format(java.util.Date(i.updated)) else "") + (if (i.error.isNotBlank()) " · ⚠ last update failed" else "")
+                            }
+                            Text(sub, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(if (on) "● On" else "○ Off", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (on) Color(0xFF2EE66B) else Color(0xFF999999))
+                    }
+                }
+                if (onRemove != null) SmallButton("✕", onRemove, warn = true)
+            }
+        }
+        FL.CATALOGUE.groupBy { it.group }.forEach { (g, lists) ->
+            Text(g, fontSize = 11.sp, color = Color(0xFF2EE66B), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+            lists.forEach { row(it.id, it.name) }
+        }
+        if (custom.isNotEmpty()) {
+            Text("MY LISTS", fontSize = 11.sp, color = Color(0xFF2EE66B), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+            custom.forEach { u -> row("u:$u", Uri.parse(u).host ?: u) { FL.removeList(u) } }
+        }
+    }
+}
+
 @Composable
 private fun SwitchRow(label: String, key: String, flags: Map<String, Boolean>) {
     val on = flags[key] ?: WebStore.FLAG_DEFAULTS[key] ?: false
@@ -697,9 +803,19 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
                 "strong" -> "Strong = ${nf.format(AdBlock.listSize)} ad & tracker sites + page-ad hiding."
                 "normal" -> "Normal = ${nf.format(AdBlock.listSize)} ad & tracker sites."
                 else -> "Off = no ad blocking (the switches below still apply)."
-            } + " Lists update weekly. No browser can remove every ad: some sites serve ads from their own address.",
+            } + " + Filter lists below. No browser can remove every ad: some sites serve ads from their own address.",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        var listsOpen by remember { mutableStateOf(false) }
+        val flTotal by com.nova.iptv.data.FilterLists.blockCount.collectAsStateWithLifecycle()
+        val flHide by com.nova.iptv.data.FilterLists.hideCount.collectAsStateWithLifecycle()
+        FocusBox(onClick = { listsOpen = !listsOpen }, modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("🛡 Filter lists", fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("${nf.format(flTotal + flHide)} rules  " + if (listsOpen) "▲" else "▼", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (listsOpen) FilterListsContent()
         SwitchRow("Block pop-ups, new tabs & overlays", "popups", flags)
         SwitchRow("Block redirects to other sites", "redirects", flags)
         SwitchRow("Block “open another app” (intent, Telegram, Play Store…)", "appJumps", flags)

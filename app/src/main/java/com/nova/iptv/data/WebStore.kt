@@ -123,6 +123,8 @@ object WebStore {
         if (i < 0 || j !in l.indices) return
         l.removeAt(i); l.add(j, b); bookmarks.value = l; save()
     }
+    /** Something saved elsewhere (filter lists) changed: save the backup file again. */
+    fun changed() { if (::app.isInitialized) exportSoon() }
     fun setAdLevel(v: String) { adLevel.value = v; save() }
     fun setFindVideos(v: Boolean) { findVideos.value = v; save() }
     fun setStartPage(v: String) { startPage.value = v; save() }
@@ -143,6 +145,7 @@ object WebStore {
         .put("allowSites", JSONArray(allowSites.value.toList()))
         .put("kidsMode", kidsMode.value)
         .put("flags", JSONObject(flags.value as Map<*, *>))
+        .put("filters", runCatching { FilterLists.toJson() }.getOrNull())
         .toString(2)
 
     /** Applies an exported file (replaces bookmarks and settings). */
@@ -159,6 +162,7 @@ object WebStore {
         startPage.value = o.optString("startPage", "bookmarks")
         val s = o.optJSONArray("allowSites") ?: JSONArray()
         allowSites.value = (0 until s.length()).map { s.getString(it) }.toSet()
+        runCatching { FilterLists.fromJson(o.optJSONObject("filters")) }
         restoreOffer.value = false
         prefs.edit().putBoolean("offer_done", true).apply()
         save()

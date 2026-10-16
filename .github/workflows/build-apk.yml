@@ -86,6 +86,13 @@ jobs:
           git commit -m "Build log for run ${{ github.run_number }}"
           git push -f origin ci-logs
 
+      - name: Check the filter-list addresses (information only)
+        continue-on-error: true
+        run: |
+          grep -o 'https://[^"]*' app/src/main/java/com/nova/iptv/data/FilterLists.kt | while read u; do
+            echo "FILTERURL $(curl -sL -o /tmp/f.txt -w '%{http_code}' -m 30 -A 'Mozilla/5.0 NovaIPTV' "$u") $(wc -c </tmp/f.txt) $u"
+          done
+
       - name: Keep the APK as a download (Actions tab)
         uses: actions/upload-artifact@v4
         with:
