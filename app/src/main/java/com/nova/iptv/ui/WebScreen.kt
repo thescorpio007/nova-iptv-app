@@ -95,7 +95,28 @@ private object WebState {
     val urls = HashMap<WebView, String>()
     val lastUsed = HashMap<WebView, Long>()
     val tabsVersion = kotlinx.coroutines.flow.MutableStateFlow(0)
+    /** A button on the page that did not react (its name), reported by [RETRY_JS]. */
+    val noReaction = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 }
+
+/**
+ * Main page only: when you tap one of a group of short buttons (e.g. a film page's servers) and the page's player box
+ * does not change within 3 s, Nova is told (it then reloads the page and taps the same button again).
+ */
+private const val RETRY_JS = "(function(){try{if(window.top!==window||window.__novaRetry)return;window.__novaRetry=1;var N=window.NovaFilters;if(!N||!N.retryOn())return;" +
+    "function txt(e){return (e.innerText||e.textContent||'').trim();}" +
+    "function srcs(){return [].map.call(document.querySelectorAll('iframe'),function(f){return f.src}).join('|');}" +
+    "function big(){return [].some.call(document.querySelectorAll('iframe'),function(f){var r=f.getBoundingClientRect();return r.width>200&&r.height>100;});}" +
+    "document.addEventListener('click',function(ev){try{var e=ev.target,t='';for(var i=0;i<4&&e&&e!==document.body;i++){t=txt(e);if(t.length>=2&&t.length<=25&&t.indexOf('\\n')<0)break;e=e.parentElement;}" +
+    "if(!e||e===document.body||t.length<2||t.length>25)return;var g=e.parentElement&&e.parentElement.parentElement?e.parentElement.parentElement:e.parentElement;if(!g)return;" +
+    "var sib=[].filter.call(g.querySelectorAll(e.tagName),function(x){var s=txt(x);return s.length>=2&&s.length<=25;}).length;" +
+    "if(sib<3||!big())return;var before=srcs(),loc=location.href;" +
+    "setTimeout(function(){if(location.href==loc&&srcs()==before)N.noReaction(t);},3000);}catch(x){}},true);}catch(e){}})();"
+
+/** Taps the element whose text is exactly [text] (the smallest one), after a reload. */
+private fun clickJs(text: String): String =
+    "(function(t){var best=null;document.querySelectorAll('a,button,li,span,div').forEach(function(e){var s=(e.innerText||'').trim();" +
+        "if(s===t&&(!best||best.contains(e)))best=e;});if(best){best.scrollIntoView({block:'center'});best.click();}})(" + org.json.JSONObject.quote(text) + ")"
 
 private const val MAX_TABS = 6
 private val SAFE_HOST = Regex("[^A-Za-z0-9.-]")
@@ -133,6 +154,7 @@ private fun newWebView(context: android.content.Context): WebView = WebView(cont
     runCatching {
         if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
             androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, AdBlock.FRAME_JS, setOf("*"))
+            androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, RETRY_JS, setOf("*"))
             WebState.frameScript = true
         }
     }
@@ -148,6 +170,8 @@ private object FilterBridge {
     @android.webkit.JavascriptInterface fun base(): String = if (pageLevel() == "normal") "" else AdBlock.HIDE_CSS
     @android.webkit.JavascriptInterface fun removed(n: Int) { WebState.removed.value += n }
     @android.webkit.JavascriptInterface fun retry(host: String?) { host?.let { WebStore.clearBad(it) } }
+    @android.webkit.JavascriptInterface fun retryOn(): Boolean = WebStore.flag("retryButtons")
+    @android.webkit.JavascriptInterface fun noReaction(text: String?) { if (!text.isNullOrBlank()) WebState.noReaction.value = text }
 }
 
 private val VIDEO_EXT = Regex("""\.(m3u8|mp4|mpd|webm|mkv|m4v|mov)$""", RegexOption.IGNORE_CASE)
@@ -308,6 +332,9 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     val tabsVersion by WebState.tabsVersion.collectAsStateWithLifecycle()
     var tabsOpen by remember { mutableStateOf(false) }
     var askTab by remember { mutableStateOf<String?>(null) }
+    /** "Retry buttons that don't react": the button to tap again after the reload. */
+    var pendingClick by remember { mutableStateOf<String?>(null) }
+    var lastRetry by remember { mutableStateOf("" to 0L) }
     val defaultUa = remember { WebSettings.getDefaultUserAgent(context) }
 
     // Settings that change how pages are loaded.
@@ -489,6 +516,11 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
 
             override fun onPageFinished(view: WebView, url: String) {
                 if (current()) canBack = view.canGoBack()
+                if (!WebState.frameScript) view.evaluateJavascript(RETRY_JS, null)
+                if (current()) pendingClick?.let { t ->
+                    pendingClick = null
+                    main.postDelayed({ view.evaluateJavascript(clickJs(t), null) }, 1500)
+                }
                 if (!WebStore.flag("privateMode")) WebStore.lastUrl = url
                 val lv = level()
                 // Older web engines (no start-of-frame script): the same script, on the main page only.
@@ -581,6 +613,19 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         val now = System.currentTimeMillis()
         if (now - lastBack < 2000) onLeave()
         else { lastBack = now; Toast.makeText(context, "Press Back again to leave Web", Toast.LENGTH_SHORT).show() }
+    }
+    // A button that did not react: reload the page and tap it again (once per button within 20 s).
+    val noReact by WebState.noReaction.collectAsStateWithLifecycle()
+    LaunchedEffect(noReact) {
+        val t = noReact ?: return@LaunchedEffect
+        WebState.noReaction.value = null
+        val now = System.currentTimeMillis()
+        if (lastRetry.first == t && now - lastRetry.second < 20_000) return@LaunchedEffect
+        lastRetry = t to now
+        pendingClick = t
+        val msg = "⟳ The page didn't react — reloading and selecting $t…"
+        note = msg; main.postDelayed({ if (note == msg) note = null }, 5000)
+        webView.reload()
     }
     // An address sent to the Web tab (Open with, Share, welcome screen).
     val pending by WebStore.pendingUrl.collectAsStateWithLifecycle()
@@ -1079,6 +1124,7 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
         Text("Only links you tap can open a tab (up to $MAX_TABS). Pop-ups opened by the page itself are always blocked. Every tab is filtered, " +
             "and ad, malicious, adult & gambling addresses are refused before any question. The question cancels itself after 10 s.",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SwitchRow("Retry buttons that don't react (reload the page and tap again)", "retryButtons", flags)
         SectionTitleWeb("PAGE & VIDEOS")
         SmallButton("🌐 Make Nova my default browser", {
             val opened = runCatching {

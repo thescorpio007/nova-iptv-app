@@ -47,7 +47,7 @@ object WebStore {
         "popups" to true, "redirects" to true, "appJumps" to true, "siteDownloads" to true, "blockMsg" to true,
         "safeBrowsing" to true, "denyPerms" to true, "cookies" to true, "privateMode" to false, "javascript" to true,
         "blockImages" to false, "pinOpen" to false, "pinSettings" to true, "hideAddress" to false,
-        "normalBrowser" to true, "desktop" to false, "dark" to false,
+        "normalBrowser" to true, "desktop" to false, "dark" to false, "retryButtons" to true,
     )
     fun flag(k: String): Boolean = flags.value[k] ?: FLAG_DEFAULTS[k] ?: false
     fun setFlag(k: String, v: Boolean) { flags.value = flags.value + (k to v); save() }
