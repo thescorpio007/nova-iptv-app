@@ -149,7 +149,7 @@ object LinkActions {
         }
     }
 
-    fun downloadAndWatch(context: Context, url: String) {
+    fun downloadAndWatch(context: Context, url: String, name: String? = null) {
         remember(context, url)
         val app = context.applicationContext
         checked(app, url, "download & watch") { p ->
@@ -159,14 +159,14 @@ object LinkActions {
                     toast(app, if (p.kind == Kind.HLS_LIVE) "Live stream: playing (it can't be downloaded)" else "Channel list: opening it")
                     app.startActivity(Intent(app, OpenWithActivity::class.java).setAction(Intent.ACTION_VIEW).setData(Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
-                else -> startDownloadAndWatch(app, url)
+                else -> startDownloadAndWatch(app, url, name)
             }
         }
     }
 
-    private fun startDownloadAndWatch(context: Context, url: String) {
-        Log.i("NovaTest", "LINK download & watch ${title(url)}")
-        val name = title(url).substringBeforeLast('.')
+    private fun startDownloadAndWatch(context: Context, url: String, label: String? = null) {
+        Log.i("NovaTest", "LINK download & watch ${label ?: title(url)}")
+        val name = label?.takeIf { it.isNotBlank() } ?: title(url).substringBeforeLast('.')
         val d = DownloadCenter.watchNow(context.applicationContext, name, url, ext(url), ItemType.MOVIE, null)
         // HLS: the player reads the joined file being written, not the .m3u8 list.
         val playUrl = if (HlsDownload.isHls(url)) "nova-dl://${d.id}/video.ts" else url

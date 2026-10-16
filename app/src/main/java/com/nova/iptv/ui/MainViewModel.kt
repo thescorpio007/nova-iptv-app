@@ -43,15 +43,15 @@ import java.io.File
 import java.util.UUID
 
 /** Top-level areas. The first three are the main zones. */
-enum class Tab(val label: String, val zone: Boolean) {
+enum class Tab(val label: String, val zone: Boolean, val top: Boolean = zone) {
     LIVE("📺  Live TV", true),
     FILMS("🎬  Films", true),
     SERIES("🎞  Series", true),
+    WEB("🌐  Web", false, top = true),
     SEARCH("Search", false),
     RECENT("Recent", false),
     DOWNLOADS("Downloads", false),
     LINK("🔗 Open link", false),
-    WEB("🌐 Web", false),
     SETTINGS("Settings", false),
 }
 

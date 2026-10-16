@@ -3,14 +3,18 @@ package com.nova.iptv.ui
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -18,24 +22,26 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -61,8 +67,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.ByteArrayInputStream
 
-/** A video found on the page: plays in Nova's player with the page's details (Referer, cookies, browser name). */
-data class FoundVideo(val url: String, val label: String, val kind: String, val page: String, val protectedDrm: Boolean = false)
+/**
+ * A video found on the page. [height] = 1080, 720… (0 = not known). Played with the page's details (Referer, cookies…).
+ */
+data class FoundVideo(
+    val url: String, val kind: String, val page: String,
+    val height: Int = 0, val info: String = "", val protectedDrm: Boolean = false,
+) {
+    val quality: String get() = when { protectedDrm -> "🔒"; height > 0 -> "${height}p"; else -> "?" }
+}
 
 /** The web page being shown (kept while you move to other tabs). */
 private object WebState {
@@ -71,13 +84,23 @@ private object WebState {
     var webView: WebView? = null
 }
 
-private val VIDEO_EXT = Regex("""\.(m3u8|mp4|mpd|webm|mkv|m4v|mov)(\?|$|#)""", RegexOption.IGNORE_CASE)
-private val DRM_HINT = Regex("""widevine|playready|fairplay|/license|drm""", RegexOption.IGNORE_CASE)
+private val VIDEO_EXT = Regex("""\.(m3u8|mp4|mpd|webm|mkv|m4v|mov)$""", RegexOption.IGNORE_CASE)
+private val DRM_HINT = Regex("""widevine|playready|fairplay|/license""", RegexOption.IGNORE_CASE)
 private val RESOLUTION = Regex("""RESOLUTION=\d+x(\d+)""")
 private val QUALITY_IN_URL = Regex("""(?<!\d)(2160|1440|1080|720|576|480|360|240)p?(?!\d)""")
-private val SEARCH = "https://duckduckgo.com/?q="
+private val EXTINF = Regex("""#EXTINF:([\d.]+)""")
+private const val SEARCH = "https://duckduckgo.com/?q="
+private const val NOVA_FOLDER = "content://com.android.externalstorage.documents/document/primary%3ADownload%2FNovaIPTV"
+private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
 
-/** 🌐 Web: a small browser with strong ad blocking that finds the page's video and plays it in Nova. */
+private fun durationText(sec: Double): String {
+    val m = (sec / 60).toInt()
+    return if (m >= 60) "${m / 60} h ${"%02d".format(m % 60)}" else "$m min"
+}
+
+private fun sizeText(b: Long): String = if (b >= 1L shl 30) "%.1f GB".format(b / 1073741824.0) else "${b / 1048576} MB"
+
+/** 🌐 Web: a small browser with strong ad blocking, kids protection, and Nova's player for the page's videos. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun WebScreen(vm: MainViewModel) {
@@ -86,9 +109,11 @@ fun WebScreen(vm: MainViewModel) {
     val main = remember { Handler(Looper.getMainLooper()) }
     val bookmarks by WebStore.bookmarks.collectAsStateWithLifecycle()
     val adLevel by WebStore.adLevel.collectAsStateWithLifecycle()
-    val findVideos by WebStore.findVideos.collectAsStateWithLifecycle()
+    val kids by WebStore.kidsMode.collectAsStateWithLifecycle()
+    val flags by WebStore.flags.collectAsStateWithLifecycle()
     val allow by WebStore.allowSites.collectAsStateWithLifecycle()
     val offer by WebStore.restoreOffer.collectAsStateWithLifecycle()
+    val hasPin = vm.appStorage.hasPin
 
     var address by remember { mutableStateOf(WebState.pageUrl) }
     var title by remember { mutableStateOf("") }
@@ -97,10 +122,18 @@ fun WebScreen(vm: MainViewModel) {
     var blocked by remember { mutableIntStateOf(0) }
     var note by remember { mutableStateOf<String?>(null) }
     val found = remember { mutableStateListOf<FoundVideo>() }
-    var panelClosed by remember { mutableStateOf(false) }
-    var menu by remember { mutableStateOf(false) }
+    /** Video addresses already seen on this page (read from the web engine's own threads). */
+    val seen = remember { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
+    var listOpen by remember { mutableStateOf(false) }
+    var choose by remember { mutableStateOf<FoundVideo?>(null) }
+    var settingsOpen by remember { mutableStateOf(false) }
     var fullView by remember { mutableStateOf<View?>(null) }
     var fullCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    // 🔒 PIN to open the Web tab.
+    var unlocked by remember { mutableStateOf(!(hasPin && WebStore.flag("pinOpen"))) }
+    LaunchedEffect(Unit) { if (!unlocked) PinGate.require(true) { unlocked = true } }
+    LaunchedEffect(adLevel, kids) { AdBlock.ensure(adLevel, kids) }
+
     val pickTree = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
@@ -111,32 +144,75 @@ fun WebScreen(vm: MainViewModel) {
     }
 
     fun site(): String = AdBlock.siteOf(WebState.pageSite)
-    fun blocking(): Boolean = WebStore.adLevel.value != "off" && site() !in WebStore.allowSites.value
-    fun showNote(t: String) = main.post { note = t; main.postDelayed({ if (note == t) note = null }, 4000) }
-
-    fun addFound(v: FoundVideo) = main.post {
-        if (found.none { it.url == v.url } && found.size < 12) { found += v; panelClosed = false }
+    fun level(): String = if (site() in WebStore.allowSites.value) "off" else WebStore.adLevel.value
+    fun showNote(t: String) {
+        if (!WebStore.flag("blockMsg")) return
+        main.post { note = t; main.postDelayed({ if (note == t) note = null }, 4000) }
+    }
+    fun bookmarkSites() = WebStore.bookmarks.value.map { AdBlock.siteOf(Uri.parse(it.url).host) }.toSet()
+    /** Kids protection: may this address be opened? (null = yes, otherwise why not). */
+    fun kidsRefuse(url: Uri): String? = when (WebStore.kidsMode.value) {
+        "bookmarks" -> if (AdBlock.siteOf(url.host) in bookmarkSites()) null else "only your bookmarked sites can be opened"
+        "adult" -> if (AdBlock.isAdult(url.host, url.toString())) "adult or gambling site" else null
+        else -> null
     }
 
-    /** An HLS master list: one line per quality (1080p, 720p…). */
-    fun inspectHls(url: String, page: String, headers: Map<String, String>) {
+    /** Adds a video once (pieces of the same file share an address without the "?…" part). */
+    fun addFound(v: FoundVideo) = main.post {
+        val key = v.url.substringBefore('?')
+        val i = found.indexOfFirst { it.url.substringBefore('?') == key }
+        if (i >= 0) {
+            val old = found[i]
+            if ((v.height > 0 && old.height == 0) || (v.info.isNotBlank() && old.info.isBlank()) || v.protectedDrm != old.protectedDrm) {
+                found[i] = old.copy(
+                    height = if (v.height > 0) v.height else old.height,
+                    info = v.info.ifBlank { old.info }, protectedDrm = old.protectedDrm || v.protectedDrm,
+                )
+            }
+        } else if (found.size < 30) found += v
+    }
+
+    /** Asks the website about a found video: qualities of an HLS list, length, size of a file. */
+    fun inspect(url: String, kind: String, page: String, headers: Map<String, String>) {
         CoroutineScope(Dispatchers.IO).launch {
-            val text = runCatching {
-                val req = okhttp3.Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
-                app.http.newCall(req).execute().use { it.body?.string().orEmpty() }
-            }.getOrNull() ?: return@launch
-            val protectedDrm = text.contains("SAMPLE-AES") || text.contains("KEYFORMAT=", ignoreCase = true)
-            if (text.contains("#EXT-X-STREAM-INF")) {
-                val lines = text.lines()
-                lines.forEachIndexed { i, l ->
-                    if (!l.startsWith("#EXT-X-STREAM-INF")) return@forEachIndexed
-                    val next = lines.drop(i + 1).firstOrNull { it.isNotBlank() && !it.startsWith("#") } ?: return@forEachIndexed
-                    val h = RESOLUTION.find(l)?.groupValues?.get(1)
-                    val v = runCatching { java.net.URI(url).resolve(next.trim()).toString() }.getOrNull() ?: return@forEachIndexed
-                    addFound(FoundVideo(v, h?.let { "${it}p" } ?: "HLS", "HLS", page, protectedDrm))
+            fun get(u: String, head: Boolean = false): okhttp3.Response = app.http.newCall(
+                okhttp3.Request.Builder().url(u).apply { headers.forEach { (k, v) -> header(k, v) }; if (head) head() }.build(),
+            ).execute()
+            runCatching {
+                if (kind == "HLS") {
+                    val text = get(url).use { it.body?.string().orEmpty() }
+                    val drm = text.contains("SAMPLE-AES") || text.contains("KEYFORMAT=", ignoreCase = true)
+                    if (text.contains("#EXT-X-STREAM-INF")) {
+                        val lines = text.lines()
+                        var firstVariant: String? = null
+                        lines.forEachIndexed { i, l ->
+                            if (!l.startsWith("#EXT-X-STREAM-INF")) return@forEachIndexed
+                            val next = lines.drop(i + 1).firstOrNull { it.isNotBlank() && !it.startsWith("#") } ?: return@forEachIndexed
+                            val h = RESOLUTION.find(l)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                            val v = java.net.URI(url).resolve(next.trim()).toString()
+                            if (firstVariant == null) firstVariant = v
+                            addFound(FoundVideo(v, "HLS", page, h, protectedDrm = drm))
+                        }
+                        // The master list itself: shown only when it brought no qualities.
+                        main.post { if (found.any { it.page == page && it.url != url && it.kind == "HLS" }) found.removeAll { it.url == url } }
+                        // Length (same for every quality): from one quality list.
+                        firstVariant?.let { fv ->
+                            val list = get(fv).use { it.body?.string().orEmpty() }
+                            val sec = EXTINF.findAll(list).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }
+                            if (sec > 30 && list.contains("#EXT-X-ENDLIST")) {
+                                val info = "HLS · " + durationText(sec)
+                                main.post { found.replaceAll { if (it.page == page && it.kind == "HLS") it.copy(info = info) else it } }
+                            }
+                        }
+                    } else {
+                        val sec = EXTINF.findAll(text).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }
+                        val info = if (text.contains("#EXT-X-ENDLIST") && sec > 30) "HLS · " + durationText(sec) else "HLS · live"
+                        main.post { found.replaceAll { if (it.url == url) it.copy(info = info, protectedDrm = it.protectedDrm || drm) else it } }
+                    }
+                } else if (kind != "DASH") {
+                    val size = get(url, head = true).use { it.header("Content-Length")?.toLongOrNull() ?: 0L }
+                    if (size > 0) main.post { found.replaceAll { if (it.url == url) it.copy(info = "$kind · " + sizeText(size)) else it } }
                 }
-            } else if (protectedDrm) {
-                main.post { found.replaceAll { if (it.url == url) it.copy(protectedDrm = true) else it } }
             }
         }
     }
@@ -149,6 +225,10 @@ fun WebScreen(vm: MainViewModel) {
             !t.contains(' ') && t.contains('.') -> "https://$t"
             else -> SEARCH + Uri.encode(t)
         }
+        kidsRefuse(Uri.parse(url))?.let { why ->
+            Toast.makeText(context, "👶 Blocked for children: $why", Toast.LENGTH_LONG).show()
+            return
+        }
         showPage = true
         address = url
         WebState.webView?.loadUrl(url)
@@ -156,7 +236,6 @@ fun WebScreen(vm: MainViewModel) {
 
     val webView = remember {
         WebState.webView ?: WebView(context).apply {
-            settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
             settings.setSupportMultipleWindows(true)
@@ -165,38 +244,67 @@ fun WebScreen(vm: MainViewModel) {
             settings.displayZoomControls = false
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
-            CookieManager.getInstance().setAcceptCookie(true)
             WebState.webView = this
         }
     }
+    val defaultUa = remember { WebSettings.getDefaultUserAgent(context) }
 
-    // The callbacks read the current Compose state through these lambdas.
+    // Settings that change how pages are loaded.
+    LaunchedEffect(flags) {
+        val s = webView.settings
+        s.javaScriptEnabled = WebStore.flag("javascript")
+        s.blockNetworkImage = WebStore.flag("blockImages")
+        if (Build.VERSION.SDK_INT >= 26) s.safeBrowsingEnabled = WebStore.flag("safeBrowsing")
+        CookieManager.getInstance().setAcceptCookie(WebStore.flag("cookies"))
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, WebStore.flag("cookies") && !WebStore.flag("privateMode"))
+        // "Look like a normal browser": no "wv" (app browser) mark, and no X-Requested-With header with the app's name.
+        s.userAgentString = when {
+            WebStore.flag("desktop") -> DESKTOP_UA
+            WebStore.flag("normalBrowser") -> defaultUa.replace("; wv", "").replace(" Version/4.0", "")
+            else -> defaultUa
+        }
+        runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+                androidx.webkit.WebSettingsCompat.setRequestedWithHeaderOriginAllowList(s, if (WebStore.flag("normalBrowser")) emptySet() else setOf("*"))
+            }
+        }
+        runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.ALGORITHMIC_DARKENING)) {
+                androidx.webkit.WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, WebStore.flag("dark"))
+            }
+        }
+        s.cacheMode = if (WebStore.flag("privateMode")) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
+    }
+
     DisposableEffect(webView) {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 val u = request.url
                 val host = u.host
-                if (!request.isForMainFrame && blocking() && AdBlock.isAd(host) && AdBlock.siteOf(host) != site()) {
-                    main.post { blocked++ }
-                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                val empty = { WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))) }
+                if (!request.isForMainFrame) {
+                    if (WebStore.kidsMode.value != "off" && AdBlock.isAdult(host, u.toString())) { main.post { blocked++ }; return empty() }
+                    if (AdBlock.isAd(host, level()) && AdBlock.siteOf(host) != site()) { main.post { blocked++ }; return empty() }
                 }
                 if (WebStore.findVideos.value) {
                     val s = u.toString()
-                    if (DRM_HINT.containsMatchIn(s) && (request.method == "POST" || s.contains("license", true))) {
-                        main.post { found.replaceAll { it.copy(protectedDrm = true) } }
+                    if (DRM_HINT.containsMatchIn(s) && request.method == "POST") {
+                        main.post { found.replaceAll { if (it.page == WebState.pageUrl) it.copy(protectedDrm = true) else it } }
                     }
                     val m = VIDEO_EXT.find(u.path.orEmpty())
                     if (m != null) {
                         val ext = m.groupValues[1].lowercase()
                         val page = WebState.pageUrl
-                        val q = QUALITY_IN_URL.find(s)?.groupValues?.get(1)?.let { "${it}p" }
+                        val h = QUALITY_IN_URL.find(s)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                         val kind = when (ext) { "m3u8" -> "HLS"; "mpd" -> "DASH"; else -> ext.uppercase() }
-                        addFound(FoundVideo(s, q ?: kind, kind, page, protectedDrm = ext == "mpd"))
-                        if (ext == "m3u8") {
+                        val key = s.substringBefore('?')
+                        val isNew = seen.add(key)
+                        addFound(FoundVideo(s, kind, page, h, info = kind, protectedDrm = ext == "mpd"))
+                        if (isNew) {
                             val hdr = HashMap<String, String>()
                             request.requestHeaders?.forEach { (k, v) -> if (!k.equals("Range", true)) hdr[k] = v }
                             CookieManager.getInstance().getCookie(s)?.let { hdr["Cookie"] = it }
-                            inspectHls(s, page, hdr)
+                            inspect(s, kind, page, hdr)
                         }
                     }
                 }
@@ -208,11 +316,16 @@ fun WebScreen(vm: MainViewModel) {
                 val scheme = u.scheme.orEmpty().lowercase()
                 if (scheme != "http" && scheme != "https") {
                     // intent://, market://, tg:// … : "open another app" jumps.
-                    if (WebStore.adLevel.value != "off") { main.post { blocked++ }; showNote("🚫 Blocked: the page tried to open another app ($scheme)"); return true }
+                    if (WebStore.flag("appJumps") || WebStore.kidsMode.value != "off") { main.post { blocked++ }; showNote("🚫 Blocked: the page tried to open another app ($scheme)"); return true }
                     return false
                 }
-                if (request.isForMainFrame && !request.hasGesture() && WebStore.adLevel.value == "strong" &&
-                    site() !in WebStore.allowSites.value && site().isNotEmpty() && AdBlock.siteOf(u.host) != site()
+                if (request.isForMainFrame) kidsRefuse(u)?.let { why ->
+                    main.post { blocked++ }
+                    main.post { Toast.makeText(context, "👶 Blocked for children: $why", Toast.LENGTH_LONG).show() }
+                    return true
+                }
+                if (request.isForMainFrame && !request.hasGesture() && WebStore.flag("redirects") && level() != "off" &&
+                    site().isNotEmpty() && AdBlock.siteOf(u.host) != site()
                 ) {
                     main.post { blocked++ }
                     showNote("🚫 Redirect blocked: the page tried to send you to ${u.host}")
@@ -223,22 +336,25 @@ fun WebScreen(vm: MainViewModel) {
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 val newSite = AdBlock.siteOf(Uri.parse(url).host)
-                if (newSite != AdBlock.siteOf(WebState.pageSite)) { blocked = 0 }
+                if (newSite != AdBlock.siteOf(WebState.pageSite)) blocked = 0
                 WebState.pageUrl = url
                 WebState.pageSite = Uri.parse(url).host.orEmpty()
                 address = url
                 found.clear()
-                panelClosed = false
+                seen.clear()
+                listOpen = false
                 canBack = view.canGoBack()
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 canBack = view.canGoBack()
-                WebStore.lastUrl = url
-                if (blocking()) {
+                if (!WebStore.flag("privateMode")) WebStore.lastUrl = url
+                val lv = level()
+                if (lv != "off") {
                     val js = "(function(){var s=document.createElement('style');s.innerHTML=\"" + AdBlock.HIDE_CSS.replace("\"", "\\\"") +
                         "\";(document.head||document.documentElement).appendChild(s);})();"
                     view.evaluateJavascript(js, null)
+                    if (lv == "maximum") view.evaluateJavascript(AdBlock.MAX_JS, null)
                 }
             }
         }
@@ -246,16 +362,16 @@ fun WebScreen(vm: MainViewModel) {
             override fun onReceivedTitle(view: WebView, t: String?) { title = t.orEmpty() }
 
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
-                if (WebStore.adLevel.value != "off" && site() !in WebStore.allowSites.value) {
+                if (WebStore.flag("popups") && level() != "off") {
                     blocked++
-                    showNote("🚫 Pop-up blocked")
+                    showNote("🚫 Pop-up / new tab blocked")
                     return false
                 }
-                // Blocking off: open the new window's address in this same page.
+                // Allowed: open the new window's address in this same page.
                 val temp = WebView(view.context)
                 temp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
-                        view.loadUrl(r.url.toString()); v.destroy(); return true
+                        go(r.url.toString()); v.destroy(); return true
                     }
                 }
                 (resultMsg.obj as WebView.WebViewTransport).webView = temp
@@ -263,15 +379,36 @@ fun WebScreen(vm: MainViewModel) {
                 return true
             }
 
+            override fun onPermissionRequest(request: PermissionRequest) {
+                if (WebStore.flag("denyPerms") || WebStore.kidsMode.value != "off") { request.deny(); showNote("🚫 Camera / microphone refused") }
+                else request.deny() // Nova never gives the camera or microphone to websites
+            }
+
+            override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+                callback.invoke(origin, false, false)
+                showNote("🚫 Location refused")
+            }
+
             override fun onShowCustomView(v: View, callback: CustomViewCallback) { fullView = v; fullCallback = callback }
             override fun onHideCustomView() { fullView = null; fullCallback = null }
         }
-        onDispose { }
+        webView.setDownloadListener { url, _, _, mime, _ ->
+            if (WebStore.flag("siteDownloads") || WebStore.kidsMode.value != "off" || url.endsWith(".apk", true) || mime == "application/vnd.android.package-archive") {
+                blocked++
+                showNote("🚫 Download started by the site blocked")
+            } else {
+                choose = FoundVideo(url, mime.substringAfter('/').uppercase().take(5), WebState.pageUrl, info = "file")
+            }
+        }
+        onDispose {
+            if (WebStore.flag("privateMode")) { CookieManager.getInstance().removeAllCookies(null); webView.clearHistory() }
+        }
     }
 
     BackHandler(enabled = fullView != null) { fullCallback?.onCustomViewHidden(); fullView = null }
-    BackHandler(enabled = fullView == null && showPage && canBack) { webView.goBack() }
-    BackHandler(enabled = fullView == null && showPage && !canBack) { showPage = false }
+    BackHandler(enabled = fullView == null && (listOpen || settingsOpen)) { listOpen = false; settingsOpen = false }
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && showPage && canBack) { webView.goBack() }
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && showPage && !canBack) { showPage = false }
 
     // First visit: start page.
     remember {
@@ -282,7 +419,7 @@ fun WebScreen(vm: MainViewModel) {
         true
     }
 
-    fun play(v: FoundVideo, download: Boolean) {
+    fun act(v: FoundVideo, what: Int) {
         if (v.protectedDrm) {
             Toast.makeText(context, "🔒 This video is protected (DRM): it can only play on the website.", Toast.LENGTH_LONG).show()
             return
@@ -296,38 +433,67 @@ fun WebScreen(vm: MainViewModel) {
         )
         CookieManager.getInstance().getCookie(v.url)?.let { headers["Cookie"] = it }
         app.storage.setLinkHeaders(host, app.storage.linkHeaders(host) + headers.filterValues { it.isNotBlank() })
-        val name = title.ifBlank { pageUri.host ?: "Video" }.let { if (v.label.isNotBlank() && v.label != v.kind) "$it (${v.label})" else it }
-        if (download) LinkActions.download(context, v.url, name) else LinkActions.play(context, v.url, name)
+        val name = title.ifBlank { pageUri.host ?: "Video" }.substringBefore(" » ").let { if (v.height > 0) "$it (${v.height}p)" else it }
+        when (what) {
+            0 -> LinkActions.play(context, v.url, name)
+            1 -> LinkActions.downloadAndWatch(context, v.url, name)
+            else -> LinkActions.download(context, v.url, name)
+        }
     }
 
+    if (!unlocked) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("🔒 The Web tab is locked with the PIN", fontSize = 16.sp)
+                SmallButton("Enter the PIN", { PinGate.require(true) { unlocked = true } })
+            }
+        }
+        return
+    }
+
+    val hideAddress = WebStore.flag("hideAddress") && kids != "off" && !PinGate.unlocked(hasPin)
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
-            // ---- top bar
+            // ---- row 2: the web address
+            if (!hideAddress) {
+                Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    TvTextField(
+                        value = address, onValueChange = { address = it }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Search or type a web address") },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        trailingIcon = { PasteButton { go(it) } },
+                        onSubmit = { go(address) },
+                    )
+                }
+            }
+            // ---- row 3: the buttons
             Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 SmallButton("←", { if (showPage && canBack) webView.goBack() else showPage = false })
                 SmallButton("→", { if (webView.canGoForward()) { showPage = true; webView.goForward() } })
                 SmallButton("⟳", { if (showPage) webView.reload() })
-                TvTextField(
-                    value = address, onValueChange = { address = it }, singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Search or type a web address") },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    trailingIcon = { PasteButton { go(it) } },
-                    onSubmit = { go(address) },
-                )
+                val marked = bookmarks.any { it.url == WebState.pageUrl }
+                SmallButton(if (marked) "★" else "☆", {
+                    if (showPage && WebState.pageUrl.isNotBlank()) {
+                        if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { WebStore.toggleBookmark(title, WebState.pageUrl) }
+                        else WebStore.toggleBookmark(title, WebState.pageUrl)
+                    }
+                })
+                SmallButton("★ List", { showPage = false; listOpen = false })
+                Chip("🎬 ${found.size}", found.isNotEmpty(), { listOpen = !listOpen })
                 Text(
                     if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 $blocked",
                     fontSize = 13.sp, color = Color(0xFFBFF5D3),
                     modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(14.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
                 )
-                val marked = bookmarks.any { it.url == WebState.pageUrl }
-                SmallButton(if (marked) "★" else "☆", {
-                    if (showPage && WebState.pageUrl.isNotBlank()) WebStore.toggleBookmark(title, WebState.pageUrl)
+                if (kids != "off") Text("👶", fontSize = 15.sp)
+                SmallButton("⚙", {
+                    if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { settingsOpen = true } else settingsOpen = true
                 })
-                SmallButton("⋮", { menu = !menu })
             }
             note?.let {
                 Text(it, fontSize = 12.sp, color = Color(0xFFFFD08A),
@@ -338,75 +504,93 @@ fun WebScreen(vm: MainViewModel) {
                     factory = { webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
                     modifier = Modifier.fillMaxSize(),
                 )
-                if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = {
-                    pickTree.launch(Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload%2FNovaIPTV"))
-                })
+                if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { pickTree.launch(Uri.parse(NOVA_FOLDER)) },
+                    canEdit = { f -> if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f() })
             }
         }
 
-        // ---- videos found on the page
-        if (showPage && found.isNotEmpty() && !panelClosed && findVideos) {
+        // ---- 🎬 videos found on the page
+        if (listOpen) {
+            val list = found.sortedWith(compareBy<FoundVideo> { it.protectedDrm }.thenByDescending { it.height }.thenBy { it.kind != "HLS" })
             Column(
-                Modifier.align(Alignment.BottomEnd).padding(14.dp).widthIn(max = 460.dp)
-                    .background(Color(0xF00A0E14), RoundedCornerShape(14.dp))
-                    .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(14.dp))
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 720.dp)
+                    .background(Color(0xF815191F), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("▶ Play in Nova — ${found.size} video${if (found.size > 1) "s" else ""} found", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 260.dp).padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    itemsIndexed(found.toList()) { _, v ->
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FocusBox(onClick = { play(v, download = false) }, modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🎬 Videos found on this page (${list.size})", fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    SmallButton("✕", { listOpen = false })
+                }
+                Text("Best first · tap one → Play / Download & watch / Download", fontSize = 11.sp, color = Color(0xFFAAAAAA))
+                if (list.isEmpty()) Text("No video found yet — start the video on the page, then look again.", fontSize = 13.sp, color = Color(0xFFAAAAAA))
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    itemsIndexed(list) { _, v ->
+                        FocusBox(onClick = { if (v.protectedDrm) act(v, 0) else choose = v }, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    (if (v.protectedDrm) "🔒 " else "🎬 ") + (title.ifBlank { "Video" }) + "  ·  " + v.label +
-                                        (if (v.label != v.kind) " · ${v.kind}" else ""),
-                                    fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                    v.quality, fontWeight = FontWeight.Bold, fontSize = 12.sp,
+                                    color = if (v.height >= 1080) Color(0xFF00210B) else Color.White,
+                                    modifier = Modifier.background(
+                                        when { v.height >= 1080 -> Color(0xFF2EE66B); v.height >= 720 -> Color(0xFF3D6FB8); else -> Color(0xFF555555) },
+                                        RoundedCornerShape(5.dp),
+                                    ).padding(horizontal = 6.dp, vertical = 2.dp),
                                 )
+                                Text(
+                                    "  " + title.ifBlank { "Video" }.substringBefore(" » "),
+                                    fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                                )
+                                Text(if (v.protectedDrm) "only on the website" else v.info.ifBlank { v.kind }, fontSize = 11.sp, color = Color(0xFFAAAAAA))
                             }
-                            if (!v.protectedDrm && v.kind != "DASH") SmallButton("⬇", { play(v, download = true) })
                         }
                     }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Plays with Nova's player. 🔒 = protected: only on the website.", fontSize = 11.sp, color = Color(0xFF999999), modifier = Modifier.weight(1f))
-                    SmallButton("✕", { panelClosed = true })
                 }
             }
         }
 
-        // ---- menu
-        if (menu) {
-            Column(
-                Modifier.align(Alignment.TopEnd).padding(top = 52.dp, end = 8.dp).widthIn(max = 320.dp)
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                    .border(1.dp, Color(0xFF333333), RoundedCornerShape(12.dp)).padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                fun item(t: String, f: () -> Unit) = @Composable {
-                    FocusBox(onClick = { menu = false; f() }, modifier = Modifier.fillMaxWidth()) {
-                        Text(t, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+        // ---- the 3 choices
+        choose?.let { v ->
+            androidx.compose.ui.window.Dialog(onDismissRequest = { choose = null }) {
+                Column(
+                    Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                        .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(14.dp)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("[${v.quality}] " + title.ifBlank { "Video" }.substringBefore(" » "), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text((v.info.ifBlank { v.kind }) + " · from " + (Uri.parse(v.page).host ?: ""), fontSize = 11.sp, color = Color(0xFFAAAAAA))
+                    listOf("▶  Play now", "⬇▶  Download & watch", "⬇  Download only").forEachIndexed { i, label ->
+                        FocusBox(onClick = { choose = null; listOpen = false; act(v, i) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(label, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                        }
+                    }
+                    FocusBox(onClick = { choose = null }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Cancel", fontSize = 14.sp, color = Color(0xFFAAAAAA), modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
                     }
                 }
-                item("★ Bookmarks (start page)") { showPage = false }()
-                if (showPage && site().isNotEmpty()) item(
-                    if (site() in allow) "🛡 Turn blocking ON for ${site()}" else "🛡 Turn blocking OFF for ${site()}",
-                ) { WebStore.toggleAllowSite(site()); webView.reload() }()
-                if (showPage && found.isNotEmpty()) item("▶ Show the videos found") { panelClosed = false }()
-                item("⤓ Export bookmarks & settings now") {
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val w = runCatching { WebStore.export() }.getOrDefault("")
-                        main.post { Toast.makeText(context, if (w.isNotEmpty()) "Saved: $w" else "Could not save — choose the NovaIPTV folder once (⋮ → Import)", Toast.LENGTH_LONG).show() }
+            }
+        }
+
+        // ---- ⚙ browser settings
+        if (settingsOpen) {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { settingsOpen = false },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                Box(
+                    Modifier.fillMaxWidth(0.94f).widthIn(max = 760.dp).heightIn(max = 900.dp)
+                        .background(MaterialTheme.colorScheme.background, RoundedCornerShape(14.dp)).padding(6.dp),
+                ) {
+                    LazyColumn(Modifier.fillMaxWidth()) {
+                        item {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
+                                Text("⚙ Browser settings", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                                SmallButton("✕", { settingsOpen = false })
+                            }
+                        }
+                        item { WebSettingsContent(page = WebState.pageUrl.takeIf { showPage }, onPick = { settingsOpen = false; pickTree.launch(Uri.parse(NOVA_FOLDER)) }) }
                     }
-                }()
-                item("⤒ Import… (choose the NovaIPTV folder)") {
-                    pickTree.launch(Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload%2FNovaIPTV"))
-                }()
-                item("🗑 Clear history & cookies") {
-                    webView.clearHistory(); CookieManager.getInstance().removeAllCookies(null); webView.clearCache(true)
-                    Toast.makeText(context, "History and cookies cleared", Toast.LENGTH_SHORT).show()
-                }()
+                }
             }
         }
 
@@ -419,7 +603,9 @@ fun WebScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun StartPage(bookmarks: List<WebStore.Bookmark>, offer: Boolean, onOpen: (String) -> Unit, onRestore: () -> Unit) {
+private fun StartPage(
+    bookmarks: List<WebStore.Bookmark>, offer: Boolean, onOpen: (String) -> Unit, onRestore: () -> Unit, canEdit: (() -> Unit) -> Unit,
+) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (offer) {
             Column(
@@ -448,46 +634,109 @@ private fun StartPage(bookmarks: List<WebStore.Bookmark>, offer: Boolean, onOpen
                             Text(Uri.parse(b.url).host ?: b.url, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                         }
                     }
-                    SmallButton("▲", { WebStore.moveBookmark(b, -1) })
-                    SmallButton("▼", { WebStore.moveBookmark(b, 1) })
-                    SmallButton("✕", { WebStore.removeBookmark(b) }, warn = true)
+                    SmallButton("▲", { canEdit { WebStore.moveBookmark(b, -1) } })
+                    SmallButton("▼", { canEdit { WebStore.moveBookmark(b, 1) } })
+                    SmallButton("✕", { canEdit { WebStore.removeBookmark(b) } }, warn = true)
                 }
             }
         }
     }
 }
 
-/** Settings › Films & downloads › Web browser. */
 @Composable
-fun WebSettings() {
+private fun SwitchRow(label: String, key: String, flags: Map<String, Boolean>) {
+    val on = flags[key] ?: WebStore.FLAG_DEFAULTS[key] ?: false
+    FocusBox(onClick = { WebStore.setFlag(key, !on) }, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Text(if (on) "● On" else "○ Off", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                color = if (on) Color(0xFF2EE66B) else Color(0xFF999999))
+        }
+    }
+}
+
+@Composable
+private fun SectionTitleWeb(t: String) =
+    Text(t, color = Color(0xFF8AB4F8), fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp, start = 4.dp))
+
+/** All browser settings (⚙ in the Web tab and Settings › Films & downloads › Web browser). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
     val adLevel by WebStore.adLevel.collectAsStateWithLifecycle()
+    val kids by WebStore.kidsMode.collectAsStateWithLifecycle()
+    val flags by WebStore.flags.collectAsStateWithLifecycle()
     val findVideos by WebStore.findVideos.collectAsStateWithLifecycle()
     val start by WebStore.startPage.collectAsStateWithLifecycle()
     val allow by WebStore.allowSites.collectAsStateWithLifecycle()
-    val bookmarks by WebStore.bookmarks.collectAsStateWithLifecycle()
     val last by WebStore.lastExport.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    SettingsCard("Web browser", summary = "ads: $adLevel · ${bookmarks.size} bookmarks") {
-        Text("Ad blocking", fontWeight = FontWeight.Medium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("strong" to "Strong", "normal" to "Normal", "off" to "Off").forEach { (k, l) -> Chip(l, adLevel == k, { WebStore.setAdLevel(k) }) }
+    val nf = remember { java.text.NumberFormat.getIntegerInstance() }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SectionTitleWeb("ADS & POP-UPS")
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("off" to "Off", "normal" to "Normal", "strong" to "Strong", "maximum" to "Maximum").forEach { (k, l) ->
+                Chip(l, adLevel == k, { WebStore.setAdLevel(k); AdBlock.ensure(k, kids) })
+            }
         }
         Text(
-            "Strong = ad & tracker lists (${java.text.NumberFormat.getIntegerInstance().format(AdBlock.listSize)} sites) + pop-ups, redirects " +
-                "and “open app” jumps blocked. Normal = the lists and pop-ups only. Lists update weekly.",
+            when (adLevel) {
+                "maximum" -> "Maximum = ${nf.format(AdBlock.listSize + AdBlock.maxSize)} ad / tracker / pop-up sites + page-ad hiding + scripts that open windows or cover the page stopped."
+                "strong" -> "Strong = ${nf.format(AdBlock.listSize)} ad & tracker sites + page-ad hiding."
+                "normal" -> "Normal = ${nf.format(AdBlock.listSize)} ad & tracker sites."
+                else -> "Off = no ad blocking (the switches below still apply)."
+            } + " Lists update weekly. No browser can remove every ad: some sites serve ads from their own address.",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text("Find videos on pages", fontWeight = FontWeight.Medium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("On — show “Play in Nova”", findVideos, { WebStore.setFindVideos(true) })
-            Chip("Off", !findVideos, { WebStore.setFindVideos(false) })
+        SwitchRow("Block pop-ups, new tabs & overlays", "popups", flags)
+        SwitchRow("Block redirects to other sites", "redirects", flags)
+        SwitchRow("Block “open another app” (intent, Telegram, Play Store…)", "appJumps", flags)
+        SwitchRow("Block downloads started by the site (files, APKs)", "siteDownloads", flags)
+        SwitchRow("Show a short message when something is blocked", "blockMsg", flags)
+
+        SectionTitleWeb("👶 KIDS PROTECTION")
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("off" to "Off", "adult" to "Block adult & gambling sites", "bookmarks" to "Only my bookmarks").forEach { (k, l) ->
+                Chip(l, kids == k, { WebStore.setKidsMode(k); AdBlock.ensure(adLevel, k) })
+            }
         }
-        Text("Start page", fontWeight = FontWeight.Medium)
+        Text(
+            "Block adult & gambling = ${if (AdBlock.adultSize > 0) nf.format(AdBlock.adultSize) else "≈ 100 000"} adult / casino sites + adult words in addresses. " +
+                "Only my bookmarks = children can open only the sites you saved. With kids protection on, pop-ups, other apps, site downloads, camera and location are always refused.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SwitchRow("🔒 PIN to open the Web tab", "pinOpen", flags)
+        SwitchRow("🔒 PIN to change these settings / bookmarks", "pinSettings", flags)
+        SwitchRow("Hide the address bar for children (bookmarks only)", "hideAddress", flags)
+
+        SectionTitleWeb("PRIVACY & SAFETY")
+        SwitchRow("Safe browsing (warning on dangerous sites)", "safeBrowsing", flags)
+        SwitchRow("Camera / microphone / location — always refuse", "denyPerms", flags)
+        SwitchRow("Cookies", "cookies", flags)
+        SwitchRow("Private mode (no history or cookies kept)", "privateMode", flags)
+        SwitchRow("JavaScript (off = safest, many video players stop)", "javascript", flags)
+        SwitchRow("Block images (faster)", "blockImages", flags)
+
+        SectionTitleWeb("PAGE & VIDEOS")
+        FocusBox(onClick = { WebStore.setFindVideos(!findVideos) }, modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text("Find videos on pages (🎬 list)", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text(if (findVideos) "● On" else "○ Off", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (findVideos) Color(0xFF2EE66B) else Color(0xFF999999))
+            }
+        }
+        SwitchRow("Look like a normal browser (sites that refuse “app browsers”)", "normalBrowser", flags)
+        SwitchRow("Desktop site", "desktop", flags)
+        SwitchRow("Dark pages", "dark", flags)
+        Text("Start page", fontWeight = FontWeight.Medium, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("bookmarks" to "Bookmarks", "last" to "Last page", "search" to "Search").forEach { (k, l) -> Chip(l, start == k, { WebStore.setStartPage(k) }) }
         }
-        Text("Sites where blocking is off", fontWeight = FontWeight.Medium)
-        if (allow.isEmpty()) Text("none · add one from ⋮ on a page that doesn't work", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Sites where blocking is off", fontWeight = FontWeight.Medium, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+        page?.let { p ->
+            val s = AdBlock.siteOf(Uri.parse(p).host)
+            if (s.isNotBlank()) SmallButton(if (s in allow) "🛡 Turn blocking ON for $s" else "🛡 Turn blocking OFF for $s", { WebStore.toggleAllowSite(s); WebState.webView?.reload() })
+        }
+        if (allow.isEmpty()) Text("none", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         allow.sorted().forEach { s ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(s, fontSize = 13.sp, modifier = Modifier.weight(1f))
@@ -498,19 +747,31 @@ fun WebSettings() {
             "Bookmarks and these settings are saved automatically in Download/NovaIPTV/Browser/browser-latest.novaweb" +
                 (if (last > 0) " (last " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(last)) + ")" else "") +
                 " — a new installation takes them back. History, cookies and passwords are never saved there.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.primary,
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 6.dp),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             SmallButton("⤓ Export now", {
                 CoroutineScope(Dispatchers.IO).launch {
                     val w = runCatching { WebStore.export() }.getOrDefault("")
-                    Handler(Looper.getMainLooper()).post { Toast.makeText(context, if (w.isNotEmpty()) "Saved: $w" else "Could not save", Toast.LENGTH_LONG).show() }
+                    Handler(Looper.getMainLooper()).post { Toast.makeText(context, if (w.isNotEmpty()) "Saved: $w" else "Could not save — use Import once to choose the NovaIPTV folder", Toast.LENGTH_LONG).show() }
                 }
             })
-            SmallButton("🗑 Clear history & cookies", {
+            if (onPick != null) SmallButton("⤒ Import (choose the NovaIPTV folder)", onPick)
+            SmallButton("🗑 History & cookies", {
                 WebState.webView?.clearHistory(); CookieManager.getInstance().removeAllCookies(null); WebState.webView?.clearCache(true)
                 Toast.makeText(context, "History and cookies cleared", Toast.LENGTH_SHORT).show()
             })
         }
+    }
+}
+
+/** Settings › Films & downloads › Web browser. */
+@Composable
+fun WebSettings() {
+    val adLevel by WebStore.adLevel.collectAsStateWithLifecycle()
+    val kids by WebStore.kidsMode.collectAsStateWithLifecycle()
+    val bookmarks by WebStore.bookmarks.collectAsStateWithLifecycle()
+    SettingsCard("Web browser", summary = "ads: $adLevel · kids: $kids · ${bookmarks.size} bookmarks") {
+        WebSettingsContent()
     }
 }

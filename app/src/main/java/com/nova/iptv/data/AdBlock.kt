@@ -37,56 +37,99 @@ object AdBlock {
     )
 
     private val WS = Regex("\\s+")
+    /** Extra lists: "max" (Maximum level) and "adult" (Kids protection) — hagezi DNS lists, domain per line. */
+    private const val MAX_URL = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/pro.txt"
+    private val ADULT_URLS = listOf(
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/nsfw.txt",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/gambling.txt",
+    )
+
     @Volatile private var hosts: Set<String> = BUILT_IN
+    @Volatile private var maxHosts: Set<String> = emptySet()
+    @Volatile private var adultHosts: Set<String> = emptySet()
     @Volatile var listSize = BUILT_IN.size; private set
+    @Volatile var maxSize = 0; private set
+    @Volatile var adultSize = 0; private set
     @Volatile var updatedAt = 0L; private set
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var started = false
+    private lateinit var dir: File
+    private lateinit var client: OkHttpClient
+    private var maxLoading = false
+    private var adultLoading = false
+
+    /** Adult / gambling words in a web address (Kids protection). */
+    private val ADULT_WORDS = Regex(
+        """(?i)(porn|xxx|xvideo|xnxx|xhamster|redtube|youporn|hentai|nsfw|onlyfans|camgirl|livejasmin|chaturbate|stripchat|""" +
+            """brazzers|erotic|nude|naked|sex|escort|milf|casino|1xbet|betting|poker|roulette)""",
+    )
 
     fun init(context: Context, http: OkHttpClient) {
         if (started) return
         started = true
-        val file = File(context.filesDir, "adblock-hosts.txt")
+        dir = context.filesDir
+        client = http
+        val file = File(dir, "adblock-hosts.txt")
         scope.launch {
-            if (file.exists()) load(file)
-            if (!file.exists() || System.currentTimeMillis() - file.lastModified() > WEEK) update(http, file)
+            if (file.exists()) hosts = load(listOf(file), BUILT_IN).also { listSize = it.size; updatedAt = file.lastModified() }
+            if (!file.exists() || System.currentTimeMillis() - file.lastModified() > WEEK) {
+                if (download(LIST_URL, file)) hosts = load(listOf(file), BUILT_IN).also { listSize = it.size; updatedAt = file.lastModified() }
+            }
         }
     }
 
-    private fun load(file: File) {
-        runCatching {
-            val set = HashSet<String>(140_000)
-            set.addAll(BUILT_IN)
-            file.forEachLine { line ->
-                val l = line.trim()
-                if (l.isEmpty() || l.startsWith("#")) return@forEachLine
-                val parts = l.split(WS)
-                val h = (if (parts.size >= 2) parts[1] else parts[0]).lowercase()
-                if (h.contains('.') && h != "localhost" && h != "0.0.0.0") set += h
+    /** Loads (and updates weekly) the extra lists the settings need: Maximum level, Kids protection. */
+    fun ensure(level: String, kids: String) {
+        if (!::dir.isInitialized) return
+        if (level == "maximum" && !maxLoading) {
+            maxLoading = true
+            scope.launch {
+                val f = File(dir, "adblock-max.txt")
+                if (!f.exists() || System.currentTimeMillis() - f.lastModified() > WEEK) download(MAX_URL, f)
+                if (f.exists()) maxHosts = load(listOf(f), emptySet()).also { maxSize = it.size }
             }
-            hosts = set
-            listSize = set.size
-            updatedAt = file.lastModified()
-            Log.i("NovaTest", "ADBLOCK list: ${set.size} domains")
+        }
+        if (kids != "off" && !adultLoading) {
+            adultLoading = true
+            scope.launch {
+                val files = ADULT_URLS.mapIndexed { i, u ->
+                    File(dir, "adult-$i.txt").also { f -> if (!f.exists() || System.currentTimeMillis() - f.lastModified() > WEEK) download(u, f) }
+                }.filter { it.exists() }
+                adultHosts = load(files, emptySet()).also { adultSize = it.size }
+            }
         }
     }
 
-    private fun update(http: OkHttpClient, file: File) {
-        runCatching {
-            http.newCall(Request.Builder().url(LIST_URL).build()).execute().use { r ->
-                if (!r.isSuccessful) return
-                val tmp = File(file.parentFile, file.name + ".tmp")
-                r.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
-                if (tmp.length() > 100_000) { tmp.renameTo(file); load(file) } else tmp.delete()
+    private fun load(files: List<File>, base: Set<String>): Set<String> {
+        val set = HashSet<String>(200_000)
+        set.addAll(base)
+        files.forEach { file ->
+            runCatching {
+                file.forEachLine { line ->
+                    val l = line.trim()
+                    if (l.isEmpty() || l.startsWith("#") || l.startsWith("!")) return@forEachLine
+                    val parts = l.split(WS)
+                    val h = (if (parts.size >= 2) parts[1] else parts[0]).lowercase().trimStart('*', '.')
+                    if (h.contains('.') && h != "localhost" && h != "0.0.0.0") set += h
+                }
             }
-        }.onFailure { Log.i("NovaTest", "ADBLOCK update failed: $it") }
+        }
+        Log.i("NovaTest", "ADBLOCK loaded ${files.joinToString { it.name }}: ${set.size} domains")
+        return set
     }
 
-    /** True for an ad / tracker domain (or one of its sub-domains). */
-    fun isAd(host: String?): Boolean {
-        if (host.isNullOrBlank()) return false
+    private fun download(url: String, file: File): Boolean = runCatching {
+        client.newCall(Request.Builder().url(url).build()).execute().use { r ->
+            if (!r.isSuccessful) return@use false
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            r.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+            if (tmp.length() > 20_000) { tmp.renameTo(file); true } else { tmp.delete(); false }
+        }
+    }.getOrElse { Log.i("NovaTest", "ADBLOCK update failed: $it"); false }
+
+    private fun inSet(host: String?, set: Set<String>): Boolean {
+        if (host.isNullOrBlank() || set.isEmpty()) return false
         var h = host.lowercase()
-        val set = hosts
         while (true) {
             if (h in set) return true
             val dot = h.indexOf('.')
@@ -95,6 +138,13 @@ object AdBlock {
         }
     }
 
+    /** An ad / tracker domain for this level ("normal"/"strong": the main list; "maximum": + the big list). */
+    fun isAd(host: String?, level: String): Boolean =
+        level != "off" && (inSet(host, hosts) || (level == "maximum" && inSet(host, maxHosts)))
+
+    /** Kids protection: an adult or gambling site (list or words in the address). */
+    fun isAdult(host: String?, url: String): Boolean = inSet(host, adultHosts) || ADULT_WORDS.containsMatchIn(url)
+
     /** "site.example.co.uk" → "example.co.uk" (good enough to tell "another site" from "the same site"). */
     fun siteOf(host: String?): String {
         val parts = host.orEmpty().lowercase().split('.').filter { it.isNotEmpty() }
@@ -102,6 +152,17 @@ object AdBlock {
         val twoLevel = parts[parts.size - 2].length <= 3 && parts.last().length == 2
         return parts.takeLast(if (twoLevel) 3 else 2).joinToString(".")
     }
+
+    /**
+     * Maximum level: stops the tricks film sites use — window.open replaced, transparent click-catchers and
+     * full-screen ad layers removed (checked again every 2 s).
+     */
+    const val MAX_JS = "(function(){try{window.open=function(){return null};}catch(e){}" +
+        "function clean(){var w=innerWidth,h=innerHeight;document.querySelectorAll('body *').forEach(function(e){" +
+        "var s=getComputedStyle(e);if((s.position=='fixed'||s.position=='absolute')&&parseInt(s.zIndex||0)>999){" +
+        "var r=e.getBoundingClientRect();if(r.width>w*0.6&&r.height>h*0.6&&!e.querySelector('video')&&e.tagName!='VIDEO'){" +
+        "var t=(e.innerText||'').trim();if(t.length<40||e.tagName=='A'||e.tagName=='IFRAME'){e.remove();}}}});}" +
+        "clean();setInterval(clean,2000);})();"
 
     /** Hides the usual ad boxes left on a page (applied after the page loads). */
     const val HIDE_CSS = "ins.adsbygoogle,[id^='google_ads'],[id^='div-gpt-ad'],[class*='adsbox'],[class*=' ad-'],[class^='ad-']," +

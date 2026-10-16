@@ -36,8 +36,22 @@ object WebStore {
     private var exportJob: Job? = null
 
     val bookmarks = MutableStateFlow<List<Bookmark>>(emptyList())
-    /** "strong", "normal" or "off". */
-    val adLevel = MutableStateFlow("strong")
+    /** "maximum", "strong", "normal" or "off". */
+    val adLevel = MutableStateFlow("maximum")
+    /** Kids protection: "off", "adult" (adult & gambling sites blocked) or "bookmarks" (only the saved sites). */
+    val kidsMode = MutableStateFlow("adult")
+
+    /** On / off switches (see [FLAG_DEFAULTS]). */
+    val flags = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val FLAG_DEFAULTS = linkedMapOf(
+        "popups" to true, "redirects" to true, "appJumps" to true, "siteDownloads" to true, "blockMsg" to true,
+        "safeBrowsing" to true, "denyPerms" to true, "cookies" to true, "privateMode" to false, "javascript" to true,
+        "blockImages" to false, "pinOpen" to false, "pinSettings" to true, "hideAddress" to false,
+        "normalBrowser" to true, "desktop" to false, "dark" to false,
+    )
+    fun flag(k: String): Boolean = flags.value[k] ?: FLAG_DEFAULTS[k] ?: false
+    fun setFlag(k: String, v: Boolean) { flags.value = flags.value + (k to v); save() }
+    fun setKidsMode(v: String) { kidsMode.value = v; save() }
     val findVideos = MutableStateFlow(true)
     /** "bookmarks", "last" or "search". */
     val startPage = MutableStateFlow("bookmarks")
@@ -71,7 +85,9 @@ object WebStore {
             val a = JSONArray(prefs.getString("bookmarks", "[]"))
             (0 until a.length()).map { a.getJSONObject(it).let { o -> Bookmark(o.optString("t"), o.optString("u")) } }
         }.getOrDefault(emptyList())
-        adLevel.value = prefs.getString("ad_level", "strong") ?: "strong"
+        adLevel.value = prefs.getString("ad_level", "maximum") ?: "maximum"
+        kidsMode.value = prefs.getString("kids_mode", "adult") ?: "adult"
+        flags.value = FLAG_DEFAULTS.keys.associateWith { prefs.getBoolean("f_$it", FLAG_DEFAULTS[it]!!) }
         findVideos.value = prefs.getBoolean("find_videos", true)
         startPage.value = prefs.getString("start_page", "bookmarks") ?: "bookmarks"
         allowSites.value = prefs.getStringSet("allow_sites", emptySet())?.toSet() ?: emptySet()
@@ -84,6 +100,8 @@ object WebStore {
             .putBoolean("find_videos", findVideos.value)
             .putString("start_page", startPage.value)
             .putStringSet("allow_sites", allowSites.value)
+            .putString("kids_mode", kidsMode.value)
+            .apply { flags.value.forEach { (k, v) -> putBoolean("f_$k", v) } }
             .putBoolean("has_data", true)
             .apply()
         exportSoon()
@@ -121,6 +139,8 @@ object WebStore {
         .put("findVideos", findVideos.value)
         .put("startPage", startPage.value)
         .put("allowSites", JSONArray(allowSites.value.toList()))
+        .put("kidsMode", kidsMode.value)
+        .put("flags", JSONObject(flags.value as Map<*, *>))
         .toString(2)
 
     /** Applies an exported file (replaces bookmarks and settings). */
@@ -130,7 +150,9 @@ object WebStore {
         val a = o.optJSONArray("bookmarks") ?: JSONArray()
         bookmarks.value = (0 until a.length()).map { a.getJSONObject(it).let { b -> Bookmark(b.optString("t"), b.optString("u")) } }
             .filter { it.url.isNotBlank() }
-        adLevel.value = o.optString("adLevel", "strong")
+        adLevel.value = o.optString("adLevel", "maximum")
+        kidsMode.value = o.optString("kidsMode", "adult")
+        o.optJSONObject("flags")?.let { f -> flags.value = FLAG_DEFAULTS.keys.associateWith { f.optBoolean(it, FLAG_DEFAULTS[it]!!) } }
         findVideos.value = o.optBoolean("findVideos", true)
         startPage.value = o.optString("startPage", "bookmarks")
         val s = o.optJSONArray("allowSites") ?: JSONArray()

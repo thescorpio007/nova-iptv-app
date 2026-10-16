@@ -156,7 +156,7 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
             // Phones: the three zones share the first row, everything else on the second row.
             Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Tab.entries.filter { it.zone }.forEachIndexed { i, t ->
+                    Tab.entries.filter { it.top }.forEachIndexed { i, t ->
                         val ownTab = remember(t) { FocusRequester() }
                         ZoneButton(
                             t, t == tab, { vm.setTab(t) },
@@ -172,7 +172,7 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (!tab.zone) SmallTab("←", false) { vm.setTab(Tab.LIVE) }
-                    Tab.entries.filter { !it.zone }.forEach { t -> SmallTab(if (t == Tab.LINK) "🔗 Link" else t.label, t == tab) { vm.setTab(t) } }
+                    Tab.entries.filter { !it.top }.forEach { t -> SmallTab(if (t == Tab.LINK) "🔗 Link" else t.label, t == tab) { vm.setTab(t) } }
                     Spacer(Modifier.weight(1f))
                     if (tab.zone) {
                         EditButton(edit, big = false) { if (edit) vm.setEditMode(false) else PinGate.require(vm.appStorage.hasPin) { vm.setEditMode(true) } }
@@ -205,12 +205,12 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                     itemsIndexed(Tab.entries.toList()) { i, t ->
                         val ownTab = remember(t) { FocusRequester() }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (i == 3) Spacer(Modifier.width(16.dp)) // gap between the 3 zones and the rest
+                            if (i == 4) Spacer(Modifier.width(16.dp)) // gap between Live TV · Films · Series · Web and the rest
                             Chip(
                                 t.label, t == tab, { vm.setTab(t) },
                                 modifier = (if (i == 0) Modifier.focusRequester(firstTab) else Modifier)
                                     .focusRequester(if (t == tab) current else ownTab),
-                                big = t.zone,
+                                big = t.top,
                             )
                         }
                     }
@@ -234,7 +234,7 @@ private fun ZoneButton(t: Tab, selected: Boolean, onClick: () -> Unit, modifier:
             modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
             textAlign = TextAlign.Center,
             fontWeight = FontWeight.Bold,
-            fontSize = 15.sp,
+            fontSize = 14.sp,
             maxLines = 1,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
