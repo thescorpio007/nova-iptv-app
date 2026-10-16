@@ -75,8 +75,65 @@ import java.io.ByteArrayInputStream
 data class FoundVideo(
     val url: String, val kind: String, val page: String,
     val height: Int = 0, val info: String = "", val protectedDrm: Boolean = false,
+    /** The page's title and when the video was grabbed. */
+    val title: String = "", val at: Long = 0L,
 ) {
     val quality: String get() = when { protectedDrm -> "🔒"; height > 0 -> "${height}p"; else -> "?" }
+    val key: String get() = url.substringBefore('?')
+}
+
+/** 🎬 Grabbed videos: kept (on the device) until you remove them or press Clear. */
+private object Grabbed {
+    val list = kotlinx.coroutines.flow.MutableStateFlow<List<FoundVideo>>(emptyList())
+    private var file: java.io.File? = null
+    private val io = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
+    fun init(context: android.content.Context) {
+        if (file != null) return
+        val f = java.io.File(context.filesDir, "web-grabbed.json")
+        file = f
+        list.value = runCatching {
+            val a = org.json.JSONArray(f.readText())
+            (0 until a.length()).map { i ->
+                a.getJSONObject(i).let { o ->
+                    FoundVideo(o.getString("u"), o.optString("k"), o.optString("p"), o.optInt("h"), o.optString("i"),
+                        o.optBoolean("d"), o.optString("t"), o.optLong("a"))
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun save() {
+        val f = file ?: return
+        val snap = list.value
+        io.launch {
+            runCatching {
+                val a = org.json.JSONArray()
+                snap.forEach { v ->
+                    a.put(org.json.JSONObject().put("u", v.url).put("k", v.kind).put("p", v.page).put("h", v.height).put("i", v.info)
+                        .put("d", v.protectedDrm).put("t", v.title).put("a", v.at))
+                }
+                val tmp = java.io.File(f.parentFile, f.name + ".tmp"); tmp.writeText(a.toString()); tmp.renameTo(f)
+            }
+        }
+    }
+
+    /** The videos found on [page] during this visit replace that visit's entries (newest first; same address kept once). */
+    fun merge(page: String, visitStart: Long, current: List<FoundVideo>, pageTitle: String) {
+        val now = current.map { c -> c.copy(title = c.title.ifBlank { pageTitle }, at = if (c.at > 0) c.at else System.currentTimeMillis()) }
+        val keys = now.map { it.key }.toSet()
+        val rest = list.value.filterNot { (it.page == page && it.at >= visitStart) || it.key in keys }
+        val merged = (now + rest).sortedByDescending { it.at }
+        if (merged != list.value) { list.value = merged; save() }
+    }
+    fun remove(v: FoundVideo) { list.value = list.value.filterNot { it.key == v.key }; save() }
+    fun clear(olderThanToday: Boolean) {
+        val day = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        list.value = if (olderThanToday) list.value.filter { it.at >= day } else emptyList()
+        save()
+    }
 }
 
 /** The web page being shown (kept while you move to other tabs). */
@@ -103,6 +160,8 @@ private object WebState {
     @Volatile var tapAt: Long = 0L
     /** When you last opened an address yourself (Go, bookmark, Open with): its redirects are allowed for 15 s. */
     @Volatile var userNavAt: Long = 0L
+    /** When the page being shown was opened (its videos of this visit are "This page"). */
+    @Volatile var visitStart: Long = 0L
     /** Tabs opened by ▶ Smart play (a clean video player), and the ones whose video was already offered. */
     val playerTabs = HashSet<WebView>()
     val offered = HashSet<WebView>()
@@ -232,6 +291,9 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     val removedBoxes by WebState.removed.collectAsStateWithLifecycle()
     var note by remember { mutableStateOf<String?>(null) }
     val found = remember { mutableStateListOf<FoundVideo>() }
+    remember { Grabbed.init(context); true }
+    val grabbed by Grabbed.list.collectAsStateWithLifecycle()
+    var clearAsk by remember { mutableStateOf(false) }
     /** Video addresses already seen on this page (read from the web engine's own threads). */
     val seen = remember { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
     var listOpen by remember { mutableStateOf(false) }
@@ -279,7 +341,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     info = v.info.ifBlank { old.info }, protectedDrm = old.protectedDrm || v.protectedDrm,
                 )
             }
-        } else if (found.size < 30) found += v
+        } else if (found.size < 30) found += v.copy(at = if (v.at > 0) v.at else System.currentTimeMillis())
     }
 
     /** Asks the website about a found video: qualities of an HLS list, length, size of a file. */
@@ -401,6 +463,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         address = u
         title = WebState.titles[wv].orEmpty()
         found.clear(); seen.clear(); blocked = 0; WebState.removed.value = 0
+        WebState.visitStart = System.currentTimeMillis()
         canBack = wv.canGoBack()
         showPage = u.isNotBlank()
         listOpen = false; tabsOpen = false
@@ -568,6 +631,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 if (newSite != AdBlock.siteOf(WebState.pageSite)) { blocked = 0; WebState.removed.value = 0 }
                 WebState.pageUrl = url
                 WebState.pageSite = Uri.parse(url).host.orEmpty()
+                WebState.visitStart = System.currentTimeMillis()
                 address = url
                 found.clear()
                 seen.clear()
@@ -688,6 +752,12 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         note = msg; main.postDelayed({ if (note == msg) note = null }, 5000)
         webView.reload()
     }
+    // Every video found is also kept in 🎬 Grabbed (with the page's title and the time).
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.snapshotFlow { found.toList() to title }.collect { (l, t) ->
+            if (l.isNotEmpty()) Grabbed.merge(WebState.pageUrl, WebState.visitStart, l, t.substringBefore(" » "))
+        }
+    }
     // ▶ Smart play: 2–3 s check, then ask (10 s → open the clean player) or open at once.
     LaunchedEffect(smart) {
         val c = smart ?: return@LaunchedEffect
@@ -733,7 +803,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         )
         CookieManager.getInstance().getCookie(v.url)?.let { headers["Cookie"] = it }
         app.storage.setLinkHeaders(host, app.storage.linkHeaders(host) + headers.filterValues { it.isNotBlank() })
-        val name = title.ifBlank { pageUri.host ?: "Video" }.substringBefore(" » ").let { if (v.height > 0) "$it (${v.height}p)" else it }
+        val name = v.title.ifBlank { title }.ifBlank { pageUri.host ?: "Video" }.substringBefore(" » ").let { if (v.height > 0) "$it (${v.height}p)" else it }
         when (what) {
             0 -> LinkActions.play(context, v.url, name)
             1 -> LinkActions.downloadAndWatch(context, v.url, name)
@@ -799,7 +869,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 })
                 SmallButton("★ List", { showPage = false; listOpen = false })
                 key(tabsVersion) { SmallButton("▢ ${WebState.tabs.size}", { tabsOpen = true }) }
-                Chip("🎬 ${found.size}", found.isNotEmpty(), { listOpen = !listOpen })
+                Chip("🎬 ${found.size}" + if (grabbed.size > found.size) " · ${grabbed.size}" else "", found.isNotEmpty(), { listOpen = !listOpen })
                 FocusBox(onClick = { shieldOpen = true }, modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
                     Text(
                         if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}" + if (site() in hideOff) " ◐" else "",
@@ -828,9 +898,38 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             }
         }
 
-        // ---- 🎬 videos found on the page
+        // ---- 🎬 grabbed videos: this page first, then earlier pages (kept until you clear them)
         if (listOpen) {
-            val list = found.sortedWith(compareBy<FoundVideo> { it.protectedDrm }.thenByDescending { it.height }.thenBy { it.kind != "HLS" })
+            val cur = found.sortedWith(compareBy<FoundVideo> { it.protectedDrm }.thenByDescending { it.height }.thenBy { it.kind != "HLS" })
+            val curKeys = cur.map { it.key }.toSet()
+            val earlier = grabbed.filter { it.key !in curKeys }.groupBy { it.page }
+            val df = remember { java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.getDefault()) }
+            @Composable
+            fun row(v: FoundVideo) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FocusBox(onClick = { if (v.protectedDrm) act(v, 0) else choose = v }, modifier = Modifier.weight(1f)) {
+                        Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                v.quality, fontWeight = FontWeight.Bold, fontSize = 12.sp,
+                                color = if (v.height >= 1080) Color(0xFF00210B) else Color.White,
+                                modifier = Modifier.background(
+                                    when { v.height >= 1080 -> Color(0xFF2EE66B); v.height >= 720 -> Color(0xFF3D6FB8); else -> Color(0xFF555555) },
+                                    RoundedCornerShape(5.dp),
+                                ).padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                            Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                                Text(v.title.ifBlank { title }.ifBlank { "Video" }.substringBefore(" » "), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    "🕒 " + (if (v.at > 0) df.format(java.util.Date(v.at)) else "now") + " · " +
+                                        (if (v.protectedDrm) "only on the website" else v.info.ifBlank { v.kind }),
+                                    fontSize = 11.sp, color = Color(0xFFAAAAAA), maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                    SmallButton("✕", { Grabbed.remove(v); found.removeAll { it.key == v.key } })
+                }
+            }
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 720.dp)
                     .background(Color(0xF815191F), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
@@ -839,30 +938,53 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("🎬 Videos found on this page (${list.size})", fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    Text("🎬 Grabbed videos (${cur.size + earlier.values.sumOf { it.size }})", fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    if (grabbed.isNotEmpty() || cur.isNotEmpty()) SmallButton("🗑 Clear all", { clearAsk = true })
                     SmallButton("✕", { listOpen = false })
                 }
-                Text("Best first · tap one → Play / Download & watch / Download", fontSize = 11.sp, color = Color(0xFFAAAAAA))
-                if (list.isEmpty()) Text("No video found yet — start the video on the page, then look again.", fontSize = 13.sp, color = Color(0xFFAAAAAA))
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    itemsIndexed(list) { _, v ->
-                        FocusBox(onClick = { if (v.protectedDrm) act(v, 0) else choose = v }, modifier = Modifier.fillMaxWidth()) {
-                            Row(Modifier.padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    v.quality, fontWeight = FontWeight.Bold, fontSize = 12.sp,
-                                    color = if (v.height >= 1080) Color(0xFF00210B) else Color.White,
-                                    modifier = Modifier.background(
-                                        when { v.height >= 1080 -> Color(0xFF2EE66B); v.height >= 720 -> Color(0xFF3D6FB8); else -> Color(0xFF555555) },
-                                        RoundedCornerShape(5.dp),
-                                    ).padding(horizontal = 6.dp, vertical = 2.dp),
-                                )
-                                Text(
-                                    "  " + title.ifBlank { "Video" }.substringBefore(" » "),
-                                    fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-                                )
-                                Text(if (v.protectedDrm) "only on the website" else v.info.ifBlank { v.kind }, fontSize = 11.sp, color = Color(0xFFAAAAAA))
+                Text("Kept until you clear them · newest first · tap one → Play / Download & watch / Download", fontSize = 11.sp, color = Color(0xFFAAAAAA))
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 380.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    item {
+                        Text("THIS PAGE" + (if (title.isNotBlank()) " · " + title.substringBefore(" » ") else ""), fontSize = 11.sp, color = Color(0xFF2EE66B),
+                            fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+                        if (cur.isEmpty()) Text("No video found yet on this page — start the video, then look again.", fontSize = 12.sp, color = Color(0xFFAAAAAA))
+                    }
+                    itemsIndexed(cur) { _, v -> row(v) }
+                    earlier.forEach { (page, vids) ->
+                        item {
+                            FocusBox(onClick = { listOpen = false; go(page) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                Text("EARLIER · " + vids.first().title.ifBlank { "Video" } + " · " + (Uri.parse(page).host ?: "") + "  ›",
+                                    fontSize = 11.sp, color = Color(0xFF2EE66B), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
                             }
                         }
+                        itemsIndexed(vids) { _, v -> row(v) }
+                    }
+                    if (earlier.isNotEmpty()) item {
+                        Text("⚠ Older links may have expired on the site — if one doesn't play, open its page again (tap the page name).",
+                            fontSize = 11.sp, color = Color(0xFFFFB74D), modifier = Modifier.padding(top = 6.dp))
+                    }
+                }
+            }
+        }
+        if (clearAsk) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { clearAsk = false }) {
+                Column(
+                    Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                        .border(2.dp, Color(0xFFFF8A80), RoundedCornerShape(14.dp)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("🗑 Clear all grabbed videos?", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("${grabbed.size} videos from ${grabbed.map { it.page }.distinct().size} pages. Downloaded files are not touched.",
+                        fontSize = 12.sp, color = Color(0xFFAAAAAA))
+                    FocusBox(onClick = { clearAsk = false; Grabbed.clear(false); found.clear() }, modifier = Modifier.fillMaxWidth().background(Color(0xFF3A1A1A), RoundedCornerShape(10.dp))) {
+                        Text("🗑  Clear all", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFF8A80), modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                    FocusBox(onClick = { clearAsk = false; Grabbed.clear(true) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Clear only older than today", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                    FocusBox(onClick = { clearAsk = false }, modifier = Modifier.fillMaxWidth()) {
+                        Text("✕  Cancel", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                     }
                 }
             }
@@ -876,7 +998,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                         .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(14.dp)).padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("[${v.quality}] " + title.ifBlank { "Video" }.substringBefore(" » "), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("[${v.quality}] " + v.title.ifBlank { title }.ifBlank { "Video" }.substringBefore(" » "), fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Text((v.info.ifBlank { v.kind }) + " · from " + (Uri.parse(v.page).host ?: ""), fontSize = 11.sp, color = Color(0xFFAAAAAA))
                     listOf("▶  Play now", "⬇▶  Download & watch", "⬇  Download only").forEachIndexed { i, label ->
                         FocusBox(onClick = { choose = null; listOpen = false; act(v, i) }, modifier = Modifier.fillMaxWidth()) {
