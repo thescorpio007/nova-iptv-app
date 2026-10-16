@@ -101,6 +101,8 @@ private object WebState {
     @Volatile var tapName: String = ""
     @Volatile var tapGroup: List<String> = emptyList()
     @Volatile var tapAt: Long = 0L
+    /** When you last opened an address yourself (Go, bookmark, Open with): its redirects are allowed for 15 s. */
+    @Volatile var userNavAt: Long = 0L
     /** Tabs opened by ▶ Smart play (a clean video player), and the ones whose video was already offered. */
     val playerTabs = HashSet<WebView>()
     val offered = HashSet<WebView>()
@@ -336,6 +338,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         }
         showPage = true
         address = url
+        WebState.userNavAt = System.currentTimeMillis()
         WebState.webView?.loadUrl(url)
     }
 
@@ -509,11 +512,18 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     showNote("🚫 Ad page blocked: ${u.host}")
                     return true
                 }
+                // An address you opened yourself may move to its new home (e.g. a site's new address): allowed for 15 s.
+                if (request.isForMainFrame && System.currentTimeMillis() - WebState.userNavAt < 15_000) {
+                    WebState.userNavAt = System.currentTimeMillis()
+                    return false
+                }
                 if (request.isForMainFrame && !request.hasGesture() && WebStore.flag("redirects") && level() != "off" &&
                     site().isNotEmpty() && AdBlock.siteOf(u.host) != site()
                 ) {
                     main.post { blocked++ }
-                    showNote("🚫 Redirect blocked: the page tried to send you to ${u.host}")
+                    // Always told (even with short messages off): otherwise the page just seems not to open.
+                    val msg = "🚫 Redirect to ${u.host} blocked — tap Go again to open it"
+                    main.post { note = msg; address = u.toString(); main.postDelayed({ if (note == msg) note = null }, 6000) }
                     return true
                 }
                 return false
