@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -103,7 +104,7 @@ private fun sizeText(b: Long): String = if (b >= 1L shl 30) "%.1f GB".format(b /
 /** 🌐 Web: a small browser with strong ad blocking, kids protection, and Nova's player for the page's videos. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun WebScreen(vm: MainViewModel) {
+fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) {
     val context = LocalContext.current
     val app = context.applicationContext as NovaApp
     val main = remember { Handler(Looper.getMainLooper()) }
@@ -244,6 +245,7 @@ fun WebScreen(vm: MainViewModel) {
             settings.displayZoomControls = false
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
+            setBackgroundColor(android.graphics.Color.WHITE)
             WebState.webView = this
         }
     }
@@ -408,7 +410,16 @@ fun WebScreen(vm: MainViewModel) {
     BackHandler(enabled = fullView != null) { fullCallback?.onCustomViewHidden(); fullView = null }
     BackHandler(enabled = fullView == null && (listOpen || settingsOpen)) { listOpen = false; settingsOpen = false }
     BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && showPage && canBack) { webView.goBack() }
-    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && showPage && !canBack) { showPage = false }
+    // At the first page / the bookmarks: Back twice (within 2 s) leaves the Web tab.
+    var lastBack by remember { mutableStateOf(0L) }
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !(showPage && canBack)) {
+        val now = System.currentTimeMillis()
+        if (now - lastBack < 2000) onLeave()
+        else { lastBack = now; Toast.makeText(context, "Press Back again to leave Web", Toast.LENGTH_SHORT).show() }
+    }
+    // An address sent to the Web tab (Open with, Share, welcome screen).
+    val pending by WebStore.pendingUrl.collectAsStateWithLifecycle()
+    LaunchedEffect(pending) { pending?.let { WebStore.pendingUrl.value = null; go(it) } }
 
     // First visit: start page.
     remember {
@@ -473,7 +484,7 @@ fun WebScreen(vm: MainViewModel) {
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                SmallButton("←", { if (showPage && canBack) webView.goBack() else showPage = false })
+                SmallButton("←", { if (showPage && canBack) webView.goBack() else if (showPage) showPage = false })
                 SmallButton("→", { if (webView.canGoForward()) { showPage = true; webView.goForward() } })
                 SmallButton("⟳", { if (showPage) webView.reload() })
                 val marked = bookmarks.any { it.url == WebState.pageUrl }
@@ -499,10 +510,11 @@ fun WebScreen(vm: MainViewModel) {
                 Text(it, fontSize = 12.sp, color = Color(0xFFFFD08A),
                     modifier = Modifier.fillMaxWidth().background(Color(0xFF2A2112)).padding(horizontal = 12.dp, vertical = 4.dp))
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                AndroidView(
+            Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+                // The web page only takes its own space (it is not shown at all on the bookmarks page).
+                if (showPage) AndroidView(
                     factory = { webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().clipToBounds(),
                 )
                 if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { pickTree.launch(Uri.parse(NOVA_FOLDER)) },
                     canEdit = { f -> if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f() })
@@ -718,6 +730,23 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
         SwitchRow("Block images (faster)", "blockImages", flags)
 
         SectionTitleWeb("PAGE & VIDEOS")
+        SmallButton("🌐 Make Nova my default browser", {
+            val opened = runCatching {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val rm = context.getSystemService(android.app.role.RoleManager::class.java)
+                    if (rm != null && rm.isRoleAvailable(android.app.role.RoleManager.ROLE_BROWSER) && !rm.isRoleHeld(android.app.role.RoleManager.ROLE_BROWSER)) {
+                        context.startActivity(rm.createRequestRoleIntent(android.app.role.RoleManager.ROLE_BROWSER).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); true
+                    } else if (rm != null && rm.isRoleHeld(android.app.role.RoleManager.ROLE_BROWSER)) {
+                        Toast.makeText(context, "Nova is already your default browser", Toast.LENGTH_SHORT).show(); true
+                    } else false
+                } else false
+            }.getOrDefault(false)
+            if (!opened) runCatching {
+                context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.onFailure { Toast.makeText(context, "Open Android Settings › Apps › Default apps › Browser and choose Nova", Toast.LENGTH_LONG).show() }
+        })
+        Text("Nova also appears in “Open with” and Share for every web link: pages open here, video links play in Nova.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         FocusBox(onClick = { WebStore.setFindVideos(!findVideos) }, modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                 Text("Find videos on pages (🎬 list)", fontSize = 13.sp, modifier = Modifier.weight(1f))

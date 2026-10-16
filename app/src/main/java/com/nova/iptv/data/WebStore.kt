@@ -59,6 +59,8 @@ object WebStore {
     val allowSites = MutableStateFlow<Set<String>>(emptySet())
     /** A browser file from an earlier installation could be restored (ask the person once). */
     val restoreOffer = MutableStateFlow(false)
+    /** A web address to open in the Web tab (from "Open with", Share or the welcome screen). */
+    val pendingUrl = MutableStateFlow<String?>(null)
     val lastExport = MutableStateFlow(0L)
 
     var lastUrl: String

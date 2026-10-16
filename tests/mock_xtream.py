@@ -183,6 +183,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
             return self.send_file(f, "application/octet-stream")
 
+        if path == "/web/test.html":
+            # A small web page with a video, for the Web tab test.
+            host = "http://" + (self.headers.get("Host") or "10.0.2.2:8080")
+            body = ("<html><head><title>Nova Web Test</title><meta name='viewport' content='width=device-width'></head>"
+                    "<body style='font-family:sans-serif;background:#fff'><h1>Nova Web Test page</h1>"
+                    "<p>Hello from the test server.</p>"
+                    "<video controls autoplay muted width='320' src='" + host + "/movie/alice/secret/301.mp4'></video>"
+                    "</body></html>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if path == "/playlist.m3u":
             # A plain M3U playlist (no Xtream account behind it), as other apps would hand it to Nova.
             host = "http://" + (self.headers.get("Host") or "10.0.2.2:8080")

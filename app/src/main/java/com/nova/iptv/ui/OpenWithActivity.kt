@@ -57,6 +57,11 @@ class OpenWithActivity : ComponentActivity() {
             finish()
             return
         }
+        // A web page (not a video or a playlist): open it in Nova's Web tab.
+        if (isWebPage(uri.toString(), intent?.type)) {
+            openWeb(uri.toString())
+            return
+        }
         val type = intent?.type
         lifecycleScope.launch {
             val result = runCatching { withContext(Dispatchers.IO) { open(uri, type) } }
@@ -100,6 +105,10 @@ class OpenWithActivity : ComponentActivity() {
                 Toast.makeText(this, "No video link found in what was shared", Toast.LENGTH_LONG).show()
             }
             finish()
+            return
+        }
+        if (isWebPage(link, null)) {
+            openWeb(link)
             return
         }
         val choices = arrayOf("▶  Play now", "⬇▶  Download & watch", "⬇  Download only", "Cancel")
@@ -202,7 +211,33 @@ class OpenWithActivity : ComponentActivity() {
         return out.toByteArray()
     }
 
+    private fun openWeb(url: String) {
+        startActivity(
+            Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_OPEN_WEB).setData(Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        )
+        finish()
+    }
+
     companion object {
+        private val MEDIA_EXT = Regex("""\.(mp4|mkv|avi|mov|webm|m4v|wmv|flv|mpg|mpeg|ts|m3u|m3u8|mpd|mp3|aac|m4a|flac)$""", RegexOption.IGNORE_CASE)
+
+        private val XTREAM_PATH = Regex("""/(live|movie|series)/[^/]+/[^/]+/\d+""")
+
+        /** An http(s) link that is not a video, audio or playlist file: a web page. */
+        fun isWebPage(url: String, type: String?): Boolean {
+            if (!url.startsWith("http", ignoreCase = true)) return false
+            val t = type.orEmpty().lowercase()
+            if (t.startsWith("video/") || t.contains("mpegurl") || t.startsWith("audio/") || t.contains("mp2t") || t.contains("matroska")) return false
+            val u = Uri.parse(url)
+            val path = u.path.orEmpty()
+            if (MEDIA_EXT.containsMatchIn(path)) return false
+            if (url.contains("get.php", ignoreCase = true) || url.contains("type=m3u", ignoreCase = true)) return false
+            // Xtream stream addresses: /live/…, /movie/…, /series/… with numbers at the end.
+            if (XTREAM_PATH.containsMatchIn(path)) return false
+            return true
+        }
+
         /** The title to show (Web tab: the page's title). */
         const val EXTRA_NAME = "nova_name"
         private val VIDEO_EXT = Regex("""\.(mp4|mkv|avi|mov|webm|m4v|wmv|flv|mpg|mpeg)$""", RegexOption.IGNORE_CASE)

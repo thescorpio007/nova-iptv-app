@@ -266,11 +266,11 @@ def install():
 
 
 def login_first():
-    check("Welcome screen appears on the first start", find("Restore my backup", 30) is not None and wait_log(r"WELCOME shown", 10))
-    check("Welcome screen offers the accounts link and the sign-in form",
-          find("Connect with my accounts link", 5) is not None and find("Add my IPTV account", 5) is not None)
+    check("Welcome screen appears on the first start", find("Add your IPTV server", 30) is not None and wait_log(r"WELCOME shown", 10))
+    check("Welcome screen offers restore, the accounts link and the web browser",
+          find("your backup file", 5) is not None and find("accounts link", 5) is not None and find("Web browser", 5) is not None)
     shot("welcome")
-    tap("Add my IPTV account")
+    tap("Add server")
     check("Login screen appears", find("Server URL", 30) is not None)
     check("Signature note on the sign-in page", find("Designed by A.Hamrouni", 10) is not None)
     fill("Server URL or M3U link", SERVER)
@@ -636,9 +636,9 @@ def restore_from_login():
     adb(f"shell pm grant {PKG} android.permission.POST_NOTIFICATIONS")
     adb(f"shell appops set {PKG} MANAGE_EXTERNAL_STORAGE allow")
     adb(f"shell am start -n {PKG}/.ui.MainActivity")
-    check("Welcome screen appears after wiping the app", find("Restore my backup", 30) is not None)
+    check("Welcome screen appears after wiping the app", find("your backup file", 30) is not None)
     shot("welcome-restore-button")
-    tap("Restore my backup")
+    tap("your backup file")
     picked = find("NovaIPTV-", 15)
     shot("welcome-restore-list")
     check("Restore window lists the saved .bak file", picked is not None)
@@ -691,7 +691,7 @@ def accounts_link():
     adb(f"shell pm grant {PKG} android.permission.POST_NOTIFICATIONS")
     adb(f"shell appops set {PKG} MANAGE_EXTERNAL_STORAGE allow")
     adb(f"shell am start -n {PKG}/.ui.MainActivity")
-    tap("Connect with my accounts link", 30)
+    tap("accounts link", 30)
     fill("Link to your accounts list (.txt)", SERVER + "/accounts.txt")
     hide_keyboard()
     tap("Check", exact=True)
@@ -731,7 +731,7 @@ def accounts_link():
     open_section("Accounts")
     tap_scrolling("Disconnect", exact=True)
     tap("Yes, disconnect", exact=True)
-    check("The accounts link can be disconnected", find("Connect with my accounts link", 15) is not None)
+    check("The accounts link can be disconnected", find("accounts link", 15) is not None)
 
 
 def restore_by_link():
@@ -1321,6 +1321,50 @@ if os.environ.get("NOVA_MODE") == "stuck":
         ("First login", login_first),
         ("Software decoder", lambda: set_video_decoder("Software decoder")),
         ("Stuck picture: watchdog jumps to live", stuck_picture),
+    ]
+
+def web_first_start():
+    """Web tab before any server: the welcome tile's address box opens a real page; bars stay visible."""
+    check("Welcome screen with the Web tile", find("Web browser", 30) is not None)
+    shot("welcome-tiles")
+    nd = find("Search or type a web address", 10)
+    if nd:
+        adb(f"shell input tap {nd['x']} {nd['y']}")
+        time.sleep(1.5)
+        type_text(SERVER + "/web/test.html")
+        adb("shell input keyevent 66")
+        time.sleep(1)
+    found = find("Nova Web Test page", 30)
+    shot("web-page")
+    check("Web: the page is shown", found is not None)
+    check("Web: the top row stays visible (Live TV)", find("Live TV", 5) is not None)
+    check("Web: the button row stays visible (List)", find("List", 5) is not None)
+    time.sleep(4)
+    check("Web: the page's video is found", find("🎬 1", 8) is not None or find("🎬 2", 3) is not None)
+    shot("web-video-found")
+    adb("shell input keyevent 4")
+    adb("shell input keyevent 4")
+    time.sleep(2)
+    check("Web: Back twice leaves the Web tab", find("Add your IPTV server", 10) is not None)
+    shot("web-left")
+
+
+def web_with_server():
+    tap("Web", 10)
+    time.sleep(2)
+    shot("web-tab")
+    check("Web tab: address row and buttons visible", find("Search or type a web address", 10) is not None and find("List", 5) is not None)
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/test.html -n {PKG}/.ui.OpenWithActivity")
+    check("Open with: a web page opens in the Web tab", find("Nova Web Test page", 30) is not None)
+    shot("web-open-with")
+
+
+if os.environ.get("NOVA_MODE") == "web":
+    steps = [
+        ("Install and open", install),
+        ("Web before any server", web_first_start),
+        ("First login", login_first),
+        ("Web tab with a server", web_with_server),
     ]
 
 if os.environ.get("NOVA_MODE") == "short":

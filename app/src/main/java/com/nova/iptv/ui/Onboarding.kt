@@ -132,64 +132,139 @@ fun StartCover() {
 
 // =============================================================================== WELCOME
 
-/** First start (no account yet): Restore my backup · Connect with my accounts link · Add my IPTV account. */
+/**
+ * First start (no account yet), "tiles" layout: the big IPTV tile (Add server), Restore and Link tiles,
+ * "What Nova does", and a smaller Web browser tile with its own address box. Top row: Live TV · Films · Series · Web.
+ */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun WelcomeScreen(vm: MainViewModel, isTv: Boolean) {
     var restore by remember { mutableStateOf(false) }
     var connect by remember { mutableStateOf(false) }
+    var address by remember { mutableStateOf("") }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { android.util.Log.i("NovaTest", "WELCOME shown"); if (isTv) runCatching { first.requestFocus() } }
-    BoxWithConstraints(Modifier.fillMaxSize().background(NightBg)) {
-        val wide = maxWidth > maxHeight && maxWidth >= 640.dp
-        val choices: @Composable () -> Unit = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.widthIn(max = 460.dp)) {
-                WelcomeChoice("⟲  Restore my backup", "From the box, a USB stick / SD card, or any web link", true, Modifier.focusRequester(first)) { restore = true }
-                WelcomeChoice("🔗  Connect with my accounts link", "Your accounts list on OneDrive, Google Drive, Dropbox… — kept up to date every day", false) { connect = true }
-                WelcomeChoice("＋  Add my IPTV account", "Xtream Codes details or an M3U link from your provider", false) { vm.welcomeForm.value = true }
-            }
-        }
-        val intro: @Composable () -> Unit = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) { NovaMark(if (wide) 80 else 64); Spacer(Modifier.width(16.dp)); NovaName(if (wide) 50 else 36) }
-                Text(
-                    "Your live TV, films and series — smooth on any box, built for the remote.",
-                    color = Color(0xFFB8C7E6), fontSize = if (wide) 19.sp else 15.sp, modifier = Modifier.padding(top = 18.dp, bottom = 18.dp),
-                )
-                androidx.compose.foundation.layout.FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+    fun openWeb(text: String = "") {
+        if (text.isNotBlank()) com.nova.iptv.data.WebStore.pendingUrl.value = text.trim()
+        vm.webOnly.value = true
+    }
+
+    val bg = Color(0xFF0B0E12)
+    Column(Modifier.fillMaxSize().background(bg)) {
+        WelcomeTopRow(selectedWeb = false, onLive = {}, onWeb = { openWeb() })
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val wide = maxWidth >= 720.dp
+            val iptvTile: @Composable (Modifier) -> Unit = { m ->
+                Column(
+                    m.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF1F6F4A), Color(0xFF0F2A1C))), RoundedCornerShape(16.dp)).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    listOf("📺 Live TV", "🎬 Films & series", "💾 Disk buffer", "🛡 Watchdog").forEach {
-                        Text(it, color = Color(0xFFDBE6FF), fontSize = 12.sp, maxLines = 1, modifier = Modifier.background(Color(0x1FFFFFFF), RoundedCornerShape(14.dp)).padding(horizontal = 10.dp, vertical = 5.dp))
+                    Text("📺 Add your IPTV server", fontWeight = FontWeight.Bold, fontSize = if (wide) 22.sp else 19.sp, color = Color.White)
+                    Text("Live TV · Films · Series in one place — Xtream Codes details or an M3U link from your provider", fontSize = 13.sp, color = Color(0xFFCFE8DA))
+                    Spacer(Modifier.height(if (wide) 18.dp else 10.dp))
+                    FocusBox(onClick = { vm.welcomeForm.value = true }, modifier = Modifier.focusRequester(first).background(NovaGreen, RoundedCornerShape(14.dp)),
+                        shape = RoundedCornerShape(14.dp)) {
+                        Text("＋ Add server", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = Color(0xFF06210F),
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 11.dp))
                     }
                 }
             }
-        }
-        val footer: @Composable () -> Unit = {
-            Row(Modifier.fillMaxWidth()) {
-                Text("Nova IPTV · version " + appVersion(), color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, modifier = Modifier.weight(1f))
-                Text("Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
+            val smallTiles: @Composable () -> Unit = {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    WelcomeTile("⤒ Restore", "your backup file", listOf(Color(0xFF1D4F7A), Color(0xFF0B1D2A)), Modifier.weight(1f)) { restore = true }
+                    WelcomeTile("🔗 Link", "accounts link", listOf(Color(0xFF5A3A7A), Color(0xFF1D0B2A)), Modifier.weight(1f)) { connect = true }
+                }
             }
-        }
-        if (wide) {
-            Row(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) { intro() }
-                Spacer(Modifier.width(40.dp))
-                choices()
+            val about: @Composable () -> Unit = {
+                Column(Modifier.fillMaxWidth().background(Color(0xFF15191F), RoundedCornerShape(14.dp)).padding(14.dp)) {
+                    Text("⭐ What Nova does", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                    Text(
+                        "Smooth live TV with a 15-min disk buffer, films with read-ahead, downloads, age & word filters, status dots.",
+                        fontSize = 12.5.sp, color = Color(0xFFC9D1D9), modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
-            Box(Modifier.align(Alignment.BottomCenter).padding(14.dp)) { footer() }
-        } else {
-            // Phone held upright: everything in one column, the footer after the buttons (never on top of them).
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 18.dp)) {
-                Spacer(Modifier.height(12.dp)); intro(); Spacer(Modifier.height(18.dp)); choices()
-                Spacer(Modifier.height(28.dp))
-                footer()
+            val webTile: @Composable () -> Unit = {
+                Column(
+                    Modifier.fillMaxWidth().background(Color(0xFF15191F), RoundedCornerShape(14.dp))
+                        .border(1.dp, Color(0x552EE66B), RoundedCornerShape(14.dp)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("🌐 Web browser", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                    Text("Ads blocked · kids protection · videos play in Nova", fontSize = 12.5.sp, color = Color(0xFFC9D1D9))
+                    TvTextField(
+                        value = address, onValueChange = { address = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("🔍 Search or type a web address") },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Go),
+                        trailingIcon = {
+                            FocusBox(onClick = { openWeb(address) }, shape = RoundedCornerShape(14.dp)) {
+                                Text("Go ›", color = NovaGreen, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                            }
+                        },
+                        onSubmit = { openWeb(address) },
+                    )
+                }
+            }
+            if (wide) {
+                Row(Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) { NovaMark(40); Spacer(Modifier.width(10.dp)); NovaName(30)
+                            Text("  · IPTV player", color = Color(0xFF9FB2D8), fontSize = 14.sp) }
+                        iptvTile(Modifier.height(200.dp)); smallTiles()
+                    }
+                    Column(Modifier.weight(1f).padding(top = 52.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { about(); webTile() }
+                }
+            } else {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) { NovaMark(34); Spacer(Modifier.width(8.dp)); NovaName(26)
+                        Text("  · IPTV player", color = Color(0xFF9FB2D8), fontSize = 13.sp) }
+                    iptvTile(Modifier.height(190.dp)); smallTiles(); about(); webTile()
+                    Text("Nova IPTV · version " + appVersion() + "   ·   Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.45f), fontSize = 11.sp)
+                }
             }
         }
     }
     if (restore) RestoreDialog(vm) { restore = false }
     if (connect) ConnectLinkDialog(vm) { connect = false }
+}
+
+/** Live TV · Films · Series · Web — Films and Series are greyed until a server is added. */
+@Composable
+fun WelcomeTopRow(selectedWeb: Boolean, onLive: () -> Unit, onWeb: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(Color(0xFF15191F)).padding(horizontal = 6.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        listOf("📺 Live TV" to !selectedWeb, "🎬 Films" to false, "🎞 Series" to false, "🌐 Web" to selectedWeb).forEachIndexed { i, (label, sel) ->
+            val enabled = i == 0 || i == 3
+            FocusBox(onClick = { if (i == 3) onWeb() else onLive() }, modifier = Modifier.weight(1f), selected = sel, shape = RoundedCornerShape(12.dp)) {
+                Text(
+                    label, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    color = when { sel -> NovaGreen; enabled -> Color.White; else -> Color.White.copy(alpha = 0.4f) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Nova with no server yet, used as a web browser (the Web tab with the welcome row on top). */
+@Composable
+fun WebOnlyScreen(vm: MainViewModel) {
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B0E12))) {
+        WelcomeTopRow(selectedWeb = true, onLive = { vm.webOnly.value = false }, onWeb = {})
+        Box(Modifier.weight(1f).fillMaxWidth()) { WebScreen(vm, onLeave = { vm.webOnly.value = false }) }
+    }
+}
+
+@Composable
+private fun WelcomeTile(title: String, hint: String, colors: List<Color>, modifier: Modifier, onClick: () -> Unit) {
+    FocusBox(onClick = onClick, modifier = modifier.background(Brush.linearGradient(colors), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = Color.White)
+            Text(hint, fontSize = 12.5.sp, color = Color(0xFFD0D8E8))
+        }
+    }
 }
 
 @Composable

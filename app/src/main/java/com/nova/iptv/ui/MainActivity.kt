@@ -79,12 +79,13 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val startup by vm.startup.collectAsStateWithLifecycle()
                     val welcomeForm by vm.welcomeForm.collectAsStateWithLifecycle()
+                    val webOnly by vm.webOnly.collectAsStateWithLifecycle()
                     val st = startup
                     val onLogin = accounts.isEmpty() || showLogin
                     if (st is MainViewModel.Startup.Loading && accounts.isNotEmpty()) {
                         StartCover()
                     } else if (accounts.isEmpty() && !welcomeForm) {
-                        WelcomeScreen(vm, isTv)
+                        if (webOnly) { WebOnlyScreen(vm); PinGateHost(vm) } else WelcomeScreen(vm, isTv)
                     } else if (!onLogin && st is MainViewModel.Startup.AllFailed) {
                         AccountsCheckScreen(vm, st)
                     } else androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.fillMaxSize()) {
@@ -106,10 +107,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** "Open with" / Share of a web page: open it in the Web tab. */
+    private fun handleWebIntent(intent: android.content.Intent?) {
+        if (intent?.action != ACTION_OPEN_WEB) return
+        val url = intent.dataString ?: return
+        android.util.Log.i("NovaTest", "WEB open from another app")
+        vm.openWeb(url)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWebIntent(intent)
+    }
+
+    companion object {
+        const val ACTION_OPEN_WEB = "com.nova.iptv.OPEN_WEB"
+    }
+
     private var autoPlayed = false
 
     override fun onPostCreate(savedInstanceState: Bundle?) {
         super.onPostCreate(savedInstanceState)
+        if (savedInstanceState == null && intent?.action == ACTION_OPEN_WEB) { handleWebIntent(intent); autoPlayed = true }
         // Start the last watched channel / video when the app opens (Settings → Start-up).
         if (savedInstanceState == null && !autoPlayed) {
             autoPlayed = true

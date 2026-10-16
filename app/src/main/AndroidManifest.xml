@@ -158,6 +158,14 @@
                 <data android:pathPattern=".*\\.M3U" />
                 <data android:pathPattern=".*\\..*\\.M3U" />
             </intent-filter>
+            <!-- Any web link: Nova can open web pages in its Web tab (and can be chosen as the default browser). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+            </intent-filter>
             <!-- "Share → Play with Nova": links (text) and video files shared by 1DM, browsers, file managers. -->
             <intent-filter android:label="Play with Nova">
                 <action android:name="android.intent.action.SEND" />
