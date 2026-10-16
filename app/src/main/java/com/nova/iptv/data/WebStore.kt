@@ -62,6 +62,20 @@ object WebStore {
     /** A web address to open in the Web tab (from "Open with", Share or the welcome screen). */
     val pendingUrl = MutableStateFlow<String?>(null)
     val lastExport = MutableStateFlow(0L)
+    /** Links that open a new tab: "same" (this page), "ask" (question, 10 s → Cancel) or "tab" (always a new tab). */
+    val newTab = MutableStateFlow("ask")
+    fun setNewTab(v: String) { newTab.value = v; save() }
+
+    /** Video hosts your internet line refuses (connection cut): shown as a Nova message for 6 h. */
+    private val badHosts = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private const val BAD_MS = 6L * 3600_000
+    fun markBad(host: String) { badHosts[host.lowercase()] = System.currentTimeMillis() }
+    fun isBad(host: String?): Boolean {
+        val t = badHosts[host.orEmpty().lowercase()] ?: return false
+        if (System.currentTimeMillis() - t > BAD_MS) { badHosts.remove(host.orEmpty().lowercase()); return false }
+        return true
+    }
+    fun clearBad(host: String) { badHosts.remove(host.lowercase()) }
 
     var lastUrl: String
         get() = prefs.getString("last_url", "") ?: ""
@@ -93,6 +107,7 @@ object WebStore {
         findVideos.value = prefs.getBoolean("find_videos", true)
         startPage.value = prefs.getString("start_page", "bookmarks") ?: "bookmarks"
         allowSites.value = prefs.getStringSet("allow_sites", emptySet())?.toSet() ?: emptySet()
+        newTab.value = prefs.getString("new_tab", "ask") ?: "ask"
     }
 
     private fun save() {
@@ -103,6 +118,7 @@ object WebStore {
             .putString("start_page", startPage.value)
             .putStringSet("allow_sites", allowSites.value)
             .putString("kids_mode", kidsMode.value)
+            .putString("new_tab", newTab.value)
             .apply { flags.value.forEach { (k, v) -> putBoolean("f_$k", v) } }
             .putBoolean("has_data", true)
             .apply()
@@ -144,6 +160,7 @@ object WebStore {
         .put("startPage", startPage.value)
         .put("allowSites", JSONArray(allowSites.value.toList()))
         .put("kidsMode", kidsMode.value)
+        .put("newTab", newTab.value)
         .put("flags", JSONObject(flags.value as Map<*, *>))
         .put("filters", runCatching { FilterLists.toJson() }.getOrNull())
         .toString(2)
@@ -157,6 +174,7 @@ object WebStore {
             .filter { it.url.isNotBlank() }
         adLevel.value = o.optString("adLevel", "maximum")
         kidsMode.value = o.optString("kidsMode", "adult")
+        newTab.value = o.optString("newTab", "ask")
         o.optJSONObject("flags")?.let { f -> flags.value = FLAG_DEFAULTS.keys.associateWith { f.optBoolean(it, FLAG_DEFAULTS[it]!!) } }
         findVideos.value = o.optBoolean("findVideos", true)
         startPage.value = o.optString("startPage", "bookmarks")

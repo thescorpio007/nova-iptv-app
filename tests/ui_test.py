@@ -1347,6 +1347,15 @@ def web_first_start():
     time.sleep(2)
     check("Web: Back twice leaves the Web tab", find("Add your IPTV server", 10) is not None)
     shot("web-left")
+    # ⬇ Downloads before any server (second row).
+    check("No server: ⬇ Downloads is shown", find("Downloads", 10) is not None)
+    tap("Downloads", 10)
+    time.sleep(2)
+    shot("downloads-no-server")
+    check("No server: the Downloads screen opens", find("Live TV", 5) is not None and find("Add your IPTV server", 3) is None)
+    adb("shell input keyevent 4")
+    time.sleep(2)
+    check("No server: Back returns to the welcome screen", find("Add your IPTV server", 10) is not None)
 
 
 def web_with_server():
@@ -1362,13 +1371,27 @@ def web_with_server():
     check("Web: film-site page opens", find("Nova Cards page", 30) is not None)
     time.sleep(2)
     tap("Film One card", 10)
-    check("Web: a “new tab” link opens the film page", find("Film One page", 15) is not None)
+    check("Web: a “new tab” link asks first", find("Open this link in a new tab?", 10) is not None)
+    shot("web-ask-newtab")
+    tap("Open in new tab", 10)
+    check("Web: “Open in new tab” opens the film page", find("Film One page", 15) is not None)
+    check("Web: the tabs button shows 2 tabs", find("▢ 2", 8) is not None)
     shot("web-card-newtab")
     adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/cards.html -n {PKG}/.ui.OpenWithActivity")
     find("Nova Cards page", 20)
     time.sleep(2)
     tap("Film Two card", 10)
     check("Web: a link behind a pop-under script opens the film page", find("Film Two page", 15) is not None)
+    # A video host refused by the line: Nova's message in the player box, then the next server works without refreshing.
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/servers.html -n {PKG}/.ui.OpenWithActivity")
+    check("Web: servers page opens", find("Nova Servers page", 30) is not None)
+    time.sleep(2)
+    tap("Server A", 10)
+    check("Web: a refused host shows Nova's message", find("blocked by your internet connection", 25) is not None)
+    shot("web-blocked-host")
+    tap("Server B", 10)
+    check("Web: the next server works without refreshing", find("Film Two page", 20) is not None)
+    shot("web-next-server")
 
 
 if os.environ.get("NOVA_MODE") == "web":

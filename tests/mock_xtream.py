@@ -198,6 +198,24 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if path == "/web/servers.html":
+            # A film page with server buttons: a busy flag that clears only when the player box finishes loading.
+            body = ("<html><head><title>Servers</title><meta name='viewport' content='width=device-width'></head>"
+                    "<body style='font-family:sans-serif;font-size:24px'><h1>Nova Servers page</h1>"
+                    "<p><button id='a' style='font-size:24px'>Server A</button> <button id='b' style='font-size:24px'>Server B</button></p>"
+                    "<iframe id='p' width='340' height='220'></iframe>"
+                    "<script>var busy=false,p=document.getElementById('p');p.onload=function(){busy=false};"
+                    "function pick(u){if(busy)return;busy=true;p.src=u;}"
+                    "document.getElementById('a').onclick=function(){pick('http://10.0.2.2:9/e/x')};"
+                    "document.getElementById('b').onclick=function(){pick('/web/film2.html')};</script>"
+                    "</body></html>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if path in ("/web/cards.html", "/web/film1.html", "/web/film2.html"):
             # Film-site style links: a "new tab" card and a card behind a pop-under script (window.open + w.blur()).
             if path == "/web/cards.html":

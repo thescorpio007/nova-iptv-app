@@ -268,6 +268,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val welcomeForm = MutableStateFlow(false)
     /** No server yet: Nova used as a web browser (Web tab with the welcome row). */
     val webOnly = MutableStateFlow(false)
+    /** No server yet: the ⬇ Downloads screen is open (films downloaded from the web). */
+    val downloadsOnly = MutableStateFlow(false)
 
     /** Opens a web address in the Web tab (from "Open with", Share or the welcome screen). */
     fun openWeb(url: String) {

@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -87,6 +88,53 @@ private object WebState {
     @Volatile var frameScript = false
     /** Ad boxes removed on the page (counted with the blocked addresses in 🛡). */
     val removed = kotlinx.coroutines.flow.MutableStateFlow(0)
+    /** Open tabs (the first one is the original page), the tab each was opened from, titles and addresses. */
+    val tabs = mutableListOf<WebView>()
+    val opener = HashMap<WebView, WebView>()
+    val titles = HashMap<WebView, String>()
+    val urls = HashMap<WebView, String>()
+    val lastUsed = HashMap<WebView, Long>()
+    val tabsVersion = kotlinx.coroutines.flow.MutableStateFlow(0)
+}
+
+private const val MAX_TABS = 6
+private val SAFE_HOST = Regex("[^A-Za-z0-9.-]")
+/** Network errors that mean "your internet line refused this address". */
+private val LINE_ERRORS = setOf(
+    WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT, WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_UNKNOWN,
+    WebViewClient.ERROR_IO, WebViewClient.ERROR_FAILED_SSL_HANDSHAKE,
+)
+
+/** The page put in a video player box when its host is refused by the internet line. */
+private fun blockedHostPage(host: String): WebResourceResponse {
+    val h = host.replace(SAFE_HOST, "")
+    val html = "<html><head><meta name='viewport' content='width=device-width'></head><body style='margin:0;background:#15191f;color:#eee;" +
+        "font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center'><div style='padding:16px'>" +
+        "<div style='font-size:34px'>⚠</div><div style='font-size:17px;font-weight:bold;margin:6px 0'>$h is blocked by your internet connection</div>" +
+        "<div style='font-size:14px;color:#aaa'>Choose another server on the page.</div>" +
+        "<button style='margin-top:14px;background:#2ee66b;color:#00210b;border:0;border-radius:14px;padding:9px 16px;font-weight:bold;font-size:14px' " +
+        "onclick=\"try{NovaFilters.retry('$h')}catch(e){}location.reload()\">⟳ Try again</button></div></body></html>"
+    return WebResourceResponse("text/html", "utf-8", ByteArrayInputStream(html.toByteArray()))
+}
+
+/** A new browser page (each tab has its own). */
+private fun newWebView(context: android.content.Context): WebView = WebView(context).apply {
+    settings.domStorageEnabled = true
+    settings.mediaPlaybackRequiresUserGesture = false
+    settings.setSupportMultipleWindows(true)
+    settings.javaScriptCanOpenWindowsAutomatically = false
+    settings.builtInZoomControls = true
+    settings.displayZoomControls = false
+    settings.loadWithOverviewMode = true
+    settings.useWideViewPort = true
+    setBackgroundColor(android.graphics.Color.WHITE)
+    addJavascriptInterface(FilterBridge, "NovaFilters")
+    runCatching {
+        if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, AdBlock.FRAME_JS, setOf("*"))
+            WebState.frameScript = true
+        }
+    }
 }
 
 /** Blocking level for the page being shown ("off" on the sites where blocking is turned off). */
@@ -98,6 +146,7 @@ private object FilterBridge {
     @android.webkit.JavascriptInterface fun css(host: String?): String = runCatching { com.nova.iptv.data.FilterLists.cssFor(host) }.getOrDefault("")
     @android.webkit.JavascriptInterface fun base(): String = if (pageLevel() == "normal") "" else AdBlock.HIDE_CSS
     @android.webkit.JavascriptInterface fun removed(n: Int) { WebState.removed.value += n }
+    @android.webkit.JavascriptInterface fun retry(host: String?) { host?.let { WebStore.clearBad(it) } }
 }
 
 private val VIDEO_EXT = Regex("""\.(m3u8|mp4|mpd|webm|mkv|m4v|mov)$""", RegexOption.IGNORE_CASE)
@@ -251,31 +300,17 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         WebState.webView?.loadUrl(url)
     }
 
-    val webView = remember {
-        WebState.webView ?: WebView(context).apply {
-            settings.domStorageEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = false
-            settings.setSupportMultipleWindows(true)
-            settings.javaScriptCanOpenWindowsAutomatically = false
-            settings.builtInZoomControls = true
-            settings.displayZoomControls = false
-            settings.loadWithOverviewMode = true
-            settings.useWideViewPort = true
-            setBackgroundColor(android.graphics.Color.WHITE)
-            addJavascriptInterface(FilterBridge, "NovaFilters")
-            runCatching {
-                if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                    androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, AdBlock.FRAME_JS, setOf("*"))
-                    WebState.frameScript = true
-                }
-            }
-            WebState.webView = this
-        }
+    var webView by remember {
+        mutableStateOf(WebState.webView ?: newWebView(context).also { WebState.webView = it; WebState.tabs += it })
     }
+    if (webView !in WebState.tabs) WebState.tabs.add(0, webView)
+    val tabsVersion by WebState.tabsVersion.collectAsStateWithLifecycle()
+    var tabsOpen by remember { mutableStateOf(false) }
+    var askTab by remember { mutableStateOf<String?>(null) }
     val defaultUa = remember { WebSettings.getDefaultUserAgent(context) }
 
     // Settings that change how pages are loaded.
-    LaunchedEffect(flags) {
+    fun applySettings(webView: WebView) {
         val s = webView.settings
         s.javaScriptEnabled = WebStore.flag("javascript")
         s.blockNetworkImage = WebStore.flag("blockImages")
@@ -300,18 +335,67 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         }
         s.cacheMode = if (WebStore.flag("privateMode")) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
     }
+    LaunchedEffect(flags) { WebState.tabs.toList().forEach { applySettings(it) } }
 
-    DisposableEffect(webView) {
+    // Tabs: switch, open, close (declared before the page events that use them).
+    lateinit var attachRef: (WebView) -> Unit
+    fun switchTo(wv: WebView) {
+        webView = wv
+        WebState.webView = wv
+        WebState.lastUsed[wv] = System.currentTimeMillis()
+        val u = WebState.urls[wv].orEmpty()
+        WebState.pageUrl = u
+        WebState.pageSite = Uri.parse(u).host.orEmpty()
+        address = u
+        title = WebState.titles[wv].orEmpty()
+        found.clear(); seen.clear(); blocked = 0; WebState.removed.value = 0
+        canBack = wv.canGoBack()
+        showPage = u.isNotBlank()
+        listOpen = false; tabsOpen = false
+        WebState.tabsVersion.value++
+    }
+    fun closeTab(wv: WebView) {
+        val back = WebState.opener[wv]?.takeIf { it in WebState.tabs && it !== wv }
+        WebState.tabs.remove(wv)
+        WebState.opener.entries.filter { it.value === wv }.forEach { e -> back?.let { WebState.opener[e.key] = it } ?: WebState.opener.remove(e.key) }
+        WebState.opener.remove(wv); WebState.titles.remove(wv); WebState.urls.remove(wv); WebState.lastUsed.remove(wv)
+        if (wv === webView) {
+            val next = back ?: WebState.tabs.lastOrNull() ?: newWebView(context).also { applySettings(it); attachRef(it); WebState.tabs += it }
+            switchTo(next)
+        }
+        (wv.parent as? ViewGroup)?.removeView(wv)
+        runCatching { wv.stopLoading(); wv.destroy() }
+        WebState.tabsVersion.value++
+    }
+    fun openTab(url: String?) {
+        while (WebState.tabs.size >= MAX_TABS) {
+            val oldest = WebState.tabs.filter { it !== webView }.minByOrNull { WebState.lastUsed[it] ?: 0L } ?: break
+            closeTab(oldest)
+        }
+        val from = webView
+        val wv = newWebView(context)
+        applySettings(wv); attachRef(wv)
+        WebState.tabs += wv
+        if (url != null) WebState.opener[wv] = from
+        switchTo(wv)
+        if (url != null) go(url)
+    }
+
+    fun attach(webView: WebView) {
+        fun current() = webView === WebState.webView
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 val u = request.url
                 val host = u.host
                 val empty = { WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))) }
+                val cur = current()
                 if (!request.isForMainFrame) {
-                    if (WebStore.kidsMode.value != "off" && AdBlock.isAdult(host, u.toString())) { main.post { blocked++ }; return empty() }
-                    if (AdBlock.siteOf(host) != site() && (AdBlock.isAd(host, level()) || (level() != "off" && com.nova.iptv.data.FilterLists.blocks(host)))) { main.post { blocked++ }; return empty() }
+                    if (WebStore.kidsMode.value != "off" && AdBlock.isAdult(host, u.toString())) { if (cur) main.post { blocked++ }; return empty() }
+                    if (AdBlock.siteOf(host) != site() && (AdBlock.isAd(host, level()) || (level() != "off" && com.nova.iptv.data.FilterLists.blocks(host)))) { if (cur) main.post { blocked++ }; return empty() }
+                    // A video host the internet line refused: a Nova message instead of a page that never loads.
+                    if (WebStore.isBad(host) && request.requestHeaders?.get("Accept")?.contains("text/html") == true) return blockedHostPage(host.orEmpty())
                 }
-                if (WebStore.findVideos.value) {
+                if (cur && WebStore.findVideos.value) {
                     val s = u.toString()
                     if (DRM_HINT.containsMatchIn(s) && request.method == "POST") {
                         main.post { found.replaceAll { if (it.page == WebState.pageUrl) it.copy(protectedDrm = true) else it } }
@@ -367,7 +451,27 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 return false
             }
 
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                if (Build.VERSION.SDK_INT < 23 || request.isForMainFrame) return
+                if (request.requestHeaders?.get("Accept")?.contains("text/html") != true) return
+                if (error.errorCode !in LINE_ERRORS) return
+                val host = request.url.host?.lowercase() ?: return
+                if (WebStore.isBad(host)) return
+                WebStore.markBad(host)
+                android.util.Log.i("NovaTest", "WEB host refused by the line: $host (${error.errorCode})")
+                // Load that player box again: it now gets Nova's message and counts as loaded, so the page accepts the next server.
+                val h = host.replace(SAFE_HOST, "")
+                main.post {
+                    view.evaluateJavascript(
+                        "(function(){document.querySelectorAll('iframe').forEach(function(f){try{if(f.src&&new URL(f.src).hostname=='$h'){f.src=f.src;}}catch(e){}});})()", null,
+                    )
+                }
+            }
+
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                WebState.urls[view] = url
+                WebState.tabsVersion.value++
+                if (!current()) return
                 val newSite = AdBlock.siteOf(Uri.parse(url).host)
                 if (newSite != AdBlock.siteOf(WebState.pageSite)) { blocked = 0; WebState.removed.value = 0 }
                 WebState.pageUrl = url
@@ -380,7 +484,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                canBack = view.canGoBack()
+                if (current()) canBack = view.canGoBack()
                 if (!WebStore.flag("privateMode")) WebStore.lastUrl = url
                 val lv = level()
                 // Older web engines (no start-of-frame script): the same script, on the main page only.
@@ -388,7 +492,10 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
-            override fun onReceivedTitle(view: WebView, t: String?) { title = t.orEmpty() }
+            override fun onReceivedTitle(view: WebView, t: String?) {
+                WebState.titles[view] = t.orEmpty(); WebState.tabsVersion.value++
+                if (current()) title = t.orEmpty()
+            }
 
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
                 val blockPopups = WebStore.flag("popups") && level() != "off"
@@ -405,8 +512,16 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     handled = true
                     main.post { runCatching { temp.stopLoading(); temp.destroy() } }
                     val same = AdBlock.siteOf(u.host) == site()
-                    if (!blockPopups || same) main.post { go(u.toString()) }
-                    else { main.post { blocked++ }; showNote("🚫 Pop-up to ${u.host} blocked") }
+                    // Every link is filtered first: ad / malicious / adult / gambling addresses never open, in any mode.
+                    val refused = kidsRefuse(u) != null ||
+                        (level() != "off" && (AdBlock.isAd(u.host, level()) || com.nova.iptv.data.FilterLists.blocks(u.host)))
+                    when {
+                        refused -> { main.post { blocked++ }; showNote("🚫 Blocked: ${u.host}") }
+                        WebStore.newTab.value == "tab" -> main.post { openTab(u.toString()) }
+                        WebStore.newTab.value == "ask" -> main.post { askTab = u.toString() }
+                        !blockPopups || same -> main.post { go(u.toString()) }
+                        else -> { main.post { blocked++ }; showNote("🚫 Pop-up to ${u.host} blocked") }
+                    }
                 }
                 temp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean { take(r.url); return true }
@@ -432,6 +547,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             override fun onHideCustomView() { fullView = null; fullCallback = null }
         }
         webView.setDownloadListener { url, _, _, mime, _ ->
+            if (!current()) return@setDownloadListener
             if (WebStore.flag("siteDownloads") || WebStore.kidsMode.value != "off" || url.endsWith(".apk", true) || mime == "application/vnd.android.package-archive") {
                 blocked++
                 showNote("🚫 Download started by the site blocked")
@@ -439,17 +555,25 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 choose = FoundVideo(url, mime.substringAfter('/').uppercase().take(5), WebState.pageUrl, info = "file")
             }
         }
+    }
+    attachRef = { attach(it) }
+    DisposableEffect(Unit) {
+        WebState.tabs.toList().forEach { attach(it) }
         onDispose {
-            if (WebStore.flag("privateMode")) { CookieManager.getInstance().removeAllCookies(null); webView.clearHistory() }
+            if (WebStore.flag("privateMode")) { CookieManager.getInstance().removeAllCookies(null); WebState.tabs.forEach { it.clearHistory() } }
         }
     }
 
     BackHandler(enabled = fullView != null) { fullCallback?.onCustomViewHidden(); fullView = null }
     BackHandler(enabled = fullView == null && (listOpen || settingsOpen)) { listOpen = false; settingsOpen = false }
     BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && showPage && canBack) { webView.goBack() }
+    // A tab opened from another one: Back at its first page closes it and returns to the tab it came from.
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !(showPage && canBack) && WebState.opener[webView]?.let { it in WebState.tabs } == true) {
+        closeTab(webView)
+    }
     // At the first page / the bookmarks: Back twice (within 2 s) leaves the Web tab.
     var lastBack by remember { mutableStateOf(0L) }
-    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !(showPage && canBack)) {
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !(showPage && canBack) && WebState.opener[webView]?.let { it in WebState.tabs } != true) {
         val now = System.currentTimeMillis()
         if (now - lastBack < 2000) onLeave()
         else { lastBack = now; Toast.makeText(context, "Press Back again to leave Web", Toast.LENGTH_SHORT).show() }
@@ -485,7 +609,10 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         when (what) {
             0 -> LinkActions.play(context, v.url, name)
             1 -> LinkActions.downloadAndWatch(context, v.url, name)
-            else -> LinkActions.download(context, v.url, name)
+            else -> {
+                LinkActions.download(context, v.url, name)
+                Toast.makeText(context, "⬇ Download started: $name — see it in ⬇ Downloads", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -532,6 +659,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     }
                 })
                 SmallButton("★ List", { showPage = false; listOpen = false })
+                key(tabsVersion) { SmallButton("▢ ${WebState.tabs.size}", { tabsOpen = true }) }
                 Chip("🎬 ${found.size}", found.isNotEmpty(), { listOpen = !listOpen })
                 Text(
                     if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}",
@@ -549,10 +677,12 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             }
             Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
                 // The web page only takes its own space (it is not shown at all on the bookmarks page).
-                if (showPage) AndroidView(
-                    factory = { webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
-                    modifier = Modifier.fillMaxSize().clipToBounds(),
-                )
+                if (showPage) key(webView) {
+                    AndroidView(
+                        factory = { webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
+                        modifier = Modifier.fillMaxSize().clipToBounds(),
+                    )
+                }
                 if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { pickTree.launch(Uri.parse(NOVA_FOLDER)) },
                     canEdit = { f -> if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f() })
             }
@@ -615,6 +745,79 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     }
                     FocusBox(onClick = { choose = null }, modifier = Modifier.fillMaxWidth()) {
                         Text("Cancel", fontSize = 14.sp, color = Color(0xFFAAAAAA), modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
+                }
+            }
+        }
+
+        // ---- "Open this link in a new tab?" (10 s, then Cancel)
+        askTab?.let { link ->
+            var left by remember(link) { mutableIntStateOf(10) }
+            LaunchedEffect(link) {
+                while (left > 0) { kotlinx.coroutines.delay(1000); left-- }
+                if (askTab == link) askTab = null
+            }
+            val lu = Uri.parse(link)
+            val same = AdBlock.siteOf(lu.host) == site()
+            androidx.compose.ui.window.Dialog(onDismissRequest = { askTab = null }) {
+                Column(
+                    Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                        .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(14.dp)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Open this link in a new tab?", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text((lu.host ?: "") + " — " + if (same) "same site" else "other site", fontSize = 13.sp,
+                        color = if (same) Color(0xFF2EE66B) else Color(0xFFFFB74D))
+                    Text(link, fontSize = 11.sp, color = Color(0xFF999999), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Box(Modifier.fillMaxWidth().background(Color(0xFF262B33), RoundedCornerShape(3.dp))) {
+                        Box(Modifier.fillMaxWidth(left / 10f).heightIn(min = 5.dp).background(Color(0xFF2EE66B), RoundedCornerShape(3.dp)))
+                    }
+                    Text("Cancel in $left s", fontSize = 11.sp, color = Color(0xFF999999))
+                    FocusBox(onClick = { askTab = null; openTab(link) }, modifier = Modifier.fillMaxWidth().background(Color(0xFF2EE66B), RoundedCornerShape(10.dp))) {
+                        Text("▢  Open in new tab", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B), modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                    FocusBox(onClick = { askTab = null; go(link) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("↳  Open here", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                    FocusBox(onClick = { askTab = null }, modifier = Modifier.fillMaxWidth()) {
+                        Text("✕  Cancel", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                }
+            }
+        }
+
+        // ---- ▢ open tabs
+        if (tabsOpen) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { tabsOpen = false }) {
+                key(tabsVersion) {
+                    Column(
+                        Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp)).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("▢ Open tabs (${WebState.tabs.size} of $MAX_TABS)", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                            SmallButton("✕", { tabsOpen = false })
+                        }
+                        WebState.tabs.toList().forEach { t ->
+                            val u = WebState.urls[t].orEmpty()
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                FocusBox(
+                                    onClick = { switchTo(t) },
+                                    modifier = Modifier.weight(1f).let { if (t === webView) it.border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(10.dp)) else it },
+                                ) {
+                                    Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                                        Text(WebState.titles[t].orEmpty().ifBlank { if (u.isBlank()) "New tab" else Uri.parse(u).host ?: u },
+                                            fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (u.isNotBlank()) Text(Uri.parse(u).host ?: "", fontSize = 11.sp, color = Color(0xFF999999), maxLines = 1)
+                                    }
+                                }
+                                SmallButton("✕", { closeTab(t) }, warn = true)
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SmallButton("＋ New tab", { openTab(null) })
+                            if (WebState.tabs.size > 1) SmallButton("Close all others", { WebState.tabs.filter { it !== webView }.forEach { closeTab(it) } })
+                        }
                     }
                 }
             }
@@ -863,6 +1066,15 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
         SwitchRow("JavaScript (off = safest, many video players stop)", "javascript", flags)
         SwitchRow("Block images (faster)", "blockImages", flags)
 
+        SectionTitleWeb("PAGE & TABS")
+        val newTab by WebStore.newTab.collectAsStateWithLifecycle()
+        Text("Links that open a new tab", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("same" to "Same page", "ask" to "Ask me each time", "tab" to "Always new tab").forEach { (k, l) -> Chip(l, newTab == k, { WebStore.setNewTab(k) }) }
+        }
+        Text("Only links you tap can open a tab (up to $MAX_TABS). Pop-ups opened by the page itself are always blocked. Every tab is filtered, " +
+            "and ad, malicious, adult & gambling addresses are refused before any question. The question cancels itself after 10 s.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SectionTitleWeb("PAGE & VIDEOS")
         SmallButton("🌐 Make Nova my default browser", {
             val opened = runCatching {

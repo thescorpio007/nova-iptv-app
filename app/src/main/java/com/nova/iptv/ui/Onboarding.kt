@@ -152,6 +152,7 @@ fun WelcomeScreen(vm: MainViewModel, isTv: Boolean) {
     val bg = Color(0xFF0B0E12)
     Column(Modifier.fillMaxSize().background(bg)) {
         WelcomeTopRow(selectedWeb = false, onLive = {}, onWeb = { openWeb() })
+        NoServerDownloadsRow(vm, selected = false)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val wide = maxWidth >= 720.dp
             val iptvTile: @Composable (Modifier) -> Unit = { m ->
@@ -212,13 +213,13 @@ fun WelcomeScreen(vm: MainViewModel, isTv: Boolean) {
                             Text("  · IPTV player", color = Color(0xFF9FB2D8), fontSize = 14.sp) }
                         iptvTile(Modifier.height(200.dp)); smallTiles()
                     }
-                    Column(Modifier.weight(1f).padding(top = 52.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { about(); webTile() }
+                    Column(Modifier.weight(1f).padding(top = 52.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { about(); webTile(); DownloadsTile(vm) }
                 }
             } else {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) { NovaMark(34); Spacer(Modifier.width(8.dp)); NovaName(26)
                         Text("  · IPTV player", color = Color(0xFF9FB2D8), fontSize = 13.sp) }
-                    iptvTile(Modifier.height(190.dp)); smallTiles(); about(); webTile()
+                    iptvTile(Modifier.height(190.dp)); smallTiles(); about(); webTile(); DownloadsTile(vm)
                     Text("Nova IPTV · version " + appVersion() + "   ·   Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.45f), fontSize = 11.sp)
                 }
             }
@@ -230,12 +231,12 @@ fun WelcomeScreen(vm: MainViewModel, isTv: Boolean) {
 
 /** Live TV · Films · Series · Web — Films and Series are greyed until a server is added. */
 @Composable
-fun WelcomeTopRow(selectedWeb: Boolean, onLive: () -> Unit, onWeb: () -> Unit) {
+fun WelcomeTopRow(selectedWeb: Boolean, onLive: () -> Unit, onWeb: () -> Unit, live: Boolean = true) {
     Row(
         Modifier.fillMaxWidth().background(Color(0xFF15191F)).padding(horizontal = 6.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        listOf("📺 Live TV" to !selectedWeb, "🎬 Films" to false, "🎞 Series" to false, "🌐 Web" to selectedWeb).forEachIndexed { i, (label, sel) ->
+        listOf("📺 Live TV" to (!selectedWeb && live), "🎬 Films" to false, "🎞 Series" to false, "🌐 Web" to selectedWeb).forEachIndexed { i, (label, sel) ->
             val enabled = i == 0 || i == 3
             FocusBox(onClick = { if (i == 3) onWeb() else onLive() }, modifier = Modifier.weight(1f), selected = sel, shape = RoundedCornerShape(12.dp)) {
                 Text(
@@ -253,7 +254,62 @@ fun WelcomeTopRow(selectedWeb: Boolean, onLive: () -> Unit, onWeb: () -> Unit) {
 fun WebOnlyScreen(vm: MainViewModel) {
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0E12))) {
         WelcomeTopRow(selectedWeb = true, onLive = { vm.webOnly.value = false }, onWeb = {})
+        NoServerDownloadsRow(vm, selected = false)
         Box(Modifier.weight(1f).fillMaxWidth()) { WebScreen(vm, onLeave = { vm.webOnly.value = false }) }
+    }
+}
+
+/** No server yet: the ⬇ Downloads screen (films downloaded from the web). */
+@Composable
+fun DownloadsOnlyScreen(vm: MainViewModel, onPlay: PlayFn) {
+    androidx.activity.compose.BackHandler { vm.downloadsOnly.value = false }
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B0E12))) {
+        WelcomeTopRow(
+            selectedWeb = false, live = false,
+            onLive = { vm.downloadsOnly.value = false; vm.webOnly.value = false },
+            onWeb = { vm.downloadsOnly.value = false; vm.webOnly.value = true },
+        )
+        NoServerDownloadsRow(vm, selected = true)
+        Box(Modifier.weight(1f).fillMaxWidth()) { DownloadsScreen(vm, onPlay) }
+    }
+}
+
+/** Downloads running (queued or downloading). */
+@Composable
+private fun activeDownloads(): Int {
+    val items by com.nova.iptv.download.DownloadCenter.items.collectAsStateWithLifecycle()
+    return items.count { it.status == com.nova.iptv.data.DownloadStatus.DOWNLOADING || it.status == com.nova.iptv.data.DownloadStatus.QUEUED }
+}
+
+/** The small second row before any server: ⬇ Downloads (green number = downloads running). */
+@Composable
+fun NoServerDownloadsRow(vm: MainViewModel, selected: Boolean) {
+    val n = activeDownloads()
+    Row(Modifier.fillMaxWidth().background(Color(0xFF15191F)).padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        FocusBox(onClick = { vm.downloadsOnly.value = true }, selected = selected, shape = RoundedCornerShape(12.dp)) {
+            Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("⬇ Downloads", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = if (selected) NovaGreen else Color.White)
+                if (n > 0) Text(
+                    "$n", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF06210F),
+                    modifier = Modifier.padding(start = 6.dp).background(NovaGreen, RoundedCornerShape(9.dp)).padding(horizontal = 6.dp, vertical = 1.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Welcome screen tile: my downloads (shown once something was downloaded). */
+@Composable
+private fun DownloadsTile(vm: MainViewModel) {
+    val items by com.nova.iptv.download.DownloadCenter.items.collectAsStateWithLifecycle()
+    if (items.isEmpty()) return
+    val running = items.count { it.status == com.nova.iptv.data.DownloadStatus.DOWNLOADING || it.status == com.nova.iptv.data.DownloadStatus.QUEUED }
+    val ready = items.count { it.status == com.nova.iptv.data.DownloadStatus.DONE }
+    FocusBox(onClick = { vm.downloadsOnly.value = true }, modifier = Modifier.fillMaxWidth().background(Color(0xFF15191F), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("⬇ My downloads", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+            Text("$running downloading · $ready ready to watch", fontSize = 12.5.sp, color = Color(0xFFC9D1D9))
+        }
     }
 }
 

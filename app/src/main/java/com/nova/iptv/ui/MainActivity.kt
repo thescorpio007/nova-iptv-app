@@ -80,12 +80,14 @@ class MainActivity : ComponentActivity() {
                     val startup by vm.startup.collectAsStateWithLifecycle()
                     val welcomeForm by vm.welcomeForm.collectAsStateWithLifecycle()
                     val webOnly by vm.webOnly.collectAsStateWithLifecycle()
+                    val downloadsOnly by vm.downloadsOnly.collectAsStateWithLifecycle()
                     val st = startup
                     val onLogin = accounts.isEmpty() || showLogin
                     if (st is MainViewModel.Startup.Loading && accounts.isNotEmpty()) {
                         StartCover()
                     } else if (accounts.isEmpty() && !welcomeForm) {
-                        if (webOnly) { WebOnlyScreen(vm); PinGateHost(vm) } else WelcomeScreen(vm, isTv)
+                        if (downloadsOnly) DownloadsOnlyScreen(vm, this@MainActivity::play)
+                        else if (webOnly) { WebOnlyScreen(vm); PinGateHost(vm) } else WelcomeScreen(vm, isTv)
                     } else if (!onLogin && st is MainViewModel.Startup.AllFailed) {
                         AccountsCheckScreen(vm, st)
                     } else androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.fillMaxSize()) {
