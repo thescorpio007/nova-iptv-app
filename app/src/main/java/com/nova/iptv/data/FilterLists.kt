@@ -160,6 +160,15 @@ object FilterLists {
         save(); WebStore.changed(); rebuildSoon()
     }
 
+    /** ↺ Reset: default lists on/off and daily update; [all] also removes own lists and own rules. */
+    fun reset(everything: Boolean) {
+        if (!::app.isInitialized) return
+        enabled.value = emptyMap(); update.value = "daily"
+        if (everything) { custom.value = emptyList(); myRules.value = "" }
+        save()
+        scope.launch { all().filter { isOn(it.id) && !fileOf(it).exists() }.forEach { download(it) }; rebuildSoon() }
+    }
+
     fun toJson(): JSONObject = JSONObject()
         .put("enabled", JSONObject(enabled.value as Map<*, *>))
         .put("custom", JSONArray(custom.value))

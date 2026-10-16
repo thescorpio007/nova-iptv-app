@@ -89,7 +89,7 @@ private fun NovaName(size: Int) {
 
 /** Small "📋 Paste" button for text fields: puts the copied text (link, username, password…) into the field. */
 @Composable
-fun PasteButton(onPaste: (String) -> Unit) {
+fun PasteButton(small: Boolean = false, onPaste: (String) -> Unit) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val context = LocalContext.current
     FocusBox(
@@ -101,7 +101,8 @@ fun PasteButton(onPaste: (String) -> Unit) {
             .border(1.dp, NovaGreen.copy(alpha = 0.55f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
     ) {
-        Text("📋 Paste", color = NovaGreen, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+        Text("📋 Paste", color = NovaGreen, fontSize = if (small) 11.sp else 13.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = if (small) 7.dp else 10.dp, vertical = if (small) 4.dp else 6.dp))
     }
 }
 

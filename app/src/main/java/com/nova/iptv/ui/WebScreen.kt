@@ -97,20 +97,31 @@ private object WebState {
     val tabsVersion = kotlinx.coroutines.flow.MutableStateFlow(0)
     /** A button on the page that did not react (its name), reported by [RETRY_JS]. */
     val noReaction = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    /** The last button tapped in a group of buttons (e.g. a film page's servers): its name, the others, the time. */
+    @Volatile var tapName: String = ""
+    @Volatile var tapGroup: List<String> = emptyList()
+    @Volatile var tapAt: Long = 0L
+    /** Tabs opened by ▶ Smart play (a clean video player), and the ones whose video was already offered. */
+    val playerTabs = HashSet<WebView>()
+    val offered = HashSet<WebView>()
 }
+
+/** ▶ Smart play: a player address caught after a tap ([blocked] = refused by the internet line). */
+private data class SmartCatch(val url: String, val host: String, val name: String, val page: String, val others: List<String>, val blocked: Boolean = false)
 
 /**
  * Main page only: when you tap one of a group of short buttons (e.g. a film page's servers) and the page's player box
  * does not change within 3 s, Nova is told (it then reloads the page and taps the same button again).
  */
-private const val RETRY_JS = "(function(){try{if(window.top!==window||window.__novaRetry)return;window.__novaRetry=1;var N=window.NovaFilters;if(!N||!N.retryOn())return;" +
+private const val RETRY_JS = "(function(){try{if(window.top!==window||window.__novaRetry)return;window.__novaRetry=1;var N=window.NovaFilters;if(!N)return;" +
     "function txt(e){return (e.innerText||e.textContent||'').trim();}" +
     "function srcs(){return [].map.call(document.querySelectorAll('iframe'),function(f){return f.src}).join('|');}" +
     "function big(){return [].some.call(document.querySelectorAll('iframe'),function(f){var r=f.getBoundingClientRect();return r.width>200&&r.height>100;});}" +
     "document.addEventListener('click',function(ev){try{var e=ev.target,t='';for(var i=0;i<4&&e&&e!==document.body;i++){t=txt(e);if(t.length>=2&&t.length<=25&&t.indexOf('\\n')<0)break;e=e.parentElement;}" +
     "if(!e||e===document.body||t.length<2||t.length>25)return;var g=e.parentElement&&e.parentElement.parentElement?e.parentElement.parentElement:e.parentElement;if(!g)return;" +
-    "var sib=[].filter.call(g.querySelectorAll(e.tagName),function(x){var s=txt(x);return s.length>=2&&s.length<=25;}).length;" +
-    "if(sib<3||!big())return;var before=srcs(),loc=location.href;" +
+    "var grp=[].filter.call(g.querySelectorAll(e.tagName),function(x){var s=txt(x);return s.length>=2&&s.length<=25&&s.indexOf('\\n')<0;});" +
+    "if(grp.length<3)return;try{N.tap(t,grp.slice(0,15).map(function(x){return txt(x)}).join('|'));}catch(y){}" +
+    "if(!N.retryOn()||!big())return;var before=srcs(),loc=location.href;" +
     "setTimeout(function(){if(location.href==loc&&srcs()==before)N.noReaction(t);},3000);}catch(x){}},true);}catch(e){}})();"
 
 /** Taps the element whose text is exactly [text] (the smallest one), after a reload. */
@@ -171,6 +182,9 @@ private object FilterBridge {
     @android.webkit.JavascriptInterface fun removed(n: Int) { WebState.removed.value += n }
     @android.webkit.JavascriptInterface fun retry(host: String?) { host?.let { WebStore.clearBad(it) } }
     @android.webkit.JavascriptInterface fun retryOn(): Boolean = WebStore.flag("retryButtons")
+    @android.webkit.JavascriptInterface fun tap(name: String?, group: String?) {
+        WebState.tapName = name.orEmpty(); WebState.tapGroup = group.orEmpty().split('|').filter { it.isNotBlank() }; WebState.tapAt = System.currentTimeMillis()
+    }
     @android.webkit.JavascriptInterface fun noReaction(text: String?) { if (!text.isNullOrBlank()) WebState.noReaction.value = text }
 }
 
@@ -335,6 +349,8 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     /** "Retry buttons that don't react": the button to tap again after the reload. */
     var pendingClick by remember { mutableStateOf<String?>(null) }
     var lastRetry by remember { mutableStateOf("" to 0L) }
+    var smart by remember { mutableStateOf<SmartCatch?>(null) }
+    var smartReady by remember { mutableStateOf(false) }
     val defaultUa = remember { WebSettings.getDefaultUserAgent(context) }
 
     // Settings that change how pages are loaded.
@@ -387,6 +403,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         WebState.tabs.remove(wv)
         WebState.opener.entries.filter { it.value === wv }.forEach { e -> back?.let { WebState.opener[e.key] = it } ?: WebState.opener.remove(e.key) }
         WebState.opener.remove(wv); WebState.titles.remove(wv); WebState.urls.remove(wv); WebState.lastUsed.remove(wv)
+        WebState.playerTabs.remove(wv); WebState.offered.remove(wv)
         if (wv === webView) {
             val next = back ?: WebState.tabs.lastOrNull() ?: newWebView(context).also { applySettings(it); attachRef(it); WebState.tabs += it }
             switchTo(next)
@@ -395,7 +412,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         runCatching { wv.stopLoading(); wv.destroy() }
         WebState.tabsVersion.value++
     }
-    fun openTab(url: String?) {
+    fun openTab(url: String?, referer: String? = null, player: Boolean = false) {
         while (WebState.tabs.size >= MAX_TABS) {
             val oldest = WebState.tabs.filter { it !== webView }.minByOrNull { WebState.lastUsed[it] ?: 0L } ?: break
             closeTab(oldest)
@@ -406,7 +423,19 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         WebState.tabs += wv
         if (url != null) WebState.opener[wv] = from
         switchTo(wv)
-        if (url != null) go(url)
+        if (player) WebState.playerTabs += wv
+        if (url != null && referer != null) {
+            showPage = true; address = url
+            wv.loadUrl(url, mapOf("Referer" to referer))
+        } else if (url != null) go(url)
+    }
+
+    /** The clean player refused to work on its own: back to the film page and its own player. */
+    fun playerFailed(wv: WebView) {
+        if (wv !in WebState.tabs) return
+        val msg = "▶ This player only works inside its page — back to the page's player"
+        note = msg; main.postDelayed({ if (note == msg) note = null }, 6000)
+        closeTab(wv)
     }
 
     fun attach(webView: WebView) {
@@ -420,8 +449,19 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 if (!request.isForMainFrame) {
                     if (WebStore.kidsMode.value != "off" && AdBlock.isAdult(host, u.toString())) { if (cur) main.post { blocked++ }; return empty() }
                     if (AdBlock.siteOf(host) != site() && (AdBlock.isAd(host, level()) || (level() != "off" && com.nova.iptv.data.FilterLists.blocks(host)))) { if (cur) main.post { blocked++ }; return empty() }
+                    val isDoc = request.requestHeaders?.get("Accept")?.contains("text/html") == true
+                    // ▶ Smart play: a player from another site loaded just after you tapped one of the page's buttons.
+                    val tapped = cur && isDoc && WebStore.smartPlay.value != "off" && view !in WebState.playerTabs &&
+                        System.currentTimeMillis() - WebState.tapAt < 5000 && WebState.tapName.isNotBlank() &&
+                        AdBlock.siteOf(host) != site() && kidsRefuse(u) == null
+                    if (tapped) {
+                        val c = SmartCatch(u.toString(), host.orEmpty(), WebState.tapName, WebState.pageUrl,
+                            WebState.tapGroup.filter { it != WebState.tapName }, blocked = WebStore.isBad(u.authority))
+                        WebState.tapAt = 0L
+                        main.post { smartReady = false; smart = c }
+                    }
                     // A video host the internet line refused: a Nova message instead of a page that never loads.
-                    if (WebStore.isBad(u.authority) && request.requestHeaders?.get("Accept")?.contains("text/html") == true) return blockedHostPage(u.authority.orEmpty())
+                    if (WebStore.isBad(u.authority) && isDoc) return blockedHostPage(u.authority.orEmpty())
                 }
                 if (cur && WebStore.findVideos.value) {
                     val s = u.toString()
@@ -479,7 +519,12 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 return false
             }
 
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (request.isForMainFrame && view in WebState.playerTabs && response.statusCode >= 400) main.post { playerFailed(view) }
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                if (request.isForMainFrame && view in WebState.playerTabs) { main.post { playerFailed(view) }; return }
                 if (Build.VERSION.SDK_INT < 23 || request.isForMainFrame) return
                 if (request.requestHeaders?.get("Accept")?.contains("text/html") != true) return
                 if (error.errorCode !in LINE_ERRORS) return
@@ -489,6 +534,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 if (key == Uri.parse(WebState.urls[view].orEmpty()).authority?.lowercase()) return
                 if (WebStore.isBad(key)) return
                 WebStore.markBad(key)
+                main.post { smart?.let { if (it.host == host) smart = it.copy(blocked = true) } }
                 android.util.Log.i("NovaTest", "WEB host refused by the line: $host (${error.errorCode})")
                 // Load that player box again: it now gets Nova's message and counts as loaded, so the page accepts the next server.
                 val h = key.replace(SAFE_HOST_PORT, "")
@@ -627,6 +673,24 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         note = msg; main.postDelayed({ if (note == msg) note = null }, 5000)
         webView.reload()
     }
+    // ▶ Smart play: 2–3 s check, then ask (10 s → open the clean player) or open at once.
+    LaunchedEffect(smart) {
+        val c = smart ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(2500)
+        if (smart !== c) return@LaunchedEffect
+        if (c.blocked) { kotlinx.coroutines.delay(6000); if (smart === c) smart = null; return@LaunchedEffect }
+        if (WebStore.smartPlay.value == "auto") { smart = null; openTab(c.url, referer = c.page, player = true) }
+        else smartReady = true
+    }
+    // In a clean player tab: when the video is found, offer the 3 choices once (best quality first).
+    LaunchedEffect(found.size, webView) {
+        val wv = webView
+        if (wv !in WebState.playerTabs || wv in WebState.offered || found.none { !it.protectedDrm }) return@LaunchedEffect
+        kotlinx.coroutines.delay(1500)
+        if (webView !== wv || wv in WebState.offered) return@LaunchedEffect
+        WebState.offered += wv
+        choose = found.filter { !it.protectedDrm }.maxByOrNull { it.height }
+    }
     // An address sent to the Web tab (Open with, Share, welcome screen).
     val pending by WebStore.pendingUrl.collectAsStateWithLifecycle()
     LaunchedEffect(pending) { pending?.let { WebStore.pendingUrl.value = null; go(it) } }
@@ -686,7 +750,19 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("Search or type a web address") },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        trailingIcon = { PasteButton { go(it) } },
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                FocusBox(onClick = { if (showPage) webView.reload() else go(address) }, shape = RoundedCornerShape(14.dp)) {
+                                    Text("⟳", fontSize = 15.sp, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
+                                }
+                                PasteButton(small = true) { go(it) }
+                                FocusBox(onClick = { go(address) }, modifier = Modifier.padding(end = 4.dp).background(Color(0xFF2EE66B), RoundedCornerShape(14.dp)),
+                                    shape = RoundedCornerShape(14.dp)) {
+                                    Text("Go ›", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                                }
+                            }
+                        },
                         onSubmit = { go(address) },
                     )
                 }
@@ -699,7 +775,6 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             ) {
                 SmallButton("←", { if (showPage && canBack) webView.goBack() else if (showPage) showPage = false })
                 SmallButton("→", { if (webView.canGoForward()) { showPage = true; webView.goForward() } })
-                SmallButton("⟳", { if (showPage) webView.reload() })
                 val marked = bookmarks.any { it.url == WebState.pageUrl }
                 SmallButton(if (marked) "★" else "☆", {
                     if (showPage && WebState.pageUrl.isNotBlank()) {
@@ -793,7 +868,58 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                         }
                     }
                     FocusBox(onClick = { choose = null }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Cancel", fontSize = 14.sp, color = Color(0xFFAAAAAA), modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                        Text(if (webView in WebState.playerTabs) "Keep the site's player" else "Cancel", fontSize = 14.sp, color = Color(0xFFAAAAAA),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
+                }
+            }
+        }
+
+        // ---- ▶ Smart play panel (checking / blocked) and question (10 s → open the clean player)
+        smart?.let { c ->
+            if (!smartReady) Column(
+                Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().widthIn(max = 560.dp)
+                    .background(Color(0xF21D2229), RoundedCornerShape(14.dp))
+                    .border(1.dp, if (c.blocked) Color(0x99FF8A80) else Color(0x662EE66B), RoundedCornerShape(14.dp)).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                if (c.blocked) {
+                    Text("⚠ ${c.name} is blocked by your connection", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                    Text("${c.host} can't be reached on this line — pick another server.", fontSize = 12.sp, color = Color(0xFFBBBBBB))
+                    if (c.others.isNotEmpty()) Text("Other servers on this page: " + c.others.take(8).joinToString(" · "), fontSize = 12.sp, color = Color(0xFF2EE66B))
+                } else {
+                    Text("🔎 Preparing ${c.name}…  ${c.host}", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                    Text("✅ Not an ad / malicious / adult address", fontSize = 12.sp, color = Color(0xFFBBBBBB))
+                    Text("✅ Not blocked by your connection", fontSize = 12.sp, color = Color(0xFFBBBBBB))
+                    Text("⏳ Getting the player ready…", fontSize = 12.sp, color = Color(0xFFBBBBBB))
+                }
+                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) { SmallButton("✕", { smart = null }) }
+            } else {
+                var left by remember(c) { mutableIntStateOf(10) }
+                LaunchedEffect(c) {
+                    while (left > 0) { kotlinx.coroutines.delay(1000); left-- }
+                    if (smart === c) { smart = null; smartReady = false; openTab(c.url, referer = c.page, player = true) }
+                }
+                androidx.compose.ui.window.Dialog(onDismissRequest = { smart = null; smartReady = false }) {
+                    Column(
+                        Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                            .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(14.dp)).padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("▶ ${c.name} is ready", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text("${c.host} · checked & filtered", fontSize = 12.sp, color = Color(0xFFAAAAAA))
+                        Box(Modifier.fillMaxWidth().background(Color(0xFF262B33), RoundedCornerShape(3.dp))) {
+                            Box(Modifier.fillMaxWidth(left / 10f).heightIn(min = 5.dp).background(Color(0xFF2EE66B), RoundedCornerShape(3.dp)))
+                        }
+                        Text("Opening the clean player in $left s", fontSize = 11.sp, color = Color(0xFF999999))
+                        FocusBox(onClick = { smart = null; smartReady = false; openTab(c.url, referer = c.page, player = true) },
+                            modifier = Modifier.fillMaxWidth().background(Color(0xFF2EE66B), RoundedCornerShape(10.dp))) {
+                            Text("▶  Open clean player", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                        }
+                        FocusBox(onClick = { smart = null; smartReady = false }, modifier = Modifier.fillMaxWidth()) {
+                            Text("↳  Stay in the page", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                        }
                     }
                 }
             }
@@ -855,7 +981,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                                     modifier = Modifier.weight(1f).let { if (t === webView) it.border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(10.dp)) else it },
                                 ) {
                                     Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                                        Text(WebState.titles[t].orEmpty().ifBlank { if (u.isBlank()) "New tab" else Uri.parse(u).host ?: u },
+                                        Text((if (t in WebState.playerTabs) "▶ Player · " else "") + WebState.titles[t].orEmpty().ifBlank { if (u.isBlank()) "New tab" else Uri.parse(u).host ?: u },
                                             fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         if (u.isNotBlank()) Text(Uri.parse(u).host ?: "", fontSize = 11.sp, color = Color(0xFF999999), maxLines = 1)
                                     }
@@ -1059,6 +1185,8 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
     val allow by WebStore.allowSites.collectAsStateWithLifecycle()
     val last by WebStore.lastExport.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var resetOpen by remember { mutableStateOf(false) }
+    if (resetOpen) ResetBrowserDialog { resetOpen = false }
     val nf = remember { java.text.NumberFormat.getIntegerInstance() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         SectionTitleWeb("ADS & POP-UPS")
@@ -1125,6 +1253,14 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
             "and ad, malicious, adult & gambling addresses are refused before any question. The question cancels itself after 10 s.",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SwitchRow("Retry buttons that don't react (reload the page and tap again)", "retryButtons", flags)
+        val smartPlay by WebStore.smartPlay.collectAsStateWithLifecycle()
+        Text("▶ Smart play for player buttons", fontWeight = FontWeight.Medium, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("off" to "Off", "ask" to "Ask", "auto" to "Automatic").forEach { (k, l) -> Chip(l, smartPlay == k, { WebStore.setSmartPlay(k) }) }
+        }
+        Text("When you tap a page's server / player button, Nova checks the player's address (2–3 s) and opens it alone in a clean " +
+            "player tab — no page scripts, no refresh needed — then offers ▶ Play in Nova / ⬇ Download. Back returns to the page.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SectionTitleWeb("PAGE & VIDEOS")
         SmallButton("🌐 Make Nova my default browser", {
             val opened = runCatching {
@@ -1182,6 +1318,7 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
                 }
             })
             if (onPick != null) SmallButton("⤒ Import (choose the NovaIPTV folder)", onPick)
+            SmallButton("↺ Reset browser configuration", { resetOpen = true }, warn = true)
             SmallButton("🗑 History & cookies", {
                 WebState.webView?.clearHistory(); CookieManager.getInstance().removeAllCookies(null); WebState.webView?.clearCache(true)
                 Toast.makeText(context, "History and cookies cleared", Toast.LENGTH_SHORT).show()
@@ -1198,5 +1335,60 @@ fun WebSettings() {
     val bookmarks by WebStore.bookmarks.collectAsStateWithLifecycle()
     SettingsCard("Web browser", summary = "ads: $adLevel · kids: $kids · ${bookmarks.size} bookmarks") {
         WebSettingsContent()
+    }
+}
+
+/** ↺ Reset browser configuration: settings only (bookmarks kept) or everything. 10 s → Cancel; PIN when set. */
+@Composable
+private fun ResetBrowserDialog(onClose: () -> Unit) {
+    val context = LocalContext.current
+    var left by remember { mutableIntStateOf(10) }
+    LaunchedEffect(Unit) { while (left > 0) { kotlinx.coroutines.delay(1000); left-- }; onClose() }
+    val hasPin = (context.applicationContext as NovaApp).storage.hasPin
+    fun doReset(all: Boolean) {
+        onClose()
+        PinGate.require(hasPin) {
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching { WebStore.export() } // a dated copy of the current file first
+                WebStore.reset(all)
+                Handler(Looper.getMainLooper()).post {
+                    if (all) {
+                        WebState.tabs.drop(1).forEach { t -> (t.parent as? ViewGroup)?.removeView(t); runCatching { t.destroy() } }
+                        WebState.tabs.firstOrNull()?.let { WebState.tabs.retainAll(listOf(it)); it.clearHistory(); it.clearCache(true) }
+                        WebState.opener.clear(); WebState.playerTabs.clear(); WebState.offered.clear()
+                        CookieManager.getInstance().removeAllCookies(null)
+                        WebState.tabsVersion.value++
+                    }
+                    Toast.makeText(context, if (all) "Web browser reset: everything" else "Web browser settings reset (bookmarks kept)", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        Column(
+            Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                .border(2.dp, Color(0xFFFF8A80), RoundedCornerShape(14.dp)).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("↺ Reset the web browser?", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Back to Nova's defaults: ads Maximum · kids protection on · balanced filter lists · new tabs: Ask me each time · Smart play: Ask.",
+                fontSize = 12.sp, color = Color(0xFFAAAAAA))
+            Box(Modifier.fillMaxWidth().background(Color(0xFF262B33), RoundedCornerShape(3.dp))) {
+                Box(Modifier.fillMaxWidth(left / 10f).heightIn(min = 5.dp).background(Color(0xFF2EE66B), RoundedCornerShape(3.dp)))
+            }
+            Text("Cancel in $left s", fontSize = 11.sp, color = Color(0xFF999999))
+            FocusBox(onClick = { doReset(false) }, modifier = Modifier.fillMaxWidth().background(Color(0xFF2EE66B), RoundedCornerShape(10.dp))) {
+                Text("↺  Settings only (keep my bookmarks)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+            }
+            FocusBox(onClick = { doReset(true) }, modifier = Modifier.fillMaxWidth()) {
+                Text("↺  Everything (settings, bookmarks, tabs, history, cookies)", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+            }
+            FocusBox(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
+                Text("✕  Cancel", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+            }
+            Text("🔒 Asks for the PIN if one is set. A copy of the current browser file is kept in Download/NovaIPTV/Browser first.",
+                fontSize = 11.sp, color = Color(0xFF888888))
+        }
     }
 }
