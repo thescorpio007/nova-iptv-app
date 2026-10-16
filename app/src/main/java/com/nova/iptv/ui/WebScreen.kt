@@ -349,6 +349,14 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     main.post { Toast.makeText(context, "👶 Blocked for children: $why", Toast.LENGTH_LONG).show() }
                     return true
                 }
+                // The whole page sent to an ad address (click-under tricks): refused even after a click.
+                if (request.isForMainFrame && level() != "off" && AdBlock.siteOf(u.host) != site() &&
+                    (AdBlock.isAd(u.host, level()) || com.nova.iptv.data.FilterLists.blocks(u.host))
+                ) {
+                    main.post { blocked++ }
+                    showNote("🚫 Ad page blocked: ${u.host}")
+                    return true
+                }
                 if (request.isForMainFrame && !request.hasGesture() && WebStore.flag("redirects") && level() != "off" &&
                     site().isNotEmpty() && AdBlock.siteOf(u.host) != site()
                 ) {
@@ -383,18 +391,28 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             override fun onReceivedTitle(view: WebView, t: String?) { title = t.orEmpty() }
 
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
-                if (WebStore.flag("popups") && level() != "off") {
+                val blockPopups = WebStore.flag("popups") && level() != "off"
+                if (blockPopups && !isUserGesture) {
                     blocked++
                     showNote("🚫 Pop-up / new tab blocked")
                     return false
                 }
-                // Allowed: open the new window's address in this same page.
+                // A link that opens a "new tab" (target=_blank): same site → opened in this page; another site → pop-up (blocked).
                 val temp = WebView(view.context)
-                temp.webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
-                        go(r.url.toString()); v.destroy(); return true
-                    }
+                var handled = false
+                fun take(u: Uri) {
+                    if (handled) return
+                    handled = true
+                    main.post { runCatching { temp.stopLoading(); temp.destroy() } }
+                    val same = AdBlock.siteOf(u.host) == site()
+                    if (!blockPopups || same) main.post { go(u.toString()) }
+                    else { main.post { blocked++ }; showNote("🚫 Pop-up to ${u.host} blocked") }
                 }
+                temp.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean { take(r.url); return true }
+                    override fun onPageStarted(v: WebView, url: String, favicon: Bitmap?) { if (url.startsWith("http")) take(Uri.parse(url)) }
+                }
+                main.postDelayed({ if (!handled) { handled = true; runCatching { temp.destroy() } } }, 5000)
                 (resultMsg.obj as WebView.WebViewTransport).webView = temp
                 resultMsg.sendToTarget()
                 return true

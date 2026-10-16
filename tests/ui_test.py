@@ -1357,6 +1357,18 @@ def web_with_server():
     adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/test.html -n {PKG}/.ui.OpenWithActivity")
     check("Open with: a web page opens in the Web tab", find("Nova Web Test page", 30) is not None)
     shot("web-open-with")
+    # Film-site links: a "new tab" card, and a card behind a pop-under script.
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/cards.html -n {PKG}/.ui.OpenWithActivity")
+    check("Web: film-site page opens", find("Nova Cards page", 30) is not None)
+    time.sleep(2)
+    tap("Film One card", 10)
+    check("Web: a “new tab” link opens the film page", find("Film One page", 15) is not None)
+    shot("web-card-newtab")
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/cards.html -n {PKG}/.ui.OpenWithActivity")
+    find("Nova Cards page", 20)
+    time.sleep(2)
+    tap("Film Two card", 10)
+    check("Web: a link behind a pop-under script opens the film page", find("Film Two page", 15) is not None)
 
 
 if os.environ.get("NOVA_MODE") == "web":

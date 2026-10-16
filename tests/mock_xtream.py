@@ -198,6 +198,27 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if path in ("/web/cards.html", "/web/film1.html", "/web/film2.html"):
+            # Film-site style links: a "new tab" card and a card behind a pop-under script (window.open + w.blur()).
+            if path == "/web/cards.html":
+                body = ("<html><head><title>Cards</title><meta name='viewport' content='width=device-width'></head>"
+                        "<body style='font-family:sans-serif;font-size:28px'><h1>Nova Cards page</h1>"
+                        "<p><a href='/web/film1.html' target='_blank'>Film One card</a></p>"
+                        "<p><a href='/web/film2.html' class='pu'>Film Two card</a></p>"
+                        "<script>document.querySelector('.pu').addEventListener('click',function(e){e.preventDefault();"
+                        "var w=window.open('https://popads.net/x');w.blur();window.focus();location.href=this.href;});</script>"
+                        "</body></html>").encode()
+            else:
+                n = "One" if "1" in path else "Two"
+                body = ("<html><head><title>Film " + n + "</title><meta name='viewport' content='width=device-width'></head>"
+                        "<body><h1>Film " + n + " page</h1></body></html>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if path == "/playlist.m3u":
             # A plain M3U playlist (no Xtream account behind it), as other apps would hand it to Nova.
             host = "http://" + (self.headers.get("Host") or "10.0.2.2:8080")

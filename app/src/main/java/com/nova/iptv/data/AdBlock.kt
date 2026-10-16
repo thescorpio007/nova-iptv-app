@@ -173,7 +173,12 @@ object AdBlock {
         "var lv=N.level();if(lv=='off')return;var css=N.css(location.hostname);" +
         "function add(){var s=document.createElement('style');s.textContent=css+'\\n'+N.base();(document.head||document.documentElement).appendChild(s);}" +
         "if(document.documentElement)add();else document.addEventListener('DOMContentLoaded',add);" +
-        "if(lv!='maximum')return;try{window.open=function(){return null};}catch(e){}" +
+        "if(lv!='maximum')return;" +
+        // window.open: a click that opens a page of the same site goes there in this page; anything else is refused.
+        // A harmless "window" is returned (null made some sites' click handlers stop, so their links did nothing).
+        "try{var F={closed:true,focus:function(){},blur:function(){},close:function(){},postMessage:function(){},location:{href:'',replace:function(){},assign:function(){}},document:{write:function(){},writeln:function(){},close:function(){},open:function(){}},opener:null};" +
+        "window.open=function(u){try{if(u&&window.top===window){var a=document.createElement('a');a.href=u;var act=navigator.userActivation?navigator.userActivation.isActive:false;" +
+        "if(act&&a.hostname&&(a.hostname==location.hostname||a.hostname.split('.').slice(-2).join('.')==location.hostname.split('.').slice(-2).join('.'))){location.href=a.href;}}}catch(x){}return F;};}catch(e){}" +
         "var AD=/click here|cliquez|clique ici|install now|download app|sponsor|publicit|advertis|ads by|\\bad\\b|annonce/i;" +
         "function clean(){if(!document.body)return;var n=0,w=innerWidth,h=innerHeight,vs=[].slice.call(document.querySelectorAll('video')).filter(function(v){var r=v.getBoundingClientRect();return r.width>120&&r.height>60;});" +
         "document.querySelectorAll('body *').forEach(function(e){if(!e.isConnected||e.tagName=='VIDEO'||e.querySelector('video'))return;var s=getComputedStyle(e);" +
