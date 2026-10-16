@@ -99,6 +99,7 @@ private object WebState {
 
 private const val MAX_TABS = 6
 private val SAFE_HOST = Regex("[^A-Za-z0-9.-]")
+private val SAFE_HOST_PORT = Regex("[^A-Za-z0-9.:-]")
 /** Network errors that mean "your internet line refused this address". */
 private val LINE_ERRORS = setOf(
     WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT, WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_UNKNOWN,
@@ -107,7 +108,7 @@ private val LINE_ERRORS = setOf(
 
 /** The page put in a video player box when its host is refused by the internet line. */
 private fun blockedHostPage(host: String): WebResourceResponse {
-    val h = host.replace(SAFE_HOST, "")
+    val h = host.replace(SAFE_HOST_PORT, "")
     val html = "<html><head><meta name='viewport' content='width=device-width'></head><body style='margin:0;background:#15191f;color:#eee;" +
         "font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center'><div style='padding:16px'>" +
         "<div style='font-size:34px'>⚠</div><div style='font-size:17px;font-weight:bold;margin:6px 0'>$h is blocked by your internet connection</div>" +
@@ -393,7 +394,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     if (WebStore.kidsMode.value != "off" && AdBlock.isAdult(host, u.toString())) { if (cur) main.post { blocked++ }; return empty() }
                     if (AdBlock.siteOf(host) != site() && (AdBlock.isAd(host, level()) || (level() != "off" && com.nova.iptv.data.FilterLists.blocks(host)))) { if (cur) main.post { blocked++ }; return empty() }
                     // A video host the internet line refused: a Nova message instead of a page that never loads.
-                    if (WebStore.isBad(host) && request.requestHeaders?.get("Accept")?.contains("text/html") == true) return blockedHostPage(host.orEmpty())
+                    if (WebStore.isBad(u.authority) && request.requestHeaders?.get("Accept")?.contains("text/html") == true) return blockedHostPage(u.authority.orEmpty())
                 }
                 if (cur && WebStore.findVideos.value) {
                     val s = u.toString()
@@ -456,14 +457,17 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 if (request.requestHeaders?.get("Accept")?.contains("text/html") != true) return
                 if (error.errorCode !in LINE_ERRORS) return
                 val host = request.url.host?.lowercase() ?: return
-                if (WebStore.isBad(host)) return
-                WebStore.markBad(host)
+                val key = request.url.authority?.lowercase() ?: return
+                // Never the page's own address (only the video hosts it embeds).
+                if (key == Uri.parse(WebState.urls[view].orEmpty()).authority?.lowercase()) return
+                if (WebStore.isBad(key)) return
+                WebStore.markBad(key)
                 android.util.Log.i("NovaTest", "WEB host refused by the line: $host (${error.errorCode})")
                 // Load that player box again: it now gets Nova's message and counts as loaded, so the page accepts the next server.
-                val h = host.replace(SAFE_HOST, "")
+                val h = key.replace(SAFE_HOST_PORT, "")
                 main.post {
                     view.evaluateJavascript(
-                        "(function(){document.querySelectorAll('iframe').forEach(function(f){try{if(f.src&&new URL(f.src).hostname=='$h'){f.src=f.src;}}catch(e){}});})()", null,
+                        "(function(){document.querySelectorAll('iframe').forEach(function(f){try{if(f.src&&new URL(f.src).host=='$h'){f.src=f.src;}}catch(e){}});})()", null,
                     )
                 }
             }

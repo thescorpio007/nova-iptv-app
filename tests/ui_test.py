@@ -1389,6 +1389,9 @@ def web_with_server():
     tap("Server A", 10)
     check("Web: a refused host shows Nova's message", find("blocked by your internet connection", 25) is not None)
     shot("web-blocked-host")
+    if find("Server B", 3) is None:
+        adb("shell input swipe 540 700 540 1500 300")
+        time.sleep(1.5)
     tap("Server B", 10)
     check("Web: the next server works without refreshing", find("Film Two page", 20) is not None)
     shot("web-next-server")
