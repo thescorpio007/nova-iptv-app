@@ -451,22 +451,38 @@ fun RestoreDialog(vm: MainViewModel, onDismiss: () -> Unit) {
 
     plain?.let { text ->
         val noFocus = remember { FocusRequester() }
+        val kind = remember(text) { vm.backupKind(text) }
+        fun doRestore(part: String) {
+            plain = null
+            val result = runCatching { vm.restoreBackup(text, part) }
+            if (result.isSuccess) fromLink?.let { vm.rememberBackupLink(it) }
+            Toast.makeText(context, result.fold({
+                when (if (kind == "all") part else kind) { "web" -> "Web browser restored"; "iptv" -> "IPTV part restored"; else -> "Backup restored" }
+            }, { it.message ?: "Could not restore" }), Toast.LENGTH_LONG).show()
+            if (result.isSuccess) onDismiss()
+        }
         AlertDialog(
             onDismissRequest = { plain = null },
             title = { Text("Restore $name?") },
             text = {
-                Text("All current accounts, favourites, hidden items and settings will be replaced by this backup.")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        when (kind) {
+                            "web" -> "🌐 Web browser backup: bookmarks, browser settings, filter lists and your rules replace the current ones. IPTV is not touched."
+                            "all" -> "📦 This backup holds 📺 IPTV (accounts, favourites, hidden items, settings) + 🌐 the web browser. What do you want back?"
+                            else -> "📺 All current accounts, favourites, hidden items and settings will be replaced by this backup. The web browser is not touched."
+                        },
+                    )
+                    if (kind == "all") {
+                        TextButton(onClick = { doRestore("iptv") }) { Text("📺 IPTV part only") }
+                        TextButton(onClick = { doRestore("web") }) { Text("🌐 Web browser part only") }
+                    }
+                }
                 LaunchedEffect(Unit) { kotlinx.coroutines.delay(100); runCatching { noFocus.requestFocus() } }
             },
             dismissButton = { TextButton(onClick = { plain = null }, modifier = Modifier.focusRequester(noFocus)) { Text("No") } },
             confirmButton = {
-                TextButton(onClick = {
-                    plain = null
-                    val result = runCatching { vm.restoreBackup(text) }
-                    if (result.isSuccess) fromLink?.let { vm.rememberBackupLink(it) }
-                    Toast.makeText(context, result.fold({ "Backup restored" }, { it.message ?: "Could not restore" }), Toast.LENGTH_LONG).show()
-                    if (result.isSuccess) onDismiss()
-                }) { Text("Yes, restore") }
+                TextButton(onClick = { doRestore("all") }) { Text(if (kind == "all") "Everything in it" else "Yes, restore") }
             },
         )
     }
@@ -497,9 +513,11 @@ fun PasswordPrompt(title: String, onDismiss: () -> Unit, onPassword: (String) ->
 
 // =============================================================================== SAVE BACKUP (optional password)
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun SaveBackupDialog(vm: MainViewModel, onSaveTo: (password: String?) -> Unit, onDismiss: () -> Unit) {
+fun SaveBackupDialog(vm: MainViewModel, onSaveTo: (password: String?, kind: String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    var kind by remember { mutableStateOf("all") }
     var pw by remember { mutableStateOf("") }
     var again by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
@@ -512,7 +530,18 @@ fun SaveBackupDialog(vm: MainViewModel, onSaveTo: (password: String?) -> Unit, o
         title = { Text("💾 Save a backup") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Accounts, favourites, order, hidden items and all settings.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("What to back up", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("all" to "📦 Everything", "iptv" to "📺 IPTV only", "web" to "🌐 Web browser only").forEach { (k, l) -> Chip(l, kind == k, { kind = k }) }
+                }
+                Text(
+                    when (kind) {
+                        "iptv" -> "Accounts, favourites, order, hidden items, filters and all the app's settings."
+                        "web" -> "Bookmarks, browser settings, filter lists, your lists & rules, per-site switches."
+                        else -> "The whole app: IPTV (accounts, favourites, hidden items, settings) + the web browser."
+                    },
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 TvTextField(pw, { pw = it; err = null }, singleLine = true, label = { Text("Password (optional)") }, visualTransformation = PasswordVisualTransformation())
                 TvTextField(again, { again = it; err = null }, singleLine = true, label = { Text("Repeat password") }, visualTransformation = PasswordVisualTransformation())
                 Text(
@@ -524,10 +553,10 @@ fun SaveBackupDialog(vm: MainViewModel, onSaveTo: (password: String?) -> Unit, o
         },
         confirmButton = {
             Row {
-                TextButton(onClick = { if (check()) { onDismiss(); onSaveTo(pw.ifEmpty { null }) } }) { Text("Save to…") }
+                TextButton(onClick = { if (check()) { onDismiss(); onSaveTo(pw.ifEmpty { null }, kind) } }) { Text("Save to…") }
                 TextButton(onClick = {
                     if (check()) {
-                        val result = runCatching { vm.saveBackup(pw.ifEmpty { null }) }
+                        val result = runCatching { vm.saveBackup(pw.ifEmpty { null }, kind) }
                         Toast.makeText(context, result.fold({ "Backup saved: ${it.absolutePath}" }, { "Could not save: ${it.message}" }), Toast.LENGTH_LONG).show()
                         onDismiss()
                     }

@@ -453,6 +453,7 @@ fun RowItem(
     extra: String? = null,
     /** Status dot (works / not working / can't play here / not checked), null = no dot. */
     dot: com.nova.iptv.data.StreamCheck.Status? = null,
+    onDoubleClick: (() -> Unit)? = null,
 ) {
     val padV = when (size) { "compact" -> 3.dp; "large" -> 13.dp; else -> 8.dp }
     val logoW = when (size) { "compact" -> 44.dp; "large" -> 76.dp; else -> 56.dp }
@@ -466,6 +467,7 @@ fun RowItem(
             onClick = onClick,
             onFocused = onFocused,
             onLongClick = onLongClick,
+            onDoubleClick = onDoubleClick,
             modifier = Modifier.weight(1f),
             selected = active,
         ) { focused ->

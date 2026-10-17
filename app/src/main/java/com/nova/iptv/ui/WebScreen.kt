@@ -30,8 +30,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -160,6 +166,10 @@ private object WebState {
     @Volatile var tapAt: Long = 0L
     /** When you last opened an address yourself (Go, bookmark, Open with): its redirects are allowed for 15 s. */
     @Volatile var userNavAt: Long = 0L
+    /** Per tab: the pages you actually saw (redirect hops and blocked ad pages are never kept), and where you are. */
+    class Hist { val list = mutableListOf<String>(); var idx = -1; @Volatile var going: String? = null }
+    val hist = HashMap<WebView, Hist>()
+    fun histOf(v: WebView): Hist = hist.getOrPut(v) { Hist() }
     /** When the page being shown was opened (its videos of this visit are "This page"). */
     @Volatile var visitStart: Long = 0L
     /** Tabs opened by ▶ Smart play (a clean video player), and the ones whose video was already offered. */
@@ -193,6 +203,45 @@ private fun clickJs(text: String): String =
 private const val MAX_TABS = 6
 private val SAFE_HOST = Regex("[^A-Za-z0-9.-]")
 private val SAFE_HOST_PORT = Regex("[^A-Za-z0-9.:-]")
+
+/** The page's own name: its main heading, its share title and its window title (cleaned in [pageNameOf]). */
+private const val NAME_JS = "(function(){function t(s){return (s||'').replace(/\\s+/g,' ').trim();}var h=document.querySelector('h1');" +
+    "var o=document.querySelector('meta[property=\"og:title\"]');return JSON.stringify([t(h&&h.innerText),t(o&&o.content),t(document.title)]);})()"
+private val NAME_SPLIT = Regex("\\s+[|–—]\\s+|\\s+-\\s+")
+private val NAME_JUNK = Regex("(?i)\\b(en streaming|streaming|regarder|voir|film complet|gratuit|vostfr|vf|french|full hd|hd|1080p|720p|4k|online|watch|free)\\b")
+private val NAME_EDGES = Regex("^[\\s:|,.\\-–—]+|[\\s:|,.\\-–—]+$")
+private val SLUG_START = Regex("^\\d+[-_]")
+private val MULTI_SPACE = Regex("\\s{2,}")
+private val SLUG_EXT = Regex("\\.(html?|php|aspx?)$", RegexOption.IGNORE_CASE)
+
+/** Cleans a page name: the part that isn't the site's name, without "streaming / VF / HD…" words. */
+private fun cleanName(raw: String, host: String): String {
+    if (raw.isBlank() || raw.length > 160) return ""
+    val site = host.removePrefix("www.").substringBefore('.').lowercase()
+    val parts = raw.split(NAME_SPLIT).map { it.trim() }.filter { it.isNotBlank() && !it.lowercase().contains(site) }
+    val pick = (parts.firstOrNull() ?: raw).replace(NAME_JUNK, " ").replace(MULTI_SPACE, " ").replace(NAME_EDGES, "")
+    return if (pick.length >= 2 && !pick.equals(site, true)) pick else ""
+}
+
+/** The film name from the address: ".../11896-creed-lheritage-de-rocky-balboa.html" → "Creed lheritage de rocky balboa". */
+private fun slugName(url: String): String {
+    val seg = Uri.parse(url).lastPathSegment.orEmpty().replace(SLUG_EXT, "").replace(SLUG_START, "").replace('-', ' ').replace('_', ' ').trim()
+    return if (seg.length >= 3 && seg.any { it.isLetter() }) seg.replaceFirstChar { it.uppercase() } else ""
+}
+
+/** Picks the best name among [h1, share title, window title]. */
+private fun pageNameOf(parts: List<String>, host: String): String {
+    val c = parts.map { cleanName(it, host) }
+    val h1 = c.getOrElse(0) { "" }; val og = c.getOrElse(1) { "" }; val doc = c.getOrElse(2) { "" }
+    // The heading is the film's name when the other titles agree on its first word (otherwise it may be the site's logo).
+    val first = h1.lowercase().substringBefore(' ')
+    return when {
+        h1.isNotBlank() && first.length >= 2 && (og.lowercase().contains(first) || doc.lowercase().contains(first)) -> h1
+        og.isNotBlank() -> og
+        doc.isNotBlank() -> doc
+        else -> h1
+    }
+}
 /** Network errors that mean "your internet line refused this address". */
 private val LINE_ERRORS = setOf(
     WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT, WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_UNKNOWN,
@@ -420,6 +469,8 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     var pendingClick by remember { mutableStateOf<String?>(null) }
     var lastRetry by remember { mutableStateOf("" to 0L) }
     var smart by remember { mutableStateOf<SmartCatch?>(null) }
+    /** The page's real name (read from the page itself when its videos are found). */
+    var pageName by remember { mutableStateOf("") }
     var smartReady by remember { mutableStateOf(false) }
     val defaultUa = remember { WebSettings.getDefaultUserAgent(context) }
 
@@ -461,7 +512,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         WebState.pageUrl = u
         WebState.pageSite = Uri.parse(u).host.orEmpty()
         address = u
-        title = WebState.titles[wv].orEmpty()
+        title = WebState.titles[wv].orEmpty(); pageName = ""
         found.clear(); seen.clear(); blocked = 0; WebState.removed.value = 0
         WebState.visitStart = System.currentTimeMillis()
         canBack = wv.canGoBack()
@@ -500,6 +551,68 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             wv.loadUrl(url, mapOf("Referer" to referer))
         } else if (url != null) go(url)
     }
+
+    // ---- clean history (← / →): only pages that stayed on screen are kept.
+    var histVersion by remember { mutableIntStateOf(0) }
+    fun record(view: WebView, url: String) {
+        if (!url.startsWith("http")) return
+        val h = WebState.histOf(view)
+        val going = h.going
+        if (going != null) {
+            h.going = null
+            val i = h.list.indexOf(going)
+            if (i >= 0) { h.idx = i; if (url != going && h.list.getOrNull(i) != url) h.list[i] = url; histVersion++; return }
+        }
+        if (h.list.getOrNull(h.idx) == url) return
+        while (h.list.size > h.idx + 1) h.list.removeAt(h.list.size - 1)
+        h.list += url; h.idx = h.list.size - 1
+        while (h.list.size > 100) { h.list.removeAt(0); h.idx-- }
+        histVersion++
+    }
+    /** A page is kept once it stays on screen 1.5 s (a redirect hop moves on before that). */
+    fun recordSoon(view: WebView, url: String) {
+        main.postDelayed({ if (view.url == url || WebState.urls[view] == url) record(view, url) }, 1500)
+    }
+    fun histCanBack(): Boolean { val h = WebState.histOf(webView); return h.idx > 0 }
+    fun histCanFwd(): Boolean { val h = WebState.histOf(webView); return h.idx >= 0 && h.idx < h.list.size - 1 }
+    fun histGo(delta: Int) {
+        val h = WebState.histOf(webView)
+        val j = h.idx + delta
+        val target = h.list.getOrNull(j) ?: return
+        h.idx = j; h.going = target; histVersion++
+        showPage = true; address = target
+        WebState.userNavAt = System.currentTimeMillis()
+        webView.loadUrl(target)
+    }
+    /** ← : the previous page you saw; at a tab's first page: back to the tab it came from, or "No earlier page". */
+    fun goBackClean() {
+        when {
+            !showPage && WebState.pageUrl.isNotBlank() -> showPage = true
+            histCanBack() -> histGo(-1)
+            WebState.opener[webView]?.let { it in WebState.tabs } == true -> closeTab(webView)
+            else -> Toast.makeText(context, "No earlier page in this tab", Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun reloadClean() {
+        val cur = WebState.histOf(webView).let { it.list.getOrNull(it.idx) }
+        if (!showPage) { go(address); return }
+        if (cur != null && webView.url != cur) { WebState.userNavAt = System.currentTimeMillis(); webView.loadUrl(cur) } else webView.reload()
+    }
+    var histOpen by remember { mutableStateOf(false) }
+    fun fetchName(view: WebView) {
+        val forUrl = WebState.urls[view].orEmpty()
+        view.evaluateJavascript(NAME_JS) { r ->
+            if (view !== WebState.webView || WebState.urls[view].orEmpty() != forUrl) return@evaluateJavascript
+            val parts = runCatching {
+                val a = org.json.JSONArray(org.json.JSONTokener(r).nextValue() as String)
+                (0 until a.length()).map { a.optString(it) }
+            }.getOrDefault(emptyList())
+            val n = pageNameOf(parts, Uri.parse(forUrl).host.orEmpty())
+            if (n.isNotBlank()) pageName = n
+        }
+    }
+    /** Name for videos of this page: the page's own name, else its title, else the name in its address. */
+    fun bestName(): String = pageName.ifBlank { cleanName(title, WebState.pageSite) }.ifBlank { slugName(WebState.pageUrl) }.ifBlank { title }
 
     /** The clean player refused to work on its own: back to the film page and its own player. */
     fun playerFailed(wv: WebView) {
@@ -632,6 +745,8 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 WebState.pageUrl = url
                 WebState.pageSite = Uri.parse(url).host.orEmpty()
                 WebState.visitStart = System.currentTimeMillis()
+                // A new page: the old page's name is never carried over.
+                title = ""; pageName = ""
                 address = url
                 found.clear()
                 seen.clear()
@@ -639,8 +754,22 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 canBack = view.canGoBack()
             }
 
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                // Pages changed by the site's own scripts (no real reload) are noticed too.
+                val changed = WebState.urls[view] != url
+                WebState.urls[view] = url
+                if (current() && !isReload) {
+                    address = url; WebState.pageUrl = url
+                    // A site that changes page with its own scripts: its name follows the new address.
+                    if (changed) { pageName = ""; main.postDelayed({ if (WebState.urls[view] == url) fetchName(view) }, 1500) }
+                }
+                recordSoon(view, url)
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
                 if (current()) canBack = view.canGoBack()
+                recordSoon(view, url)
+                if (current()) fetchName(view)
                 if (!WebState.frameScript) view.evaluateJavascript(RETRY_JS, null)
                 if (current()) pendingClick?.let { t ->
                     pendingClick = null
@@ -727,14 +856,15 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
 
     BackHandler(enabled = fullView != null) { fullCallback?.onCustomViewHidden(); fullView = null }
     BackHandler(enabled = fullView == null && (listOpen || settingsOpen)) { listOpen = false; settingsOpen = false }
-    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && showPage && canBack) { webView.goBack() }
+    val canBackClean = remember(histVersion, webView, showPage) { histCanBack() || (!showPage && WebState.pageUrl.isNotBlank()) }
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && canBackClean) { goBackClean() }
     // A tab opened from another one: Back at its first page closes it and returns to the tab it came from.
-    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !(showPage && canBack) && WebState.opener[webView]?.let { it in WebState.tabs } == true) {
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !canBackClean && WebState.opener[webView]?.let { it in WebState.tabs } == true) {
         closeTab(webView)
     }
     // At the first page / the bookmarks: Back twice (within 2 s) leaves the Web tab.
     var lastBack by remember { mutableStateOf(0L) }
-    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !(showPage && canBack) && WebState.opener[webView]?.let { it in WebState.tabs } != true) {
+    BackHandler(enabled = fullView == null && !listOpen && !settingsOpen && !canBackClean && WebState.opener[webView]?.let { it in WebState.tabs } != true) {
         val now = System.currentTimeMillis()
         if (now - lastBack < 2000) onLeave()
         else { lastBack = now; Toast.makeText(context, "Press Back again to leave Web", Toast.LENGTH_SHORT).show() }
@@ -754,8 +884,11 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     }
     // Every video found is also kept in 🎬 Grabbed (with the page's title and the time).
     LaunchedEffect(Unit) {
-        androidx.compose.runtime.snapshotFlow { found.toList() to title }.collect { (l, t) ->
-            if (l.isNotEmpty()) Grabbed.merge(WebState.pageUrl, WebState.visitStart, l, t.substringBefore(" » "))
+        androidx.compose.runtime.snapshotFlow { Triple(found.toList(), title, pageName) }.collect { (l, _, _) ->
+            if (l.isNotEmpty()) {
+                if (pageName.isBlank()) WebState.webView?.let { fetchName(it) }
+                Grabbed.merge(WebState.pageUrl, WebState.visitStart, l, bestName())
+            }
         }
     }
     // ▶ Smart play: 2–3 s check, then ask (10 s → open the clean player) or open at once.
@@ -803,7 +936,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         )
         CookieManager.getInstance().getCookie(v.url)?.let { headers["Cookie"] = it }
         app.storage.setLinkHeaders(host, app.storage.linkHeaders(host) + headers.filterValues { it.isNotBlank() })
-        val name = v.title.ifBlank { title }.ifBlank { pageUri.host ?: "Video" }.substringBefore(" » ").let { if (v.height > 0) "$it (${v.height}p)" else it }
+        val name = v.title.ifBlank { bestName() }.ifBlank { pageUri.host ?: "Video" }.let { if (v.height > 0) "$it (${v.height}p)" else it }
         when (what) {
             0 -> LinkActions.play(context, v.url, name)
             1 -> LinkActions.downloadAndWatch(context, v.url, name)
@@ -829,27 +962,26 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         Column(Modifier.fillMaxSize()) {
             // ---- row 2: the web address
             if (!hideAddress) {
-                Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 4.dp)) {
+                // The address box, then ⟳ · Paste · Go as their own buttons (one press → on the remote reaches them).
+                Row(
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     TvTextField(
                         value = address, onValueChange = { address = it }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f),
                         placeholder = { Text("Search or type a web address") },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                FocusBox(onClick = { if (showPage) webView.reload() else go(address) }, shape = RoundedCornerShape(14.dp)) {
-                                    Text("⟳", fontSize = 15.sp, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
-                                }
-                                PasteButton(small = true) { go(it) }
-                                FocusBox(onClick = { go(address) }, modifier = Modifier.padding(end = 4.dp).background(Color(0xFF2EE66B), RoundedCornerShape(14.dp)),
-                                    shape = RoundedCornerShape(14.dp)) {
-                                    Text("Go ›", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B),
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
-                                }
-                            }
-                        },
                         onSubmit = { go(address) },
                     )
+                    FocusBox(onClick = { reloadClean() }, modifier = Modifier.background(Color(0xFF262B33), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+                        Text("⟳", fontSize = 18.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
+                    }
+                    PasteButton { go(it) }
+                    FocusBox(onClick = { go(address) }, modifier = Modifier.background(Color(0xFF2EE66B), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+                        Text("Go ›", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+                    }
                 }
             }
             // ---- row 3: the buttons
@@ -858,8 +990,10 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                SmallButton("←", { if (showPage && canBack) webView.goBack() else if (showPage) showPage = false })
-                SmallButton("→", { if (webView.canGoForward()) { showPage = true; webView.goForward() } })
+                FocusBox(onClick = { goBackClean() }, onLongClick = { histOpen = true }, shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 2.dp)) {
+                    Text("←", fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                }
+                SmallButton("→", { if (histCanFwd()) histGo(1) else Toast.makeText(context, "No next page", Toast.LENGTH_SHORT).show() })
                 val marked = bookmarks.any { it.url == WebState.pageUrl }
                 SmallButton(if (marked) "★" else "☆", {
                     if (showPage && WebState.pageUrl.isNotBlank()) {
@@ -887,11 +1021,14 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             }
             Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
                 // The web page only takes its own space (it is not shown at all on the bookmarks page).
-                if (showPage) key(webView) {
-                    AndroidView(
-                        factory = { webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
-                        modifier = Modifier.fillMaxSize().clipToBounds(),
-                    )
+                if (showPage) Row(Modifier.fillMaxSize()) {
+                    key(webView) {
+                        AndroidView(
+                            factory = { webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
+                            modifier = Modifier.weight(1f).fillMaxSize().clipToBounds(),
+                        )
+                    }
+                    WebScrollBar(webView)
                 }
                 if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { pickTree.launch(Uri.parse(NOVA_FOLDER)) },
                     canEdit = { f -> if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f() })
@@ -918,7 +1055,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                                 ).padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                             Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                                Text(v.title.ifBlank { title }.ifBlank { "Video" }.substringBefore(" » "), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(v.title.ifBlank { bestName() }.ifBlank { "Video" }, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
                                     "🕒 " + (if (v.at > 0) df.format(java.util.Date(v.at)) else "now") + " · " +
                                         (if (v.protectedDrm) "only on the website" else v.info.ifBlank { v.kind }),
@@ -998,7 +1135,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                         .border(2.dp, Color(0xFF2EE66B), RoundedCornerShape(14.dp)).padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("[${v.quality}] " + v.title.ifBlank { title }.ifBlank { "Video" }.substringBefore(" » "), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("[${v.quality}] " + v.title.ifBlank { bestName() }.ifBlank { "Video" }, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Text((v.info.ifBlank { v.kind }) + " · from " + (Uri.parse(v.page).host ?: ""), fontSize = 11.sp, color = Color(0xFFAAAAAA))
                     listOf("▶  Play now", "⬇▶  Download & watch", "⬇  Download only").forEachIndexed { i, label ->
                         FocusBox(onClick = { choose = null; listOpen = false; act(v, i) }, modifier = Modifier.fillMaxWidth()) {
@@ -1124,6 +1261,33 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     FocusBox(onClick = { askTab = null }, modifier = Modifier.fillMaxWidth()) {
                         Text("✕  Cancel", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                     }
+                }
+            }
+        }
+
+        // ---- long-press ←: this tab's history
+        if (histOpen) {
+            val h = WebState.histOf(webView)
+            androidx.compose.ui.window.Dialog(onDismissRequest = { histOpen = false }) {
+                Column(
+                    Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp)).padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("History of this tab", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Redirect pages and blocked ad pages are not kept.", fontSize = 11.sp, color = Color(0xFF999999))
+                    if (h.list.isEmpty()) Text("Nothing yet.", fontSize = 13.sp)
+                    LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                        itemsIndexed(h.list.toList()) { i, u ->
+                            FocusBox(onClick = { histOpen = false; histGo(i - h.idx) }, modifier = Modifier.fillMaxWidth()) {
+                                Text("${i + 1} · " + (Uri.parse(u).host ?: "") + (Uri.parse(u).path?.takeIf { it.length > 1 }?.let { " " + it.take(60) } ?: "") +
+                                    if (i == h.idx) "   ◀ you are here" else "",
+                                    fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    color = if (i == h.idx) Color(0xFF2EE66B) else Color.Unspecified,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp))
+                            }
+                        }
+                    }
+                    SmallButton("✕ Close", { histOpen = false })
                 }
             }
         }
@@ -1557,5 +1721,55 @@ private fun ResetBrowserDialog(onClose: () -> Unit) {
             Text("🔒 Asks for the PIN if one is set. A copy of the current browser file is kept in Download/NovaIPTV/Browser first.",
                 fontSize = 11.sp, color = Color(0xFF888888))
         }
+    }
+}
+
+/**
+ * A vertical scroll bar beside the page, easy with a normal remote: ⤒ top · ▲ page up (hold = keeps going) ·
+ * the position · ▼ page down · ⤓ bottom. On a touch screen the position bar can also be dragged.
+ */
+@Composable
+private fun WebScrollBar(web: WebView) {
+    var progress by remember { mutableStateOf(0f) }
+    var scrollable by remember { mutableStateOf(true) }
+    LaunchedEffect(web) {
+        while (true) {
+            @Suppress("DEPRECATION")
+            val range = web.contentHeight * web.scale - web.height
+            scrollable = range > 8
+            progress = if (range > 0) (web.scrollY / range).coerceIn(0f, 1f) else 0f
+            kotlinx.coroutines.delay(300)
+        }
+    }
+    fun by(fraction: Float) {
+        // Works for pages that scroll themselves and for sites that scroll an inner box.
+        web.evaluateJavascript("(function(){var d=innerHeight*$fraction;var e=document.scrollingElement||document.documentElement;" +
+            "var b=e.scrollHeight>innerHeight+8?null:[].slice.call(document.querySelectorAll('div,main,section')).find(function(x){var s=getComputedStyle(x);" +
+            "return (s.overflowY=='auto'||s.overflowY=='scroll')&&x.scrollHeight>x.clientHeight+8;});if(b)b.scrollBy(0,d);else window.scrollBy(0,d);})()", null)
+    }
+    fun to(p: Float) {
+        web.evaluateJavascript("(function(){var e=document.scrollingElement||document.documentElement;window.scrollTo(0,(e.scrollHeight-innerHeight)*$p);})()", null)
+    }
+    if (!scrollable) return
+    Column(
+        Modifier.fillMaxHeight().widthIn(min = 46.dp).background(MaterialTheme.colorScheme.surface).padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        SmallButton("⤒", { to(0f) })
+        RepeatButton("▲") { by(-0.85f) }
+        BoxWithConstraints(
+            Modifier.weight(1f).width(14.dp).background(Color(0xFF262B33), RoundedCornerShape(7.dp))
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures { change, _ -> to((change.position.y / size.height).coerceIn(0f, 1f)) }
+                },
+        ) {
+            val thumb = 44.dp
+            Box(
+                Modifier.padding(top = (maxHeight - thumb) * progress).width(14.dp).height(thumb)
+                    .background(Color(0xFF2EE66B), RoundedCornerShape(7.dp)),
+            )
+        }
+        RepeatButton("▼") { by(0.85f) }
+        SmallButton("⤓", { to(1f) })
     }
 }

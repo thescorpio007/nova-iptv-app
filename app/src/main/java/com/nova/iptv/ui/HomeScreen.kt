@@ -122,6 +122,8 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
         MovieDetailScreen(vm, md, onPlay)
         return
     }
+    val hideAsk by vm.hideAsk.collectAsStateWithLifecycle()
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Box(Modifier.onFocusChanged { tabsHaveFocus = it.hasFocus }) { TopBar(vm, tab, edit, isTv, tabFocus) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -142,6 +144,12 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
                 }
             }
         }
+    }
+    // Double click on a group / live channel: "Hide …?" — the remote starts on No, and it answers No after 10 s.
+    hideAsk?.let { a ->
+        LaunchedEffect(a) { kotlinx.coroutines.delay(10_000); if (vm.hideAsk.value === a) vm.hideAsk.value = null }
+        ConfirmOverlay(a.title, a.text + "  (No in 10 s)", "Yes, hide", onYes = { vm.hideAsk.value = null; a.onYes() }, onDismiss = { vm.hideAsk.value = null })
+    }
     }
 }
 
@@ -577,6 +585,15 @@ private fun <T> GroupPanel(
                         moving = edit && moving == c.key,
                         picked = edit && picked == c.key,
                         onLongClick = if (edit) ({ vm.togglePicked(c.key) }) else null,
+                        onDoubleClick = if (edit || hidden) null else ({
+                            vm.hideAsk.value = MainViewModel.HideAsk(
+                                "Hide the group “${c.name}”?",
+                                "Its content disappears from this list. Show it again any time in Settings → Hidden items.",
+                            ) {
+                                vm.landAfterHide(sec.groups, c, "g") { it.key }
+                                vm.toggleGroupHidden(z, c)
+                            }
+                        }),
                         rowModifier = lineMod.then(if (edit && picked == c.key) pickedKeys(move) { vm.togglePicked(c.key) } else Modifier),
                         controls = if (edit && lineControls) {
                             {
@@ -616,6 +633,7 @@ private fun GroupRow(
     onLongClick: (() -> Unit)? = null,
     rowModifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
+    onDoubleClick: (() -> Unit)? = null,
 ) {
     val ownFocus = remember { FocusRequester() }
     Row(
@@ -625,7 +643,7 @@ private fun GroupRow(
     ) {
         // The open group: a green bar and green text (not a full frame, so it never looks like a second highlight).
         FocusBox(
-            onClick = onClick, onLongClick = onLongClick, selected = false, onFocused = onFocused,
+            onClick = onClick, onLongClick = onLongClick, onDoubleClick = onDoubleClick, selected = false, onFocused = onFocused,
             // Always the same kind of modifier (only the requester object changes): adding / removing it on the
             // focused row when its group opened made the row lose the remote's highlight.
             modifier = Modifier.weight(1f).focusRequester(focusRequester ?: ownFocus),
@@ -776,6 +794,15 @@ private fun LiveList(vm: MainViewModel, onPlay: PlayFn, wide: Boolean) {
             onClick = { if (!edit) onPlay(vm.liveItems(shown), index) else vm.editActiveKey.value = "i:${ch.key}" },
             onFocused = if (wide && !edit) ({ vm.focusChannel(ch) }) else null,
             onLongClick = { if (edit) vm.togglePicked(ch.key) else vm.toggleFavorite(saved) },
+            onDoubleClick = if (edit || hidden || selected == MainViewModel.FAV) null else ({
+                vm.hideAsk.value = MainViewModel.HideAsk(
+                    "Hide the channel “${ch.name}”?",
+                    "Only this channel disappears from Live TV. Show it again any time in Settings → Hidden items.",
+                ) {
+                    vm.landAfterHide(shown, ch, "i") { it.key }
+                    vm.toggleItemHidden(z, ch)
+                }
+            }),
             modifier = (if (index == 0) Modifier.focusRequester(firstChannel) else Modifier).then(lineMod).alpha(if (hidden) 0.45f else 1f)
                 .then(if (edit && (moving == ch.key || picked == ch.key)) Modifier.border(if (picked == ch.key) 3.dp else 2.dp, MovingYellow, RoundedCornerShape(12.dp)) else Modifier)
                 .then(if (edit && picked == ch.key) pickedKeys({ d -> keepInPlace(keys[index]) { vm.moveItem(z, shown, ch, d) } }) { vm.togglePicked(ch.key) } else Modifier),

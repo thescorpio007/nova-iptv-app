@@ -198,6 +198,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if path == "/web/hop.html":
+            # A redirect page (like a site's old address): sends you on at once.
+            body = ("<html><head><title>Hop</title></head><body>moving…"
+                    "<script>setTimeout(function(){location.replace('/web/film2.html')},150);</script></body></html>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if path == "/web/servers.html":
             # A film page with server buttons: a busy flag that clears only when the player box finishes loading.
             body = ("<html><head><title>Servers</title><meta name='viewport' content='width=device-width'></head>"

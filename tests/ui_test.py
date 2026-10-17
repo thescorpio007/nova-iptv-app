@@ -1395,6 +1395,19 @@ def web_with_server():
     tap("Server B", 10)
     check("Web: the next server works without refreshing", find("Film Two page", 20) is not None)
     shot("web-next-server")
+    # Clean history: a redirect page is skipped by ←, ⟳ reloads the page you see.
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/test.html -n {PKG}/.ui.OpenWithActivity")
+    find("Nova Web Test page", 30)
+    time.sleep(3)
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/hop.html -n {PKG}/.ui.OpenWithActivity")
+    check("Web: the redirect page leads to the film page", find("Film Two page", 30) is not None)
+    time.sleep(3)
+    tap("←", 10, exact=True)
+    check("Web: ← skips the redirect page and goes back to the page before", find("Nova Web Test page", 20) is not None)
+    shot("web-back-clean")
+    tap("⟳", 10, exact=True)
+    time.sleep(3)
+    check("Web: ⟳ reloads the page you see", find("Nova Web Test page", 20) is not None)
 
 
 if os.environ.get("NOVA_MODE") == "web":

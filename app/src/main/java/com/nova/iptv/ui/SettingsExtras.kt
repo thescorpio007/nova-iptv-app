@@ -432,11 +432,12 @@ private fun HiddenItemsDialog(vm: MainViewModel, entries: List<HiddenEntry>, onD
 fun BackupSettings(vm: MainViewModel) {
     val context = LocalContext.current
     var savePassword by remember { mutableStateOf<String?>(null) }
+    var saveKind by remember { mutableStateOf("all") }
     var showSave by remember { mutableStateOf(false) }
     val saveTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if (uri != null) {
             val ok = runCatching {
-                context.contentResolver.openOutputStream(uri)?.use { it.write(vm.backupText(savePassword).toByteArray()) }
+                context.contentResolver.openOutputStream(uri)?.use { it.write(vm.backupText(savePassword, saveKind).toByteArray()) }
             }.isSuccess
             Toast.makeText(context, if (ok) "Backup saved" else "Could not save the backup", Toast.LENGTH_LONG).show()
         }
@@ -444,8 +445,8 @@ fun BackupSettings(vm: MainViewModel) {
 
     SettingsCard("Backup & restore") {
         Hint(
-            "A .bak file keeps all servers (with passwords), favorites, hidden items, order and settings. " +
-                "Keep it private, or protect it with a password. Restoring replaces everything currently in the app."
+            "Choose 📦 Everything, 📺 IPTV only (servers with passwords, favorites, hidden items, order, settings) or 🌐 Web browser only. " +
+                "Keep it private, or protect it with a password. Restoring replaces only the part(s) you choose."
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { showSave = true }) { Text("Save backup") }
@@ -455,7 +456,7 @@ fun BackupSettings(vm: MainViewModel) {
     }
     if (showSave) SaveBackupDialog(
         vm,
-        onSaveTo = { pw -> savePassword = pw; saveTo.launch(vm.backupFileName()) },
+        onSaveTo = { pw, kind -> savePassword = pw; saveKind = kind; saveTo.launch(vm.backupFileName(kind)) },
         onDismiss = { showSave = false },
     )
 }

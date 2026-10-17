@@ -221,14 +221,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         { a, c -> api.movies(a, c) },
         { s -> Movie(s.accountId, s.id, s.name, s.icon, "", null, s.extension ?: "mp4", year = XtreamApi.yearFromName(s.name)) },
         { SortInfo(it.added, it.year, it.rating?.toDoubleOrNull(), 0) }, { it.categoryId },
-        hasNew = true,
+        hasNew = false,
     )
     val series = Zone<Series>(
         ContentType.SERIES, "series", ItemType.SERIES, { it.key }, { it.name },
         { a, c -> api.series(a, c) },
         { s -> Series(s.accountId, s.id, s.name, s.icon, "", null, null, year = XtreamApi.yearFromName(s.name)) },
         { SortInfo(it.added, it.year, it.rating?.toDoubleOrNull(), 0) }, { it.categoryId },
-        hasNew = true,
+        hasNew = false,
     )
 
     val seriesDetail = MutableStateFlow<SeriesDetailState?>(null)
@@ -268,6 +268,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val welcomeForm = MutableStateFlow(false)
     /** No server yet: Nova used as a web browser (Web tab with the welcome row). */
     val webOnly = MutableStateFlow(false)
+    /** "Hide …?" after a double click on a group or a live channel (answered No by itself after 10 s). */
+    data class HideAsk(val title: String, val text: String, val onYes: () -> Unit)
+    val hideAsk = MutableStateFlow<HideAsk?>(null)
     /** No server yet: the ⬇ Downloads screen is open (films downloaded from the web). */
     val downloadsOnly = MutableStateFlow(false)
 
@@ -1607,8 +1610,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun backupDir() = Folders.keepDir(nova, "Backups")
 
-    fun backupFileName(): String =
-        "NovaIPTV-" + java.text.SimpleDateFormat("yyyy-MM-dd-HHmm", java.util.Locale.US).format(java.util.Date()) + ".bak"
+    /** [kind]: "all" (everything), "iptv" (servers & the app's settings) or "web" (the web browser). */
+    fun backupFileName(kind: String = "all"): String =
+        "NovaIPTV-$kind-" + java.text.SimpleDateFormat("yyyy-MM-dd-HHmm", java.util.Locale.US).format(java.util.Date()) + ".bak"
 
     fun listsFileName(): String =
         "Nova-" + java.text.SimpleDateFormat("yyyy-MM-dd_HHmm", java.util.Locale.US).format(java.util.Date()) + "_list.bakL"
@@ -1658,14 +1662,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Live TV: ▶ from the groups asks the channel list to put the remote on its first channel. */
     val liveTopAsk = MutableStateFlow(0)
 
-    fun backupText(password: String? = null): String =
-        storage.exportBackup().let { if (password.isNullOrEmpty()) it else com.nova.iptv.data.NovaCrypto.encrypt(it, password) }
+    fun backupText(password: String? = null, kind: String = "all"): String {
+        val web = runCatching { org.json.JSONObject(com.nova.iptv.data.WebStore.toText()) }.getOrNull()
+        val text = when (kind) {
+            "web" -> org.json.JSONObject().put("app", "NovaIPTV").put("kind", "web").put("web", web).toString()
+            "iptv" -> org.json.JSONObject(storage.exportBackup()).put("kind", "iptv").toString()
+            else -> org.json.JSONObject(storage.exportBackup()).put("kind", "all").put("web", web).toString()
+        }
+        return if (password.isNullOrEmpty()) text else com.nova.iptv.data.NovaCrypto.encrypt(text, password)
+    }
+
+    /** What a (plain) backup holds: "all", "iptv" or "web" (older backups: "iptv"). */
+    fun backupKind(text: String): String = runCatching {
+        val o = org.json.JSONObject(text)
+        val k = o.optString("kind")
+        when {
+            k == "web" || (o.optJSONObject("prefs") == null && o.has("web")) -> "web"
+            o.has("web") -> "all"
+            else -> "iptv"
+        }
+    }.getOrDefault("iptv")
 
     /** Saves a .bak file in the Backups folder and returns it (protected when [password] is given). */
-    fun saveBackup(password: String? = null): File {
+    fun saveBackup(password: String? = null, kind: String = "all"): File {
         val dir = backupDir()
-        val file = File(dir, backupFileName())
-        file.writeText(backupText(password))
+        val file = File(dir, backupFileName(kind))
+        file.writeText(backupText(password, kind))
         android.util.Log.i("NovaTest", "BACKUP saved ${if (password.isNullOrEmpty()) "" else "(password-protected) "}${file.name}")
         return file
     }
@@ -1692,8 +1714,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?.sortedByDescending { it.lastModified() }
             .orEmpty()
 
-    /** Replaces everything with the backup's content and reloads the app. */
-    fun restoreBackup(text: String) {
+    /** Restores [part] ("all", "iptv" or "web") of a backup: only that part is replaced. */
+    fun restoreBackup(text: String, part: String = "all") {
+        val kind = backupKind(text)
+        if (part != "iptv" && kind != "iptv") {
+            org.json.JSONObject(text).optJSONObject("web")?.let { w -> com.nova.iptv.data.WebStore.apply(w.toString()) }
+        }
+        if (part == "web" || kind == "web") { android.util.Log.i("NovaTest", "BACKUP restored (web browser)"); return }
         storage.importBackup(text)
         com.nova.iptv.data.Locations.init(getApplication(), storage) // older backups: internal storage, rating sort, 100 MB
         Folders.customRoot = storage.storageRoot
