@@ -1,6 +1,6 @@
 package com.nova.iptv.ui
 
-import org.json.JSONObject as BackupJson
+import BackupJson as BackupJson
 import android.app.Application
 import android.net.Uri
 import androidx.annotation.OptIn
@@ -1663,18 +1663,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val liveTopAsk = MutableStateFlow(0)
 
     fun backupText(password: String? = null, kind: String = "all"): String {
-        val web = runCatching { org.json.JSONObject(com.nova.iptv.data.WebStore.toText()) }.getOrNull()
+        val web = runCatching { BackupJson(com.nova.iptv.data.WebStore.toText()) }.getOrNull()
         val text = when (kind) {
-            "web" -> org.json.JSONObject().put("app", "NovaIPTV").put("kind", "web").put("web", web).toString()
-            "iptv" -> org.json.JSONObject(storage.exportBackup()).put("kind", "iptv").toString()
-            else -> org.json.JSONObject(storage.exportBackup()).put("kind", "all").put("web", web).toString()
+            "web" -> BackupJson().put("app", "NovaIPTV").put("kind", "web").put("web", web).toString()
+            "iptv" -> BackupJson(storage.exportBackup()).put("kind", "iptv").toString()
+            else -> BackupJson(storage.exportBackup()).put("kind", "all").put("web", web).toString()
         }
         return if (password.isNullOrEmpty()) text else com.nova.iptv.data.NovaCrypto.encrypt(text, password)
     }
 
     /** What a (plain) backup holds: "all", "iptv" or "web" (older backups: "iptv"). */
     fun backupKind(text: String): String = runCatching {
-        val o = org.json.JSONObject(text)
+        val o = BackupJson(text)
         val k = o.optString("kind")
         when {
             k == "web" || (o.optJSONObject("prefs") == null && o.has("web")) -> "web"
@@ -1718,7 +1718,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun restoreBackup(text: String, part: String = "all") {
         val kind = backupKind(text)
         if (part != "iptv" && kind != "iptv") {
-            org.json.JSONObject(text).optJSONObject("web")?.let { w -> com.nova.iptv.data.WebStore.apply(w.toString()) }
+            BackupJson(text).optJSONObject("web")?.let { w -> com.nova.iptv.data.WebStore.apply(w.toString()) }
         }
         if (part == "web" || kind == "web") { android.util.Log.i("NovaTest", "BACKUP restored (web browser)"); return }
         storage.importBackup(text)
