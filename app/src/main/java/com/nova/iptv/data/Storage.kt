@@ -432,8 +432,15 @@ class Storage(context: Context) {
         get() = prefs.getInt("dl_conn_servers", 1)
         set(value) = prefs.edit().putInt("dl_conn_servers", value).apply()
     var dlConnLinks: Int
-        get() = prefs.getInt("dl_conn_links", 4)
+        get() = prefs.getInt("dl_conn_links", 8)
         set(value) = prefs.edit().putInt("dl_conn_links", value).apply()
+    /** Once: the old default (4 connections for other links) becomes the new default 8. */
+    fun migrateLinkConnections() {
+        if (prefs.getBoolean("dl_conn_links_v8", false)) return
+        val e = prefs.edit().putBoolean("dl_conn_links_v8", true)
+        if (prefs.getInt("dl_conn_links", 4) == 4) e.putInt("dl_conn_links", 8)
+        e.apply()
+    }
     var dlSpeedServers: Int
         get() = prefs.getInt("dl_speed_servers", 0)
         set(value) = prefs.edit().putInt("dl_speed_servers", value).apply()
