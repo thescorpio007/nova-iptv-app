@@ -125,7 +125,9 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
     val hideAsk by vm.hideAsk.collectAsStateWithLifecycle()
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Box(Modifier.onFocusChanged { tabsHaveFocus = it.hasFocus }) { TopBar(vm, tab, edit, isTv, tabFocus) }
+        val webCompact by vm.webCompact.collectAsStateWithLifecycle()
+        // Web on a phone turned sideways: the Web tab shows its own thin row instead of the top bar.
+        if (!(tab == Tab.WEB && webCompact)) Box(Modifier.onFocusChanged { tabsHaveFocus = it.hasFocus }) { TopBar(vm, tab, edit, isTv, tabFocus) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val d = detail
             if (d != null) {

@@ -255,8 +255,11 @@ fun WelcomeTopRow(selectedWeb: Boolean, onLive: () -> Unit, onWeb: () -> Unit, l
 @Composable
 fun WebOnlyScreen(vm: MainViewModel) {
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0E12))) {
-        WelcomeTopRow(selectedWeb = true, onLive = { vm.webOnly.value = false }, onWeb = {})
-        NoServerDownloadsRow(vm, selected = false)
+        val webCompact by vm.webCompact.collectAsStateWithLifecycle()
+        if (!webCompact) {
+            WelcomeTopRow(selectedWeb = true, onLive = { vm.webOnly.value = false }, onWeb = {})
+            NoServerDownloadsRow(vm, selected = false)
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) { WebScreen(vm, onLeave = { vm.webOnly.value = false }) }
     }
 }

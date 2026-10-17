@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
@@ -185,6 +186,10 @@ private data class SmartCatch(val url: String, val host: String, val name: Strin
  * does not change within 3 s, Nova is told (it then reloads the page and taps the same button again).
  */
 private const val RETRY_JS = "(function(){try{if(window.top!==window||window.__novaRetry)return;window.__novaRetry=1;var N=window.NovaFilters;if(!N)return;" +
+    // The scrolling panel / list you touched last (the scroll bar ▲ ▼ moves that one).
+    "function lastBox(ev){var x=ev.target;for(;x&&x!==document.body&&x.nodeType==1;x=x.parentElement){var s=getComputedStyle(x);" +
+    "if((s.overflowY=='auto'||s.overflowY=='scroll')&&x.scrollHeight>x.clientHeight+8){window.__novaLastScroll=x;return;}}window.__novaLastScroll=null;}" +
+    "document.addEventListener('touchstart',lastBox,true);document.addEventListener('focusin',lastBox,true);" +
     "function txt(e){return (e.innerText||e.textContent||'').trim();}" +
     "function srcs(){return [].map.call(document.querySelectorAll('iframe'),function(f){return f.src}).join('|');}" +
     "function big(){return [].some.call(document.querySelectorAll('iframe'),function(f){var r=f.getBoundingClientRect();return r.width>200&&r.height>100;});}" +
@@ -464,6 +469,15 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     var tabsOpen by remember { mutableStateOf(false) }
     var askTab by remember { mutableStateOf<String?>(null) }
     var shieldOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
+    // Phone turned sideways: one thin row instead of Nova's three rows; it slides away while scrolling down.
+    val conf = androidx.compose.ui.platform.LocalConfiguration.current
+    val compact = conf.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && conf.screenHeightDp < 520
+    var barsHidden by remember { mutableStateOf(false) }
+    LaunchedEffect(compact) { vm.webCompact.value = compact; if (!compact) barsHidden = false }
+    LaunchedEffect(barsHidden) { vm.webBarsHidden.value = barsHidden }
+    DisposableEffect(Unit) { onDispose { vm.webCompact.value = false; vm.webBarsHidden.value = false } }
+    val compactNow by androidx.compose.runtime.rememberUpdatedState(compact)
     val hideOff by WebStore.hideOffSites.collectAsStateWithLifecycle()
     /** "Retry buttons that don't react": the button to tap again after the reload. */
     var pendingClick by remember { mutableStateOf<String?>(null) }
@@ -847,6 +861,17 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         }
     }
     attachRef = { attach(it) }
+    LaunchedEffect(webView) {
+        webView.setOnScrollChangeListener { _, _, y, _, oldY ->
+            if (!compactNow) return@setOnScrollChangeListener
+            if (y - oldY > 12 && y > 60) barsHidden = true else if (oldY - y > 12) barsHidden = false
+        }
+        // Remote: ▲ at the top of the page brings the bars back.
+        webView.setOnKeyListener { v, code, e ->
+            if (e.action == android.view.KeyEvent.ACTION_DOWN && code == android.view.KeyEvent.KEYCODE_DPAD_UP && v.scrollY == 0 && barsHidden) barsHidden = false
+            false
+        }
+    }
     DisposableEffect(Unit) {
         WebState.tabs.toList().forEach { attach(it) }
         onDispose {
@@ -960,74 +985,147 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     val hideAddress = WebStore.flag("hideAddress") && kids != "off" && !PinGate.unlocked(hasPin)
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
+            if (compact) {
+                // Phone sideways: ONE thin row (zone icons · address · ⟳ ← → 🎬 🛡 · ⋯), hidden while scrolling down.
+                if (!barsHidden) Row(
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("Nova", color = Color(0xFF2EE66B), fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.padding(end = 2.dp))
+                    listOf(Tab.LIVE to "📺", Tab.FILMS to "🎬", Tab.SERIES to "🎞").forEach { (t, icon) ->
+                        FocusBox(onClick = { if (vm.accounts.value.isEmpty()) onLeave() else vm.setTab(t) }, shape = RoundedCornerShape(10.dp)) {
+                            Text(icon, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 3.dp))
+                        }
+                    }
+                    Text("🌐", fontSize = 14.sp, modifier = Modifier.background(Color(0xFF2EE66B), RoundedCornerShape(10.dp)).padding(horizontal = 7.dp, vertical = 2.dp))
+                    if (!hideAddress) Box(Modifier.weight(1f)) {
+                        TvTextField(
+                            value = address, onValueChange = { address = it }, singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Web address", maxLines = 1) },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                            onSubmit = { go(address) },
+                        )
+                    } else Spacer(Modifier.weight(1f))
+                    FocusBox(
+                        onClick = { reloadClean() },
+                        modifier = Modifier.background(Color(0x212EE66B), RoundedCornerShape(12.dp)).border(1.dp, Color(0x8C2EE66B), RoundedCornerShape(12.dp)),
+                        shape = RoundedCornerShape(12.dp),
+                    ) { Text("⟳", fontSize = 15.sp, color = Color(0xFF2EE66B), maxLines = 1, softWrap = false, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) }
+                    FocusBox(onClick = { goBackClean() }, onLongClick = { histOpen = true }, shape = RoundedCornerShape(12.dp)) {
+                        Text("←", fontSize = 14.sp, modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
+                    }
+                    FocusBox(onClick = { if (histCanFwd()) histGo(1) else Toast.makeText(context, "No next page", Toast.LENGTH_SHORT).show() }, shape = RoundedCornerShape(12.dp)) {
+                        Text("→", fontSize = 14.sp, modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
+                    }
+                    FocusBox(onClick = { listOpen = !listOpen }, shape = RoundedCornerShape(12.dp)) {
+                        Text("🎬 ${found.size}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (found.isNotEmpty()) Color(0xFF00210B) else Color.White, maxLines = 1,
+                            modifier = Modifier.background(if (found.isNotEmpty()) Color(0xFF2EE66B) else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 7.dp, vertical = 3.dp))
+                    }
+                    FocusBox(onClick = { shieldOpen = true }, shape = RoundedCornerShape(12.dp)) {
+                        Text(if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}", fontSize = 12.sp, color = Color(0xFFBFF5D3), maxLines = 1,
+                            modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(12.dp)).padding(horizontal = 7.dp, vertical = 3.dp))
+                    }
+                    Box {
+                        FocusBox(onClick = { moreOpen = true }, shape = RoundedCornerShape(12.dp)) {
+                            Text("⋯", fontSize = 15.sp, modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(horizontal = 9.dp, vertical = 2.dp))
+                        }
+                        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                        androidx.compose.material3.DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                            val marked = bookmarks.any { it.url == WebState.pageUrl }
+                            androidx.compose.material3.DropdownMenuItem(text = { Text(if (marked) "★ Bookmarked" else "☆ Bookmark this page") }, onClick = {
+                                moreOpen = false
+                                if (showPage && WebState.pageUrl.isNotBlank()) {
+                                    if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { WebStore.toggleBookmark(title, WebState.pageUrl) }
+                                    else WebStore.toggleBookmark(title, WebState.pageUrl)
+                                }
+                            })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("★ Bookmarks list") }, onClick = { moreOpen = false; showPage = false; listOpen = false })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("▢ Tabs (${WebState.tabs.size})") }, onClick = { moreOpen = false; tabsOpen = true })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("📋 Paste & go") }, onClick = {
+                                moreOpen = false
+                                clipboard.getText()?.text?.trim()?.takeIf { it.isNotEmpty() }?.let { go(it) }
+                                    ?: Toast.makeText(context, "Nothing copied yet", Toast.LENGTH_SHORT).show()
+                            })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("Go › (open the address)") }, onClick = { moreOpen = false; go(address) })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("⚙ Browser settings") }, onClick = {
+                                moreOpen = false
+                                if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { settingsOpen = true } else settingsOpen = true
+                            })
+                        }
+                    }
+                }
+            } else {
             // ---- row 2: the web address
-            if (!hideAddress) {
-                // The address box, then ⟳ · Paste · Go as their own buttons (one press → on the remote reaches them).
-                // The buttons get their room first (never wrapped); the address box takes what is left.
-                androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
-                    val narrow = maxWidth < 600.dp
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        // TvTextField puts its modifier on the inner field: the weight goes on this box instead.
-                        Box(Modifier.weight(1f)) {
-                            TvTextField(
-                                value = address, onValueChange = { address = it }, singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                placeholder = { Text("Search or type a web address", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                                onSubmit = { go(address) },
-                            )
-                        }
-                        FocusBox(
-                            onClick = { reloadClean() },
-                            modifier = Modifier.background(Color(0x212EE66B), RoundedCornerShape(14.dp)).border(1.dp, Color(0x8C2EE66B), RoundedCornerShape(14.dp)),
-                            shape = RoundedCornerShape(14.dp),
+                if (!hideAddress) {
+                    // The address box, then ⟳ · Paste · Go as their own buttons (one press → on the remote reaches them).
+                    // The buttons get their room first (never wrapped); the address box takes what is left.
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+                        val narrow = maxWidth < 600.dp
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            Text("⟳", fontSize = 18.sp, color = Color(0xFF2EE66B), maxLines = 1, softWrap = false,
-                                modifier = Modifier.padding(horizontal = if (narrow) 10.dp else 12.dp, vertical = 6.dp))
-                        }
-                        PasteButton(iconOnly = narrow) { go(it) }
-                        FocusBox(onClick = { go(address) }, modifier = Modifier.background(Color(0xFF2EE66B), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
-                            Text("Go ›", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B), maxLines = 1, softWrap = false,
-                                modifier = Modifier.padding(horizontal = if (narrow) 10.dp else 14.dp, vertical = 7.dp))
+                            // TvTextField puts its modifier on the inner field: the weight goes on this box instead.
+                            Box(Modifier.weight(1f)) {
+                                TvTextField(
+                                    value = address, onValueChange = { address = it }, singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    placeholder = { Text("Search or type a web address", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                    onSubmit = { go(address) },
+                                )
+                            }
+                            FocusBox(
+                                onClick = { reloadClean() },
+                                modifier = Modifier.background(Color(0x212EE66B), RoundedCornerShape(14.dp)).border(1.dp, Color(0x8C2EE66B), RoundedCornerShape(14.dp)),
+                                shape = RoundedCornerShape(14.dp),
+                            ) {
+                                Text("⟳", fontSize = 18.sp, color = Color(0xFF2EE66B), maxLines = 1, softWrap = false,
+                                    modifier = Modifier.padding(horizontal = if (narrow) 10.dp else 12.dp, vertical = 6.dp))
+                            }
+                            PasteButton(iconOnly = narrow) { go(it) }
+                            FocusBox(onClick = { go(address) }, modifier = Modifier.background(Color(0xFF2EE66B), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+                                Text("Go ›", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B), maxLines = 1, softWrap = false,
+                                    modifier = Modifier.padding(horizontal = if (narrow) 10.dp else 14.dp, vertical = 7.dp))
+                            }
                         }
                     }
                 }
-            }
-            // ---- row 3: the buttons
-            Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                FocusBox(onClick = { goBackClean() }, onLongClick = { histOpen = true }, shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 2.dp)) {
-                    // Same grey button as →, ☆, ★ List (long press = this tab's history).
-                    Text("←", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
-                }
-                SmallButton("→", { if (histCanFwd()) histGo(1) else Toast.makeText(context, "No next page", Toast.LENGTH_SHORT).show() })
-                val marked = bookmarks.any { it.url == WebState.pageUrl }
-                SmallButton(if (marked) "★" else "☆", {
-                    if (showPage && WebState.pageUrl.isNotBlank()) {
-                        if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { WebStore.toggleBookmark(title, WebState.pageUrl) }
-                        else WebStore.toggleBookmark(title, WebState.pageUrl)
+                // ---- row 3: the buttons
+                Row(
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FocusBox(onClick = { goBackClean() }, onLongClick = { histOpen = true }, shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 2.dp)) {
+                        // Same grey button as →, ☆, ★ List (long press = this tab's history).
+                        Text("←", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
                     }
-                })
-                SmallButton("★ List", { showPage = false; listOpen = false })
-                key(tabsVersion) { SmallButton("▢ ${WebState.tabs.size}", { tabsOpen = true }) }
-                Chip("🎬 ${found.size}" + if (grabbed.size > found.size) " · ${grabbed.size}" else "", found.isNotEmpty(), { listOpen = !listOpen })
-                FocusBox(onClick = { shieldOpen = true }, modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
-                    Text(
-                        if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}" + if (site() in hideOff) " ◐" else "",
-                        fontSize = 13.sp, color = Color(0xFFBFF5D3), modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
+                    SmallButton("→", { if (histCanFwd()) histGo(1) else Toast.makeText(context, "No next page", Toast.LENGTH_SHORT).show() })
+                    val marked = bookmarks.any { it.url == WebState.pageUrl }
+                    SmallButton(if (marked) "★" else "☆", {
+                        if (showPage && WebState.pageUrl.isNotBlank()) {
+                            if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { WebStore.toggleBookmark(title, WebState.pageUrl) }
+                            else WebStore.toggleBookmark(title, WebState.pageUrl)
+                        }
+                    })
+                    SmallButton("★ List", { showPage = false; listOpen = false })
+                    key(tabsVersion) { SmallButton("▢ ${WebState.tabs.size}", { tabsOpen = true }) }
+                    Chip("🎬 ${found.size}" + if (grabbed.size > found.size) " · ${grabbed.size}" else "", found.isNotEmpty(), { listOpen = !listOpen })
+                    FocusBox(onClick = { shieldOpen = true }, modifier = Modifier.background(Color(0xFF0F2A1C), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+                        Text(
+                            if (adLevel == "off" || site() in allow) "🛡 off" else "🛡 ${blocked + removedBoxes}" + if (site() in hideOff) " ◐" else "",
+                            fontSize = 13.sp, color = Color(0xFFBFF5D3), modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
+                    if (kids != "off") Text("👶", fontSize = 15.sp)
+                    SmallButton("⚙", {
+                        if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { settingsOpen = true } else settingsOpen = true
+                    })
                 }
-                if (kids != "off") Text("👶", fontSize = 15.sp)
-                SmallButton("⚙", {
-                    if (WebStore.flag("pinSettings")) PinGate.require(hasPin) { settingsOpen = true } else settingsOpen = true
-                })
             }
             note?.let {
                 Text(it, fontSize = 12.sp, color = Color(0xFFFFD08A),
@@ -1047,6 +1145,15 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { pickTree.launch(Uri.parse(NOVA_FOLDER)) },
                     canEdit = { f -> if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f() })
             }
+        }
+
+        // ---- "⌄ bars": brings the hidden bars back
+        if (compact && barsHidden) {
+            FocusBox(
+                onClick = { barsHidden = false },
+                modifier = Modifier.align(Alignment.TopCenter).background(Color(0xE62B2F36), RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp)),
+                shape = RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp),
+            ) { Text("⌄ bars", fontSize = 12.sp, color = Color(0xFFCCCCCC), modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)) }
         }
 
         // ---- 🎬 grabbed videos: this page first, then earlier pages (kept until you clear them)
@@ -1756,10 +1863,17 @@ private fun WebScrollBar(web: WebView) {
         }
     }
     fun by(fraction: Float) {
-        // Works for pages that scroll themselves and for sites that scroll an inner box.
-        web.evaluateJavascript("(function(){var d=innerHeight*$fraction;var e=document.scrollingElement||document.documentElement;" +
-            "var b=e.scrollHeight>innerHeight+8?null:[].slice.call(document.querySelectorAll('div,main,section')).find(function(x){var s=getComputedStyle(x);" +
-            "return (s.overflowY=='auto'||s.overflowY=='scroll')&&x.scrollHeight>x.clientHeight+8;});if(b)b.scrollBy(0,d);else window.scrollBy(0,d);})()", null)
+        // The panel / list you touched last, or one in front of the page (a menu), else the page itself.
+        web.evaluateJavascript("(function(){var d=innerHeight*$fraction;" +
+            "function sc(x){var s=getComputedStyle(x);return (s.overflowY=='auto'||s.overflowY=='scroll')&&x.scrollHeight>x.clientHeight+8;}" +
+            "function inFront(x){for(;x&&x!==document.body;x=x.parentElement){var p=getComputedStyle(x).position;if(p=='fixed'||p=='sticky')return true;}return false;}" +
+            "var t=window.__novaLastScroll;if(!(t&&t.isConnected&&sc(t))){t=null;" +
+            "var c=[].slice.call(document.querySelectorAll('body *')).filter(function(x){if(!sc(x))return false;var r=x.getBoundingClientRect();" +
+            "return r.width>100&&r.height>60&&r.bottom>0&&r.top<innerHeight;});" +
+            "c.sort(function(a,b){function w(x){var r=x.getBoundingClientRect();return (inFront(x)?1e8:0)+r.width*r.height;}return w(b)-w(a);});" +
+            "var e=document.scrollingElement||document.documentElement;var pageScrolls=e.scrollHeight>innerHeight+8;" +
+            "if(c[0]&&(inFront(c[0])||!pageScrolls))t=c[0];}" +
+            "if(t)t.scrollBy(0,d);else window.scrollBy(0,d);})()", null)
     }
     fun to(p: Float) {
         web.evaluateJavascript("(function(){var e=document.scrollingElement||document.documentElement;window.scrollTo(0,(e.scrollHeight-innerHeight)*$p);})()", null)
