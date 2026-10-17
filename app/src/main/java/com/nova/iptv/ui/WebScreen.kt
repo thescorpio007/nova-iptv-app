@@ -1773,6 +1773,7 @@ private fun WebScrollBar(web: WebView) {
         RepeatButton("▲") { by(-0.85f) }
         BoxWithConstraints(Modifier.weight(1f).width(14.dp)) {
             val thumb = 44.dp
+            val trackH = maxHeight
             // Too short for a position bar (e.g. phone turned sideways): only the buttons are shown.
             if (maxHeight >= thumb + 16.dp) Box(
                 Modifier.fillMaxSize().background(Color(0xFF262B33), RoundedCornerShape(7.dp))
@@ -1781,7 +1782,7 @@ private fun WebScrollBar(web: WebView) {
                     },
             ) {
                 Box(
-                    Modifier.padding(top = ((maxHeight - thumb) * progress).coerceAtLeast(0.dp)).width(14.dp).height(thumb)
+                    Modifier.padding(top = ((trackH - thumb) * progress).coerceAtLeast(0.dp)).width(14.dp).height(thumb)
                         .background(Color(0xFF2EE66B), RoundedCornerShape(7.dp)),
                 )
             }
