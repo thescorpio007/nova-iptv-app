@@ -963,24 +963,36 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             // ---- row 2: the web address
             if (!hideAddress) {
                 // The address box, then ⟳ · Paste · Go as their own buttons (one press → on the remote reaches them).
-                Row(
-                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    TvTextField(
-                        value = address, onValueChange = { address = it }, singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Search or type a web address") },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        onSubmit = { go(address) },
-                    )
-                    FocusBox(onClick = { reloadClean() }, modifier = Modifier.background(Color(0xFF262B33), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
-                        Text("⟳", fontSize = 18.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
-                    }
-                    PasteButton { go(it) }
-                    FocusBox(onClick = { go(address) }, modifier = Modifier.background(Color(0xFF2EE66B), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
-                        Text("Go ›", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B),
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+                // The buttons get their room first (never wrapped); the address box takes what is left.
+                androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+                    val narrow = maxWidth < 600.dp
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        // TvTextField puts its modifier on the inner field: the weight goes on this box instead.
+                        Box(Modifier.weight(1f)) {
+                            TvTextField(
+                                value = address, onValueChange = { address = it }, singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("Search or type a web address", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                onSubmit = { go(address) },
+                            )
+                        }
+                        FocusBox(
+                            onClick = { reloadClean() },
+                            modifier = Modifier.background(Color(0x212EE66B), RoundedCornerShape(14.dp)).border(1.dp, Color(0x8C2EE66B), RoundedCornerShape(14.dp)),
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Text("⟳", fontSize = 18.sp, color = Color(0xFF2EE66B), maxLines = 1, softWrap = false,
+                                modifier = Modifier.padding(horizontal = if (narrow) 10.dp else 12.dp, vertical = 6.dp))
+                        }
+                        PasteButton(iconOnly = narrow) { go(it) }
+                        FocusBox(onClick = { go(address) }, modifier = Modifier.background(Color(0xFF2EE66B), RoundedCornerShape(14.dp)), shape = RoundedCornerShape(14.dp)) {
+                            Text("Go ›", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00210B), maxLines = 1, softWrap = false,
+                                modifier = Modifier.padding(horizontal = if (narrow) 10.dp else 14.dp, vertical = 7.dp))
+                        }
                     }
                 }
             }
@@ -991,7 +1003,9 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 FocusBox(onClick = { goBackClean() }, onLongClick = { histOpen = true }, shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 2.dp)) {
-                    Text("←", fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                    // Same grey button as →, ☆, ★ List (long press = this tab's history).
+                    Text("←", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
                 }
                 SmallButton("→", { if (histCanFwd()) histGo(1) else Toast.makeText(context, "No next page", Toast.LENGTH_SHORT).show() })
                 val marked = bookmarks.any { it.url == WebState.pageUrl }
@@ -1757,17 +1771,20 @@ private fun WebScrollBar(web: WebView) {
     ) {
         SmallButton("⤒", { to(0f) })
         RepeatButton("▲") { by(-0.85f) }
-        BoxWithConstraints(
-            Modifier.weight(1f).width(14.dp).background(Color(0xFF262B33), RoundedCornerShape(7.dp))
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures { change, _ -> to((change.position.y / size.height).coerceIn(0f, 1f)) }
-                },
-        ) {
+        BoxWithConstraints(Modifier.weight(1f).width(14.dp)) {
             val thumb = 44.dp
-            Box(
-                Modifier.padding(top = (maxHeight - thumb) * progress).width(14.dp).height(thumb)
-                    .background(Color(0xFF2EE66B), RoundedCornerShape(7.dp)),
-            )
+            // Too short for a position bar (e.g. phone turned sideways): only the buttons are shown.
+            if (maxHeight >= thumb + 16.dp) Box(
+                Modifier.fillMaxSize().background(Color(0xFF262B33), RoundedCornerShape(7.dp))
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { change, _ -> to((change.position.y / size.height).coerceIn(0f, 1f)) }
+                    },
+            ) {
+                Box(
+                    Modifier.padding(top = ((maxHeight - thumb) * progress).coerceAtLeast(0.dp)).width(14.dp).height(thumb)
+                        .background(Color(0xFF2EE66B), RoundedCornerShape(7.dp)),
+                )
+            }
         }
         RepeatButton("▼") { by(0.85f) }
         SmallButton("⤓", { to(1f) })
