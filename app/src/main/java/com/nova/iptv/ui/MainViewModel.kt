@@ -1,6 +1,6 @@
 package com.nova.iptv.ui
 
-import BackupJson as BackupJson
+import org.json.JSONObject as BackupJson
 import android.app.Application
 import android.net.Uri
 import androidx.annotation.OptIn
