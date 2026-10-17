@@ -135,8 +135,9 @@ object PlayerFactory {
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(maxMs, maxMs, startMs, rebufferMs)
-            // Disk buffers (films read-ahead, live disk buffer) hold the protection: memory is automatic (64 MB).
-            .setTargetBufferBytes((if (diskBacked || mode == SourceMode.LIVE_RELAY) 64 else s.bufferMb).coerceIn(16, 512) * 1024 * 1024)
+            // Disk buffers hold the protection: memory keeps only a short part (32 MB ≈ 45 s of a 6 Mbit/s channel,
+            // more of a lighter one) so the box isn't loaded with video it already has on disk. Films: 64 MB.
+            .setTargetBufferBytes((if (mode == SourceMode.LIVE_RELAY) 32 else if (diskBacked) 64 else s.bufferMb).coerceIn(16, 512) * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(false)
             .setBackBuffer(if (live) 0 else 30_000, true)
             .build()

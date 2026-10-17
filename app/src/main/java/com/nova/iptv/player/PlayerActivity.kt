@@ -118,8 +118,34 @@ class PlayerActivity : ComponentActivity() {
     private val startTimeoutTask = Runnable {
         if (!everReady) {
             val item = current
+            // A repair restarted the picture on the video already stored on disk: try that once more (your place is
+            // kept) instead of a fresh start at live.
+            if (item != null && storedRestart && relay != null && storedRestartTries < 2) {
+                storedRestartTries++
+                logHealth(item, "restart on stored video took long", "tried again on stored video (cushion kept)")
+                restartOnStoredVideo(item, newPlayer = storedRestartTries == 2)
+                return@Runnable
+            }
             if (item == null || !startRetry(item, "didn't start in time")) channelFailed("didn't start in time")
         }
+    }
+    /** The picture is being restarted on the stored video (a repair), and how many times that was tried again. */
+    private var storedRestart = false
+    private var storedRestartTries = 0
+    /** A film resumed at a saved place that never started: started again from the beginning. */
+    private var resumeFallbackDone = false
+    private val resumeTimeoutTask = Runnable {
+        val item = current ?: return@Runnable
+        val p = player ?: return@Runnable
+        if (everReady || item.isLive || resumeFallbackDone) return@Runnable
+        resumeFallbackDone = true
+        val at = app.storage.getPosition(item.key)
+        app.storage.setPosition(item.key, 0)
+        logHealth(item, "didn't start at the saved place ${formatDuration(at)}", "started from the beginning")
+        Toast.makeText(this, "Couldn't resume at ${formatDuration(at)} — playing from the start", Toast.LENGTH_LONG).show()
+        p.setMediaItem(buildMediaItem(item))
+        p.prepare()
+        p.playWhenReady = true
     }
     /** Start-up patience: pauses before each new attempt (a channel nobody watched may need a few seconds). */
     private val startDelays = longArrayOf(1000, 2000, 4000, 6000, 8000)
@@ -576,6 +602,8 @@ class PlayerActivity : ComponentActivity() {
         retryCount = 0
         everReady = false
         if (!quiet) { startAttempts = 0; startOtherTried = false; weakChannel = false; skipOtherApp = false; wdLiveFixes.clear(); containerRetries = 0 }
+        storedRestart = false; storedRestartTries = 0
+        handler.removeCallbacks(resumeTimeoutTask)
         lastErrorName = null
         lastGrowWantMs = 0L
         refilling = false
@@ -644,7 +672,9 @@ class PlayerActivity : ComponentActivity() {
         val resumeAt = if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
             app.storage.getPosition(item.key)
         } else 0L
+        if (!quiet) resumeFallbackDone = false
         if (resumeAt > 0) {
+            if (!resumeFallbackDone) handler.postDelayed(resumeTimeoutTask, 25_000)
             p.setMediaItem(buildMediaItem(item), resumeAt)
             if (!quiet) Toast.makeText(this, "Resuming from ${formatDuration(resumeAt)}", Toast.LENGTH_SHORT).show()
         } else {
@@ -751,7 +781,10 @@ class PlayerActivity : ComponentActivity() {
                         Log.i("NovaTest", "READY ${current?.title}")
                         current?.let { c -> checkKey(c)?.let { StreamCheck.played(it, videoDecoded = player?.videoFormat != null) } }
                         session?.let { ss ->
-                            if (ss.startMs < 0) ss.startMs = System.currentTimeMillis() - ss.startedAt
+                            if (ss.startMs < 0) {
+                                ss.startMs = System.currentTimeMillis() - ss.startedAt
+                                current?.takeIf { it.isLive && !storedRestart }?.let { learnStart(it.saved.accountId, ss.startMs) }
+                            }
                             ss.mode = playerMode?.name?.lowercase()?.replace('_', ' ').orEmpty()
                             player?.videoFormat?.let { f ->
                                 ss.video = listOfNotNull(
@@ -770,7 +803,20 @@ class PlayerActivity : ComponentActivity() {
                     everReady = true
                     autoSkips = 0
                     handler.removeCallbacks(startTimeoutTask)
+                    handler.removeCallbacks(resumeTimeoutTask)
+                    if (storedRestart) {
+                        storedRestart = false; storedRestartTries = 0
+                        // Check where the repair landed (it must keep your place, not jump to live).
+                        val after = behindLiveSeconds()
+                        if (repairBehindBefore != null && after != null) Log.i("NovaTest", "REPAIR landed: behind live ${repairBehindBefore} s -> $after s")
+                        repairNote = if (repairBehindBefore != null && after != null) " · behind live ${repairBehindBefore} s → $after s" else ""
+                        repairNote.takeIf { it.isNotEmpty() }?.let { n -> current?.let { logHealth(it, "repair result", n.removePrefix(" · ")) } }
+                        repairBehindBefore = null
+                    }
                     hideStatus()
+                    // The buttons shown at the channel start hide 5 s after the picture appears (they were shown
+                    // before playback began, when the player keeps them up until a key is pressed).
+                    if (current?.isLive == true && player?.playWhenReady == true && playerView.isControllerFullyVisible) playerView.showController()
                 }
                 Player.STATE_BUFFERING -> {
                     if (everReady) {
@@ -1123,7 +1169,20 @@ class PlayerActivity : ComponentActivity() {
 
     private fun startTimeoutMs(): Long {
         val startCushion = if (app.storage.liveStart == "fast") minOf(2, app.storage.cushionSeconds) else app.storage.cushionSeconds
-        return maxOf(app.storage.skipTimeoutSec, startCushion + 6) * 1000L
+        val base = maxOf(app.storage.skipTimeoutSec, startCushion + 6) * 1000L
+        // Learned per server: a server whose channels usually need 11 s to start gets ~20 s before a new attempt.
+        val learned = current?.saved?.accountId?.let { startLearnedMs(it) } ?: 0L
+        return maxOf(base, minOf(learned * 18 / 10 + 2000, 40_000L))
+    }
+
+    private val startPrefs by lazy { getSharedPreferences("start_times", MODE_PRIVATE) }
+    private fun startLearnedMs(account: String): Long = startPrefs.getLong(account, 0L)
+    /** Remembers how long channels of this server take to start (average of the recent ones, slow ones count fully). */
+    private fun learnStart(account: String, ms: Long) {
+        if (account.isBlank() || ms <= 0 || ms > 120_000) return
+        val old = startLearnedMs(account)
+        val v = if (old == 0L) ms else (old * 3 + ms) / 4
+        startPrefs.edit().putLong(account, v).apply()
     }
 
     /** A live channel doesn't work: move on to the next one, or explain. */
@@ -2394,7 +2453,12 @@ class PlayerActivity : ComponentActivity() {
             counters.ensureUpdated()
             val frames = counters.renderedOutputBufferCount
             if (frames != wdLastFrames) { wdLastFrames = frames; wdFramesSince = now }
-            else if (now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) { watchdogAct(item, "picture frozen for ${(now - wdFramesSince) / 1000} s"); return }
+            else if (now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) {
+                val sound = p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; val moved = n != wdLastAudio; wdLastAudio = n; moved } ?: false
+                val ahead = relay?.let { r -> if (mediaBps > 0) " · ${(r.bytesAhead() / mediaBps).toInt()} s stored ahead" else "" } ?: ""
+                watchdogAct(item, "picture frozen for ${(now - wdFramesSince) / 1000} s" + (if (sound) " (sound kept playing)" else "") + ahead)
+                return
+            }
         }
         if (!item.isLive) return
         // Data still arriving from the provider (reconnect before the buffer runs out).
@@ -2419,6 +2483,9 @@ class PlayerActivity : ComponentActivity() {
      * restart the picture there), at most once every 20 s. Renews the connection only after 30 s with no video at all.
      */
     private val wdLiveFixes = ArrayDeque<Long>()
+    private var repairBehindBefore: Int? = null
+    private var wdLastAudio = -1
+    private var repairNote = ""
 
     private fun liveOnlyFix(item: PlayItem, problem: String) {
         val now = android.os.SystemClock.elapsedRealtime()
@@ -2446,7 +2513,9 @@ class PlayerActivity : ComponentActivity() {
                 wdLiveFixes.addLast(now)
                 when {
                     r != null && wdLiveFixes.size == 1 -> { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
-                    r != null && wdLiveFixes.size == 2 -> { r.moveBy(10); restartFromRelay(); "skipped 10 s (cushion kept)" }
+                    r != null && wdLiveFixes.size == 2 -> { r.moveBy(10); restartOnStoredVideo(item, newPlayer = true); "skipped 10 s, new player (cushion kept)" }
+                    // Plenty stored ahead (30 s or more): never throw it away — restart again a bit further on.
+                    r != null && mediaBps > 0 && r.bytesAhead() / mediaBps >= 30 -> { r.moveBy(5); restartOnStoredVideo(item, newPlayer = true); "skipped 5 s, new player (cushion kept)" }
                     else -> { goLive(); "jumped to live" }
                 }
             }
@@ -2567,6 +2636,7 @@ class PlayerActivity : ComponentActivity() {
     /** Restarts the player on the same disk buffer, re-reading what it had in memory. */
     private fun restartOnStoredVideo(item: PlayItem, newPlayer: Boolean) {
         val r = relay ?: run { startPlayback(PlaybackQueue.index, quiet = true, keepTweaks = true); return }
+        if (!storedRestart) { storedRestart = true; storedRestartTries = 0; repairBehindBefore = behindLiveSeconds() }
         val p = player
         if (p != null && mediaBps > 0) {
             val memMs = (p.bufferedPosition - p.currentPosition).coerceAtLeast(0)
