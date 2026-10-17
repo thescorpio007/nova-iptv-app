@@ -1389,7 +1389,11 @@ def web_with_server():
     adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/hop.html -n {PKG}/.ui.OpenWithActivity")
     check("Web: the redirect page leads to the film page", find("Film Two page", 30) is not None)
     time.sleep(3)
-    tap("←", 10, exact=True)
+    # The page's own ← (the lowest one: the top bar has a ← to Live TV too).
+    backs = [n for n in nodes() if n["text"].strip() == "←"]
+    if backs:
+        nb = max(backs, key=lambda n: n["y"])
+        adb(f"shell input tap {nb['x']} {nb['y']}")
     check("Web: ← skips the redirect page and goes back to the page before", find("Nova Web Test page", 20) is not None)
     shot("web-back-clean")
     tap("⟳", 10, exact=True)
