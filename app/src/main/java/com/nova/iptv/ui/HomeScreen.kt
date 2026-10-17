@@ -1422,7 +1422,7 @@ private fun rememberPosterReturn(vm: MainViewModel, itemKeys: List<String>): Pai
     return gridState to { key, own -> Modifier.focusRequester(if (key == restoreKey) requester else own) }
 }
 
-/** "✎ Edit / Reorder" — wide and framed; "✓ Done" (green) while editing, same size so nothing moves. */
+/** "✎ Edit" — compact and framed; "✓ Done" (green) while editing, same size so nothing moves. */
 @Composable
 private fun EditButton(edit: Boolean, big: Boolean, onClick: () -> Unit) {
     val green = MaterialTheme.colorScheme.primary
@@ -1431,13 +1431,13 @@ private fun EditButton(edit: Boolean, big: Boolean, onClick: () -> Unit) {
         shape = RoundedCornerShape(22.dp),
         modifier = Modifier
             .padding(horizontal = 4.dp)
-            .widthIn(min = if (big) 190.dp else 0.dp)
+            .widthIn(min = if (big) 96.dp else 0.dp)
             .border(2.dp, if (edit) green else Color(0xFF9FC3FF), RoundedCornerShape(22.dp))
             .background(if (edit) Color(0xFF174A2C) else Color(0x33FFFFFF), RoundedCornerShape(22.dp)),
     ) {
         Text(
-            if (edit) "✓ Done" else "✎ Edit / Reorder",
-            modifier = Modifier.align(Alignment.Center).padding(horizontal = if (big) 22.dp else 12.dp, vertical = if (big) 10.dp else 6.dp),
+            if (edit) "✓ Done" else "✎ Edit",
+            modifier = Modifier.align(Alignment.Center).padding(horizontal = if (big) 16.dp else 10.dp, vertical = if (big) 10.dp else 6.dp),
             fontWeight = FontWeight.Bold,
             fontSize = if (big) 16.sp else 13.sp,
             color = if (edit) green else Color.White,
