@@ -1,0 +1,41 @@
+Fake Xtream server on :8080
+127.0.0.1 "GET /player_api.php?username=alice&password=x HTTP/1.1" 200 -
+127.0.0.1 "GET /web/test.html HTTP/1.1" 200 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 code 501, message Unsupported method ('HEAD')
+127.0.0.1 "HEAD /movie/alice/secret/301.mp4 HTTP/1.1" 501 -
+127.0.0.1 code 404, message Not Found
+127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_streams HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams&category_id=1 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series&category_id=20 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_streams&category_id=10 HTTP/1.1" 200 -
+127.0.0.1 code 501, message Unsupported method ('HEAD')
+127.0.0.1 "HEAD /movie/alice/secret/301.mp4 HTTP/1.1" 501 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /web/test.html HTTP/1.1" 200 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 code 501, message Unsupported method ('HEAD')
+127.0.0.1 "HEAD /movie/alice/secret/301.mp4 HTTP/1.1" 501 -
+127.0.0.1 "GET /web/cards.html HTTP/1.1" 200 -
+127.0.0.1 "GET /web/film1.html HTTP/1.1" 200 -
+127.0.0.1 code 404, message Not Found
+127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 "GET /web/cards.html HTTP/1.1" 200 -
+127.0.0.1 "GET /web/film2.html HTTP/1.1" 200 -
+127.0.0.1 "GET /web/test.html HTTP/1.1" 200 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 code 501, message Unsupported method ('HEAD')
+127.0.0.1 "HEAD /movie/alice/secret/301.mp4 HTTP/1.1" 501 -
+127.0.0.1 "GET /web/hop.html HTTP/1.1" 200 -
+127.0.0.1 "GET /web/film2.html HTTP/1.1" 200 -
+127.0.0.1 "GET /web/test.html HTTP/1.1" 200 -
+127.0.0.1 "GET /web/test.html HTTP/1.1" 200 -
+127.0.0.1 "GET /web/servers.html HTTP/1.1" 200 -
