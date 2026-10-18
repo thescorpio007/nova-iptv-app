@@ -1,0 +1,27 @@
+24/24 checks passed
+
+PASS  APK installs  (Performing Streamed Install
+Success)
+PASS  App opens without crashing
+PASS  Welcome screen appears on the first start
+PASS  Welcome screen offers restore, the accounts link and the web browser
+PASS  Login screen appears
+PASS  Signature note on the sign-in page
+PASS  Login with Xtream account works, zones appear
+PASS  Live TV zone shows channels
+PASS  Signature note on the main page
+PASS  Restart: the start-up check runs
+PASS  Restart: Live TV opens
+PASS  Restart: no crash
+PASS  Open link: a pasted link plays
+PASS  Main screen comes back after closing the player (open-link)
+PASS  Open link: the link is listed under Recent links
+PASS  Share → Nova: the choice window opens
+PASS  Share → Download only adds a download
+PASS  Double OK on a poster asks to hide it
+PASS  The window offers No / Yes, hide
+PASS  Double OK does not open the film page
+PASS  OK right away = No: the film is kept
+PASS  …and the remote is back on the same poster
+PASS  Yes hides it at once, without any code
+PASS  No crash in the whole test

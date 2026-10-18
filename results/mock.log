@@ -1,0 +1,57 @@
+Fake Xtream server on :8080
+127.0.0.1 "GET /player_api.php?username=alice&password=x HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams&category_id=1 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_streams HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series&category_id=20 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_streams&category_id=10 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams&category_id=1 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_streams&category_id=10 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series&category_id=20 HTTP/1.1" 200 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 200 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 47290)
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/socketserver.py", line 692, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/usr/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/usr/lib/python3.12/socketserver.py", line 761, in __init__
+    self.handle()
+  File "/usr/lib/python3.12/http/server.py", line 438, in handle
+    self.handle_one_request()
+  File "/usr/lib/python3.12/http/server.py", line 404, in handle_one_request
+    self.raw_requestline = self.rfile.readline(65537)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 707, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+ConnectionResetError: [Errno 104] Connection reset by peer
+----------------------------------------
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/301.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/302.mp4 HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/304.mkv HTTP/1.1" 206 -
+127.0.0.1 "GET /movie/alice/secret/303.mp4 HTTP/1.1" 206 -
