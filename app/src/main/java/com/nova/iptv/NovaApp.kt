@@ -28,6 +28,7 @@ class NovaApp : Application() {
             .followRedirects(true)
             .followSslRedirects(true)
             .addInterceptor(com.nova.iptv.data.LinkHeadersInterceptor { if (::storage.isInitialized) storage else null })
+            .let { com.nova.iptv.data.LegacyTls.apply(this, it) }
             .build()
     }
 

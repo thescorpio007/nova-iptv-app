@@ -65,6 +65,34 @@ jobs:
           mkdir -p out
           cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk"
 
+      # The special build for Android 5.0 and 6 (same app, lower minimum). It never blocks the normal APK:
+      # when it fails, its log goes to the ci-logs branch (logs/run-N-android5.txt).
+      - name: Build the Android 5.0 APK
+        id: legacy
+        continue-on-error: true
+        env:
+          TMDB_KEY: ${{ secrets.TMDB_KEY }}
+        run: |
+          set -o pipefail
+          rm -rf app/build/outputs/apk/release
+          ./gradlew lintRelease assembleRelease -Plegacy=true --no-daemon 2>&1 | tee legacy.log
+          cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-2.0-WEB-Android5.0-build-${{ github.run_number }}.apk"
+
+      - name: Keep the Android 5.0 build log
+        if: steps.legacy.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          { grep -nE "^e: |error:|Error:|What went wrong|FAILURE|Unresolved|NewApi|requires API|minSdk" legacy.log | head -120; echo ----; cat app/lint-newapi.txt 2>/dev/null | head -300; } > legacy-errors.txt
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git fetch origin ci-logs || true
+          git checkout -B ci-logs origin/ci-logs 2>/dev/null || { git checkout --orphan ci-logs; git rm -rf --cached . > /dev/null; }
+          mkdir -p logs
+          cp legacy-errors.txt "logs/run-${{ github.run_number }}-android5.txt"
+          git add logs/run-${{ github.run_number }}-android5.txt
+          git commit -m "Android 5 build log for run ${{ github.run_number }}"
+          git push -f origin ci-logs
+
       # When the build fails, report the important lines as annotations and keep the full
       # log on a "ci-logs" branch, so the errors can be read without the Actions log viewer.
       - name: Report build errors
@@ -104,6 +132,6 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: Nova IPTV build ${{ github.run_number }}
-          body: Install NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk on your phone or Android TV.
+          body: Install NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk on your phone or Android TV (Android 7.0 and newer). For Android 5.0 / 6 (older tablets) use NovaIPTV-2.0-WEB-Android5.0-build-${{ github.run_number }}.apk.
           files: out/NovaIPTV-*.apk
           make_latest: true

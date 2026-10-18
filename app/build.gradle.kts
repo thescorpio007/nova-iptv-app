@@ -6,13 +6,16 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// "-Plegacy=true": the special build for Android 5.0 and 6 (Galaxy Tab 4 …); the normal build needs Android 7.0.
+val legacy = (project.findProperty("legacy") as String?) == "true"
+
 android {
     namespace = "com.nova.iptv"
     compileSdk = 35
 
     defaultConfig {
         applicationId = "com.nova.iptv"
-        minSdk = 24
+        minSdk = if (legacy) 21 else 24
         targetSdk = 35
         // The build number from GitHub is part of the version: "2.0 (build 25)".
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
@@ -52,6 +55,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Newer Java functions (dates, collections…) made available on Android 5.
+        isCoreLibraryDesugaringEnabled = legacy
     }
     kotlinOptions {
         jvmTarget = "17"
@@ -61,7 +66,15 @@ android {
         buildConfig = true
     }
     lint {
-        abortOnError = false
+        if (legacy) {
+            // The Android 5 build: only check for functions Android 5 doesn't have, and stop on any.
+            checkOnly += "NewApi"
+            abortOnError = true
+            textReport = true
+            textOutput = file("lint-newapi.txt")
+        } else {
+            abortOnError = false
+        }
         checkReleaseBuilds = false
     }
 }
@@ -94,4 +107,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
 }

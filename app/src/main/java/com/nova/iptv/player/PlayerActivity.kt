@@ -2758,7 +2758,7 @@ class PlayerActivity : ComponentActivity() {
 
     /** Wi-Fi / network or VPN dropped and came back: reconnect the live channel right away. */
     private fun watchNetwork() {
-        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        val cm = (getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager) ?: return
         val cb = object : android.net.ConnectivityManager.NetworkCallback() {
             override fun onLost(network: android.net.Network) {
                 networkLostAt = android.os.SystemClock.elapsedRealtime()
@@ -2775,7 +2775,12 @@ class PlayerActivity : ComponentActivity() {
                 }
             }
         }
-        runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { networkCallback = cb }
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 24) cm.registerDefaultNetworkCallback(cb)
+            else cm.registerNetworkCallback(
+                android.net.NetworkRequest.Builder().addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), cb,
+            )
+        }.onSuccess { networkCallback = cb }
     }
 
     /**
@@ -3141,7 +3146,7 @@ class PlayerActivity : ComponentActivity() {
         readAhead = null
         hlsAhead?.close()
         hlsAhead = null
-        networkCallback?.let { cb -> runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } }
+        networkCallback?.let { cb -> runCatching { (getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)?.unregisterNetworkCallback(cb) } }
         super.onDestroy()
     }
 }

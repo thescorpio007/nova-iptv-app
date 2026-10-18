@@ -19,7 +19,11 @@ object Vpn {
     )
 
     fun isActive(context: Context): Boolean {
-        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+        if (android.os.Build.VERSION.SDK_INT < 23) {
+            @Suppress("DEPRECATION")
+            return cm.allNetworks.any { n -> cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true }
+        }
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     }

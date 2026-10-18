@@ -237,7 +237,7 @@ class DownloadService : Service() {
     private fun notifyProgress(title: String, total: Long, done: Long) {
         val text = if (total > 0) "$title · ${done * 100 / total}%" else "$title · ${done / (1024 * 1024)} MB"
         runCatching {
-            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text, total, done))
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text, total, done))
         }
     }
 
