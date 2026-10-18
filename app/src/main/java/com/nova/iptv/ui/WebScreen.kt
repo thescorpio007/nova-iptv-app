@@ -1500,6 +1500,7 @@ private fun StartPage(
             }
         }
         Text("★ Bookmarks", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        if (bookmarks.isNotEmpty()) Text("Newest first · ✕ removes one", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (bookmarks.isEmpty()) {
             Text("No bookmarks yet. Open a page and press ☆ to keep it here. Type a web address or words to search at the top.",
                 fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1510,17 +1511,22 @@ private fun StartPage(
                     FocusBox(onClick = { onOpen(b.url) }, modifier = Modifier.weight(1f)) {
                         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(b.title, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(Uri.parse(b.url).host ?: b.url, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                            Row {
+                                Text((Uri.parse(b.url).host ?: b.url) + "  ·  ", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                if (b.at > 0) Text("🕒 Added " + BM_DATE.format(java.util.Date(b.at)), fontSize = 11.sp, color = Color(0xFF7FE8B0), maxLines = 1)
+                                else Text("🕒 Added before dates were kept", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, maxLines = 1)
+                            }
                         }
                     }
-                    SmallButton("▲", { canEdit { WebStore.moveBookmark(b, -1) } })
-                    SmallButton("▼", { canEdit { WebStore.moveBookmark(b, 1) } })
                     SmallButton("✕", { canEdit { WebStore.removeBookmark(b) } }, warn = true)
                 }
             }
         }
     }
 }
+
+private val BM_DATE = java.text.SimpleDateFormat("d MMM yyyy · HH:mm:ss", java.util.Locale.ENGLISH)
 
 /** Web ⚙ › Ads › 🛡 Filter lists: lists on / off, own lists and rules, automatic update. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)

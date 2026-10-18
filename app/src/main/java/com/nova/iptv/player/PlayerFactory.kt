@@ -95,6 +95,8 @@ enum class SourceMode {
     VOD,
     /** Movies and episodes through the disk read-ahead (segments, one connection). */
     VOD_DISK,
+    /** HLS films (.m3u8, most website videos): pieces read ahead into a disk cache by [HlsReadAhead]. */
+    VOD_HLS_DISK,
     /** "Download & watch": the download's file, read while it grows. */
     GROWING,
     /** Files already downloaded to the device. */
@@ -126,8 +128,10 @@ object PlayerFactory {
         //  - max: keep reading ahead up to this many seconds (in memory).
         val cushionMs = (s.cushionSeconds * 1000).coerceIn(1000, 60_000)
         // With the disk holding the safety margin, keep only ~20 s in memory (good for 4 GB boxes).
-        val diskBacked = mode == SourceMode.VOD_DISK || mode == SourceMode.GROWING
-        val maxMs = if (diskBacked) maxOf(20_000, cushionMs + 5_000)
+        val diskBacked = mode == SourceMode.VOD_DISK || mode == SourceMode.GROWING || mode == SourceMode.VOD_HLS_DISK
+        // HLS films keep a little more in memory (60 s): if a site refuses reading ahead, the player still has a margin.
+        val maxMs = if (mode == SourceMode.VOD_HLS_DISK) maxOf(60_000, cushionMs + 5_000)
+        else if (diskBacked) maxOf(20_000, cushionMs + 5_000)
         else maxOf(s.maxBufferSeconds * 1000, cushionMs + 10_000, if (live) s.weakRefillSecs * 1000 + 15_000 else 0)
         val rebufferMs = (cushionMs * 3 / 2).coerceIn(2000, maxMs)
         // Live "fast start": begin with ~2 s near live; the player builds the rest of the cushion while playing.
@@ -152,6 +156,13 @@ object PlayerFactory {
             SourceMode.LIVE_HLS_DISK -> {
                 val cached = CacheDataSource.Factory()
                     .setCache(app.liveHlsCache)
+                    .setUpstreamDataSourceFactory(http)
+                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                DataSource.Factory { PlaylistBypassDataSource(http.createDataSource(), cached.createDataSource()) }
+            }
+            SourceMode.VOD_HLS_DISK -> {
+                val cached = CacheDataSource.Factory()
+                    .setCache(app.vodHlsCache)
                     .setUpstreamDataSourceFactory(http)
                     .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
                 DataSource.Factory { PlaylistBypassDataSource(http.createDataSource(), cached.createDataSource()) }

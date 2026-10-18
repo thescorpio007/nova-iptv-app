@@ -52,6 +52,11 @@ class NovaApp : Application() {
         openCache(Folders.BUFFER_MOVIES, storage.vodCacheMb.toLong()) { vodCacheFolder = it }
     }
 
+    /** HLS films: pieces read ahead (Buffer/readahead-hls). Nova keeps it to the read-ahead size and empties it per film. */
+    val vodHlsCache: SimpleCache by lazy {
+        openCache("Buffer/readahead-hls", 4096L) { }
+    }
+
     /** Rolling disk cache for live HLS (.m3u8) segments, used when the live disk buffer is on. */
     val liveHlsCache: SimpleCache by lazy {
         openCache(Folders.BUFFER_LIVE_HLS, storage.liveDiskMb.toLong()) { liveHlsCacheFolder = it }

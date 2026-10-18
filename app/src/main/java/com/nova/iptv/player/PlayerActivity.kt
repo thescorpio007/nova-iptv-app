@@ -67,6 +67,7 @@ class PlayerActivity : ComponentActivity() {
     private var relay: LiveRelay? = null
     /** Disk read-ahead of the current film / episode (Settings → Player). */
     private var readAhead: ReadAheadBuffer? = null
+    private var hlsAhead: HlsReadAhead? = null
     private var spaceWarned = false
 
     private lateinit var playerView: PlayerView
@@ -509,6 +510,7 @@ class PlayerActivity : ComponentActivity() {
     private fun modeFor(item: PlayItem): SourceMode = when {
         item.isLocal -> SourceMode.LOCAL
         item.downloadId != null -> SourceMode.GROWING
+        !item.isLive && app.storage.readAheadMb > 0 && item.url.startsWith("http", ignoreCase = true) && item.isHls -> SourceMode.VOD_HLS_DISK
         !item.isLive && app.storage.readAheadMb > 0 && item.url.startsWith("http", ignoreCase = true) -> SourceMode.VOD_DISK
         !item.isLive -> SourceMode.VOD
         !app.storage.liveDiskBuffer -> SourceMode.LIVE_DIRECT
@@ -655,6 +657,15 @@ class PlayerActivity : ComponentActivity() {
         // A fresh read-ahead per film / episode (the old one's segments are deleted).
         readAhead?.close()
         readAhead = null
+        hlsAhead?.close()
+        hlsAhead = null
+        if (mode == SourceMode.VOD_HLS_DISK) {
+            val dir = Folders.bufferDir(this, "Buffer/readahead-hls", app.storage.usePublicFolder)
+            val wanted = app.storage.readAheadMb * 1024L * 1024L
+            val free = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(wanted * 2)
+            val usable = minOf(wanted, free - 200L * 1024 * 1024).coerceAtLeast(16L * 1024 * 1024)
+            hlsAhead = HlsReadAhead(app.vodHlsCache, app.http, app.storage.userAgent, usable).also { it.start() }
+        }
         if (mode == SourceMode.VOD_DISK) {
             val dir = java.io.File(Folders.bufferDir(this, Folders.BUFFER_MOVIES, app.storage.usePublicFolder), "readahead")
             dir.mkdirs()
@@ -669,7 +680,7 @@ class PlayerActivity : ComponentActivity() {
         }
 
         val p = ensurePlayer(mode)
-        val resumeAt = if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
+        val resumeAt = if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.VOD_HLS_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
             app.storage.getPosition(item.key)
         } else 0L
         if (!quiet) resumeFallbackDone = false
@@ -2781,11 +2792,40 @@ class PlayerActivity : ComponentActivity() {
         }
         val dur = p.duration
         val ra = readAhead
+        val ha = hlsAhead
         val id = item.downloadId
         when {
+            ha != null -> {
+                val pl = (p.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest)?.mediaPlaylist
+                ha.update(pl, p.currentPosition, p.bufferedPosition)
+                if (dur > 0 && ha.bytesPerSec > 0) {
+                    val want = (ha.bytesPerSec * 120 / 0.8).toLong()
+                    if (want > ha.limitBytes) {
+                        val dir = Folders.bufferDir(this, "Buffer/readahead-hls", app.storage.usePublicFolder)
+                        val free = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(0L)
+                        val allowed = minOf(want, 2048L * 1024 * 1024, ha.limitBytes + free - 1024L * 1024 * 1024)
+                        if (allowed > ha.limitBytes + 8L * 1024 * 1024) ha.growTo(allowed)
+                    }
+                }
+                val memoryMs = (p.bufferedPosition - p.currentPosition).coerceAtLeast(0)
+                val mb = ha.aheadBytes / (1024 * 1024)
+                vod.diskStatus = when {
+                    pl == null || !pl.hasEndTag -> "⬇ Buffered ahead: " + formatDuration(memoryMs) + "  (memory only)"
+                    !ha.started && ha.aheadBytes == 0L -> "⬇ Filling the read-ahead…  (memory " + formatDuration(memoryMs) + ")"
+                    else -> "⬇ Buffered ahead: " + formatDuration(memoryMs + ha.aheadMs) + "  (" + mb + " MB on disk" +
+                        (if (ha.expiring) " · site limits reading ahead" else "") + ")"
+                }
+                vod.diskFraction = if (dur > 0) ((p.bufferedPosition + ha.aheadMs).toDouble() / dur).toFloat().coerceIn(0f, 1f) else null
+                vod.seekLimitMs = null
+            }
             ra != null -> {
                 val total = ra.totalBytes
-                if (total > 0 && dur > 0) {
+                if (total in 1 until 2L * 1024 * 1024 && dur > 600_000) {
+                    // A tiny "file" for a long film is a playlist, not the film: only the memory buffer protects it.
+                    val memoryMs = (p.bufferedPosition - p.currentPosition).coerceAtLeast(0)
+                    vod.diskStatus = "⬇ Buffered ahead: " + formatDuration(memoryMs) + "  (memory only)"
+                    vod.diskFraction = null
+                } else if (total > 0 && dur > 0) {
                     growReadAhead(ra, total, dur)
                     // Ahead = what the player already holds in memory + what is on disk after the point it reads from.
                     val readByte = ra.readPos
@@ -3070,6 +3110,8 @@ class PlayerActivity : ComponentActivity() {
         relay = null
         readAhead?.close()
         readAhead = null
+        hlsAhead?.close()
+        hlsAhead = null
         networkCallback?.let { cb -> runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } }
         super.onDestroy()
     }

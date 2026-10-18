@@ -24,7 +24,13 @@ import java.util.Locale
  * Never exported: history, cookies, passwords typed into websites.
  */
 object WebStore {
-    data class Bookmark(val title: String, val url: String)
+    /** [at] = when it was added (ms); 0 = saved before dates were kept. */
+    data class Bookmark(val title: String, val url: String, val at: Long = 0L)
+
+    /** Newest first; bookmarks without a date stay at the bottom in their old order. */
+    private fun sorted(l: List<Bookmark>) = l.sortedByDescending { it.at }
+    private fun bmJson(b: Bookmark) = JSONObject().put("t", b.title).put("u", b.url).put("a", b.at)
+    private fun bmOf(o: JSONObject) = Bookmark(o.optString("t"), o.optString("u"), o.optLong("a", 0L))
 
     const val FOLDER = "Browser"
     const val LATEST = "browser-latest.novaweb"
@@ -118,7 +124,7 @@ object WebStore {
     private fun readPrefs() {
         bookmarks.value = runCatching {
             val a = JSONArray(prefs.getString("bookmarks", "[]"))
-            (0 until a.length()).map { a.getJSONObject(it).let { o -> Bookmark(o.optString("t"), o.optString("u")) } }
+            sorted((0 until a.length()).map { bmOf(a.getJSONObject(it)) })
         }.getOrDefault(emptyList())
         adLevel.value = prefs.getString("ad_level", "maximum") ?: "maximum"
         kidsMode.value = prefs.getString("kids_mode", "adult") ?: "adult"
@@ -133,7 +139,7 @@ object WebStore {
 
     private fun save() {
         prefs.edit()
-            .putString("bookmarks", JSONArray(bookmarks.value.map { JSONObject().put("t", it.title).put("u", it.url) }).toString())
+            .putString("bookmarks", JSONArray(bookmarks.value.map { bmJson(it) }).toString())
             .putString("ad_level", adLevel.value)
             .putBoolean("find_videos", findVideos.value)
             .putString("start_page", startPage.value)
@@ -153,7 +159,7 @@ object WebStore {
     fun isBookmarked(url: String) = bookmarks.value.any { it.url == url }
     fun toggleBookmark(title: String, url: String) {
         bookmarks.value = if (isBookmarked(url)) bookmarks.value.filterNot { it.url == url }
-        else bookmarks.value + Bookmark(title.ifBlank { Uri.parse(url).host ?: url }, url)
+        else sorted(listOf(Bookmark(title.ifBlank { Uri.parse(url).host ?: url }, url, System.currentTimeMillis())) + bookmarks.value)
         save()
     }
     fun removeBookmark(b: Bookmark) { bookmarks.value = bookmarks.value - b; save() }
@@ -177,7 +183,7 @@ object WebStore {
     fun toText(): String = JSONObject()
         .put("format", "NOVAWEB1")
         .put("exportedAt", System.currentTimeMillis())
-        .put("bookmarks", JSONArray(bookmarks.value.map { JSONObject().put("t", it.title).put("u", it.url) }))
+        .put("bookmarks", JSONArray(bookmarks.value.map { bmJson(it) }))
         .put("adLevel", adLevel.value)
         .put("findVideos", findVideos.value)
         .put("startPage", startPage.value)
@@ -195,8 +201,7 @@ object WebStore {
         val o = JSONObject(text)
         require(o.optString("format").startsWith("NOVAWEB")) { "not a Nova browser file" }
         val a = o.optJSONArray("bookmarks") ?: JSONArray()
-        bookmarks.value = (0 until a.length()).map { a.getJSONObject(it).let { b -> Bookmark(b.optString("t"), b.optString("u")) } }
-            .filter { it.url.isNotBlank() }
+        bookmarks.value = sorted((0 until a.length()).map { bmOf(a.getJSONObject(it)) }.filter { it.url.isNotBlank() })
         adLevel.value = o.optString("adLevel", "maximum")
         kidsMode.value = o.optString("kidsMode", "adult")
         newTab.value = o.optString("newTab", "ask")
