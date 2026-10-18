@@ -201,6 +201,10 @@ class PlayerActivity : ComponentActivity() {
      */
     private val diskSource = DataSource.Factory {
         val item = current ?: throw IllegalStateException("Nothing playing")
+        // A streaming (HLS) download watched while it runs: the list of saved parts + the joined file.
+        if (item.url.startsWith("nova-dl://") && item.downloadId != null) {
+            return@Factory GrowingHlsList(item.downloadId, applicationContext, app.http, app.storage.userAgent)
+        }
         val other = androidx.media3.datasource.DefaultDataSource.Factory(
             this, androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(app.http).setUserAgent(app.storage.userAgent),
         ).createDataSource()
@@ -548,6 +552,10 @@ class PlayerActivity : ComponentActivity() {
             .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).build())
             .apply {
                 if (item.isHls) setMimeType(MimeTypes.APPLICATION_M3U8)
+                // Growing download list: never speed up to "catch up" with its end.
+                if (item.url.startsWith("nova-dl://")) setLiveConfiguration(
+                    MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build()
+                )
                 (extraSubtitle ?: item.sidecarSubtitle?.let { android.net.Uri.parse(it) })?.let { sub ->
                     val name = sub.toString().lowercase()
                     val mime = when {
@@ -680,7 +688,9 @@ class PlayerActivity : ComponentActivity() {
         }
 
         val p = ensurePlayer(mode)
-        val resumeAt = if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.VOD_HLS_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
+        val growingHls = item.url.startsWith("nova-dl://") && item.url.endsWith(".m3u8")
+        // Streaming download while it runs: always from the beginning (jump anywhere inside the saved part).
+        val resumeAt = if (growingHls) 0L else if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.VOD_HLS_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
             app.storage.getPosition(item.key)
         } else 0L
         if (!quiet) resumeFallbackDone = false
@@ -688,6 +698,9 @@ class PlayerActivity : ComponentActivity() {
             if (!resumeFallbackDone) handler.postDelayed(resumeTimeoutTask, 25_000)
             p.setMediaItem(buildMediaItem(item), resumeAt)
             if (!quiet) Toast.makeText(this, "Resuming from ${formatDuration(resumeAt)}", Toast.LENGTH_SHORT).show()
+        } else if (growingHls) {
+            // The list grows like a live one: start explicitly at its beginning, not at its end.
+            p.setMediaItem(buildMediaItem(item), 0L)
         } else {
             p.setMediaItem(buildMediaItem(item))
         }
@@ -2855,6 +2868,22 @@ class PlayerActivity : ComponentActivity() {
                         else -> 0.0
                     }
                     vod.diskFraction = frac.toFloat()
+                    if (item.url.startsWith("nova-dl://")) {
+                        // Streaming download: the bar is the saved part itself; jumping stops just before its end.
+                        vod.diskFraction = 1f
+                        vod.seekLimitMs = if (dur > 0) maxOf(0L, dur - 4_000) else null
+                        val conn = if (d.connections > 1) " · ${d.connections} connections" else ""
+                        val speed = if (d.speed > 0) " · %.1f MB/s".format(d.speed / 1048576.0) else ""
+                        val state = when (d.status) {
+                            com.nova.iptv.data.DownloadStatus.PAUSED -> "paused"
+                            com.nova.iptv.data.DownloadStatus.QUEUED -> DownloadCenter.waitingNote(d)
+                            com.nova.iptv.data.DownloadStatus.FAILED -> "failed"
+                            else -> "downloading"
+                        }
+                        vod.diskStatus = "⬇ Downloaded ${(frac * 100).toInt()} % ($state)$conn$speed" +
+                            (if (dur > 0) " · you can jump up to " + formatDuration(dur) else "")
+                        return
+                    }
                     // Pieces (several connections): jumping anywhere moves the download there.
                     val pieceMap = com.nova.iptv.download.PieceMap.of(d)
                     val inPieces = pieceMap != null

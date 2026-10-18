@@ -30,11 +30,17 @@ class HlsDownload(
 ) {
     companion object {
         fun isHls(url: String) = url.substringBefore('?').substringBefore('#').endsWith(".m3u8", ignoreCase = true)
+
+        /** What the player opens for a running HLS download: a list of the parts already saved (see [GrowingHlsList]). */
+        fun playUrl(downloadId: String) = "nova-dl://$downloadId/video.m3u8"
+
+        /** The saved parts of a download: "init <len>" first when the video has a header part, then "<offset> <len> <seconds>". */
+        fun indexFile(videoPath: String) = Sidecar.file(videoPath, "index")
         private val ATTR = Regex("""([A-Z0-9-]+)=("[^"]*"|[^,]*)""")
     }
 
     private class Key(val method: String, val uri: String?, val iv: ByteArray?)
-    private class Part(val url: String, val key: Key?, val sequence: Long)
+    private class Part(val url: String, val key: Key?, val sequence: Long, val seconds: Double)
 
     private val id = start.id
     private val file = File(start.path)
@@ -82,6 +88,7 @@ class HlsDownload(
         var key: Key? = null
         var init: String? = null
         var seq = 0L
+        var seconds = 0.0
         val out = mutableListOf<Part>()
         text.lines().map { it.trim() }.forEach { l ->
             when {
@@ -96,7 +103,8 @@ class HlsDownload(
                     )
                 }
                 l.startsWith("#EXT-X-MAP") -> init = attrs(l)["URI"]?.let { resolve(url, it) }
-                l.isNotEmpty() && !l.startsWith("#") -> out += Part(resolve(url, l), key, seq++)
+                l.startsWith("#EXTINF") -> seconds = l.substringAfter(':').substringBefore(',').trim().toDoubleOrNull() ?: 0.0
+                l.isNotEmpty() && !l.startsWith("#") -> { out += Part(resolve(url, l), key, seq++, seconds); seconds = 0.0 }
             }
         }
         if (out.isEmpty()) throw IOException("No video parts found in this list")
@@ -132,12 +140,22 @@ class HlsDownload(
                 if (next == 0) length = 0
                 // Continue exactly after the last complete part.
                 RandomAccessFile(file, "rw").use { it.setLength(length) }
+                // The list of saved parts (for watching while it downloads) is cut to the same point.
+                val indexFile = indexFile(start.path)
+                val index = StringBuilder()
+                if (next > 0) runCatching {
+                    val keep = indexFile.readLines().filter { it.isNotBlank() }
+                    val hasInit = keep.firstOrNull()?.startsWith("init") == true
+                    keep.take(next + if (hasInit) 1 else 0).forEach { index.append(it).append('\n') }
+                }
+                indexFile.writeText(index.toString())
                 FileOutputStream(file, true).use { out ->
                     if (next == 0 && init != null) {
                         val bytes = get(init)
                         out.write(bytes); out.flush()
                         length += bytes.size
                         progressFile.writeText("0 $length")
+                        indexFile.writeText("init ${bytes.size}\n")
                     }
                     var lastUi = 0L
                     var lastLen = length
@@ -159,6 +177,7 @@ class HlsDownload(
                             throw (e.cause as? Exception) ?: e
                         }
                         out.write(bytes); out.flush()
+                        indexFile.appendText("$length ${bytes.size} ${parts[next].seconds}\n")
                         length += bytes.size
                         next++
                         progressFile.writeText("$next $length")

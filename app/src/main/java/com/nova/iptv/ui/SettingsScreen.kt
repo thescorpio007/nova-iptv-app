@@ -311,6 +311,7 @@ fun SettingsScreen(vm: MainViewModel) {
                     .forEach { (mb, label) -> Chip(label, s.readAheadMb == mb, { vm.setReadAheadMb(mb) }) }
             }
             BufferFolderLine(com.nova.iptv.data.Folders.BUFFER_MOVIES)
+            BufferFolderLine("Buffer/readahead-hls", "Streaming films (HLS)")
             Text(
                 when (s.readAheadMb) {
                     0 -> "Off: films stream as before, through the normal cache below."
@@ -351,7 +352,7 @@ fun SettingsScreen(vm: MainViewModel) {
             Text(
                 "Puts every setting back to Nova's defaults (clock bottom left, disk live buffer 15 min, 15 s cushion (fast start) growing to 2 min, " +
                     "skip channels that don't work after 8 s, propose similar channels when the line is too slow, open in another app: ask (format problems), " +
-                    "age filter NC-17 with words, 500 MB disk read-ahead, " +
+                    "age filter NC-17 with words, 1 GB disk read-ahead, " +
                     "app audio decoders, Back twice to leave live TV, films sorted by rating, storage in the box's Download/NovaIPTV folder…). " +
                     "Your servers, favorites, order, hidden items, PIN and downloads are kept.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
@@ -548,7 +549,7 @@ private fun mbText(b: Long): String = if (b >= 1L shl 30) "%.1f GB".format(b / 1
 
 /** "Own folder: …/Buffers/live · now 380 MB" (refreshed every few seconds while shown). */
 @Composable
-fun BufferFolderLine(sub: String) {
+fun BufferFolderLine(sub: String, label: String = "Own folder") {
     val context = androidx.compose.ui.platform.LocalContext.current
     val app = context.applicationContext as com.nova.iptv.NovaApp
     val info by androidx.compose.runtime.produceState("…", sub) {
@@ -564,7 +565,7 @@ fun BufferFolderLine(sub: String) {
             kotlinx.coroutines.delay(4000)
         }
     }
-    Text("Own folder: $info", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+    Text("$label: $info", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
 }
 
 /** Settings › Storage › Buffers: both buffers at a glance, and "Clear both". */
@@ -607,6 +608,8 @@ fun BuffersSummary() {
                     java.io.File(com.nova.iptv.data.Folders.bufferDir(context, com.nova.iptv.data.Folders.BUFFER_MOVIES, st.usePublicFolder), "readahead")
                         .listFiles()?.forEach { it.deleteRecursively() }
                 }
+                // Streaming films: emptied through the cache itself (its files can't simply be deleted while it is open).
+                runCatching { app.vodHlsCache.keys.toList().forEach { k -> runCatching { app.vodHlsCache.removeResource(k) } } }
                 tick++
             }
             Toast.makeText(context, "Buffers cleared (the film cache is cleared with “Clear cache now”)", Toast.LENGTH_SHORT).show()

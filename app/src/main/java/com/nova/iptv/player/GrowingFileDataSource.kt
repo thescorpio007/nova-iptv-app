@@ -51,7 +51,8 @@ class GrowingFileDataSource(
         val file = waitForFile()
         raf = RandomAccessFile(file, "r")
         pos = dataSpec.position
-        val total = waitForTotal()
+        // A part of a streaming download (exact size known): no need to wait for the film's size.
+        val total = if (dataSpec.length != C.LENGTH_UNSET.toLong()) C.LENGTH_UNSET.toLong() else waitForTotal()
         remaining = when {
             dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
             total > 0 -> (total - pos).coerceAtLeast(0)
@@ -208,6 +209,97 @@ class GrowingFileDataSource(
             opened = false
             transferEnded()
         }
+        uri = null
+    }
+}
+
+/**
+ * Watching a streaming (HLS) download while it runs: the player gets a list of the parts already saved inside the
+ * joined file (offset + size + seconds of each), refreshed as the download goes on. So the player knows how long
+ * the saved part is and can jump anywhere inside it; the list is closed (end mark) once the download is complete.
+ *  - nova-dl://<id>/video.m3u8 → that list (built from the download's index file);
+ *  - nova-dl://<id>/video.ts   → bytes of the joined file ([GrowingFileDataSource]).
+ */
+@OptIn(UnstableApi::class)
+class GrowingHlsList(
+    private val downloadId: String,
+    private val context: android.content.Context,
+    private val client: okhttp3.OkHttpClient,
+    private val userAgent: String,
+) : BaseDataSource(false) {
+    private var bytes: ByteArray? = null
+    private var readPos = 0
+    private var file: GrowingFileDataSource? = null
+    private var uri: Uri? = null
+    private var opened = false
+
+    override fun open(dataSpec: DataSpec): Long {
+        uri = dataSpec.uri
+        if (!dataSpec.uri.path.orEmpty().endsWith(".m3u8")) {
+            val f = GrowingFileDataSource(downloadId, context, client, userAgent)
+            file = f
+            return f.open(dataSpec)
+        }
+        transferInitializing(dataSpec)
+        val text = buildList()
+        val b = text.toByteArray()
+        bytes = b
+        readPos = dataSpec.position.toInt().coerceIn(0, b.size)
+        opened = true
+        transferStarted(dataSpec)
+        return (b.size - readPos).toLong()
+    }
+
+    /** Waits (up to a minute) for the first saved part, then writes the list. */
+    private fun buildList(): String {
+        val end = System.currentTimeMillis() + 60_000
+        while (true) {
+            val d = DownloadCenter.get(downloadId) ?: throw IOException("The download was removed")
+            val lines = runCatching { com.nova.iptv.download.HlsDownload.indexFile(d.path).readLines().filter { it.isNotBlank() } }
+                .getOrDefault(emptyList())
+            val init = lines.firstOrNull()?.takeIf { it.startsWith("init") }?.substringAfter(' ')?.trim()?.toLongOrNull()
+            val parts = lines.filterNot { it.startsWith("init") }.mapNotNull { l ->
+                val f = l.trim().split(' ')
+                if (f.size < 3) null else Triple(f[0].toLongOrNull() ?: return@mapNotNull null, f[1].toLongOrNull() ?: return@mapNotNull null, f[2].toDoubleOrNull() ?: 0.0)
+            }
+            val done = d.status == DownloadStatus.DONE
+            if (parts.isNotEmpty()) {
+                val target = kotlin.math.ceil(parts.maxOf { it.third }.coerceAtLeast(1.0)).toInt()
+                val sb = StringBuilder("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:$target\n#EXT-X-MEDIA-SEQUENCE:0\n")
+                sb.append(if (done) "#EXT-X-PLAYLIST-TYPE:VOD\n" else "#EXT-X-PLAYLIST-TYPE:EVENT\n")
+                if (init != null) sb.append("#EXT-X-MAP:URI=\"video.ts\",BYTERANGE=\"$init@0\"\n")
+                parts.forEach { (off, len, sec) ->
+                    sb.append("#EXTINF:").append(String.format(java.util.Locale.US, "%.3f", if (sec > 0) sec else 1.0)).append(",\n")
+                    sb.append("#EXT-X-BYTERANGE:$len@$off\nvideo.ts\n")
+                }
+                if (done) sb.append("#EXT-X-ENDLIST\n")
+                return sb.toString()
+            }
+            if (d.status == DownloadStatus.FAILED) throw IOException("Download failed: ${d.error ?: "unknown error"}")
+            if (System.currentTimeMillis() > end) throw IOException("The download hasn't started")
+            try { Thread.sleep(300) } catch (e: InterruptedException) { throw InterruptedIOException() }
+        }
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        file?.let { return it.read(buffer, offset, length) }
+        val b = bytes ?: return C.RESULT_END_OF_INPUT
+        if (length == 0) return 0
+        if (readPos >= b.size) return C.RESULT_END_OF_INPUT
+        val n = minOf(length, b.size - readPos)
+        System.arraycopy(b, readPos, buffer, offset, n)
+        readPos += n
+        bytesTransferred(n)
+        return n
+    }
+
+    override fun getUri(): Uri? = uri
+
+    override fun close() {
+        file?.let { runCatching { it.close() } }
+        file = null
+        bytes = null
+        if (opened) { opened = false; transferEnded() }
         uri = null
     }
 }

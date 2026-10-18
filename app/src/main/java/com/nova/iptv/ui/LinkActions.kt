@@ -169,7 +169,7 @@ object LinkActions {
         val name = label?.takeIf { it.isNotBlank() } ?: title(url).substringBeforeLast('.')
         val d = DownloadCenter.watchNow(context.applicationContext, name, url, ext(url), ItemType.MOVIE, null)
         // HLS: the player reads the joined file being written, not the .m3u8 list.
-        val playUrl = if (HlsDownload.isHls(url)) "nova-dl://${d.id}/video.ts" else url
+        val playUrl = if (HlsDownload.isHls(url)) HlsDownload.playUrl(d.id) else url
         PlaybackQueue.items = listOf(
             PlayItem(SavedItem(ItemType.MOVIE, url, name, accountId = "link"), playUrl, isLive = false, temporary = true, downloadId = d.id)
         )

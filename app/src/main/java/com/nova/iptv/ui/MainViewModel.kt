@@ -1882,7 +1882,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         checkStoragePermission()
         val d = DownloadCenter.watchNow(nova, m.name, base.url, m.extension, ItemType.MOVIE, m.icon,
             com.nova.iptv.data.Locations.subFolderFor(com.nova.iptv.data.Locations.Kind.MOVIES, title = m.name))
-        return base.copy(downloadId = d.id, downloadExt = null)
+        return base.copy(url = hlsPlay(d.id, base.url), downloadId = d.id, downloadExt = null)
     }
 
     /** "Download & watch" an episode. */
@@ -1894,15 +1894,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val url = api.episodeUrl(acc, e.id, e.extension)
         val d = DownloadCenter.watchNow(nova, title, url, e.extension, ItemType.EPISODE, e.image ?: info.series.cover,
             com.nova.iptv.data.Locations.subFolderFor(com.nova.iptv.data.Locations.Kind.SERIES, show = info.series.name, season = e.season))
-        return PlayItem(saved(e, info.series), url, isLive = false, subtitle = e.plot, downloadId = d.id)
+        return PlayItem(saved(e, info.series), hlsPlay(d.id, url), isLive = false, subtitle = e.plot, downloadId = d.id)
     }
 
     /** A download that is still running, watched from what is already saved. */
     fun watchDownload(d: DownloadItem): PlayItem? {
         if (d.status == com.nova.iptv.data.DownloadStatus.DONE) return localPlayItem(d)
         val again = DownloadCenter.watchNow(nova, d.title, d.url, d.path.substringAfterLast('.', "mp4"), d.kind, d.icon)
-        return PlayItem(SavedItem("file", d.id, d.title, d.icon), d.url, isLive = false, downloadId = again.id)
+        return PlayItem(SavedItem("file", d.id, d.title, d.icon), hlsPlay(again.id, d.url), isLive = false, downloadId = again.id)
     }
+
+    /** A streaming (.m3u8) download is watched through the list of its saved parts, not the original address. */
+    private fun hlsPlay(id: String, url: String) =
+        if (com.nova.iptv.download.HlsDownload.isHls(url)) com.nova.iptv.download.HlsDownload.playUrl(id) else url
 
     fun setReadAheadMb(v: Int) { storage.readAheadMb = v; settings.value = readSettings() }
 
