@@ -127,10 +127,11 @@ object Locations {
         appContext.getExternalFilesDirs(null).drop(1).filterNotNull().forEach { appDir ->
             val removable = runCatching { Environment.isExternalStorageRemovable(appDir) }.getOrDefault(true)
             if (!removable) return@forEach
-            val vol = runCatching { sm.getStorageVolume(appDir) }.getOrNull()
             val root = File(appDir.absolutePath.substringBefore("/Android/"))
-            val id = vol?.uuid ?: root.name
-            val sys = runCatching { vol?.getDescription(appContext) }.getOrNull() ?: "USB / SD drive"
+            // Android 5 / 6 can't name the drive: its folder name is used instead.
+            val vol = if (android.os.Build.VERSION.SDK_INT >= 24) runCatching { sm.getStorageVolume(appDir) }.getOrNull() else null
+            val id = (if (android.os.Build.VERSION.SDK_INT >= 24) vol?.uuid else null) ?: root.name
+            val sys = (if (android.os.Build.VERSION.SDK_INT >= 24) runCatching { vol?.getDescription(appContext) }.getOrNull() else null) ?: "USB / SD drive"
             list += Drive(id, sys, root, appDir, removable = true)
         }
         return list

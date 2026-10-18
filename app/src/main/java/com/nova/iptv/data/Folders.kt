@@ -102,7 +102,7 @@ object Folders {
         dirs.drop(1).filterNotNull().forEach { appDir ->
             val removable = runCatching { Environment.isExternalStorageRemovable(appDir) }.getOrDefault(true)
             if (!removable) return@forEach
-            val name = runCatching { sm.getStorageVolume(appDir)?.getDescription(context) }.getOrNull() ?: "USB / SD drive"
+            val name = (if (android.os.Build.VERSION.SDK_INT >= 24) runCatching { sm.getStorageVolume(appDir)?.getDescription(context) }.getOrNull() else null) ?: "USB / SD drive"
             val driveRoot = appDir.absolutePath.substringBefore("/Android/")
             if (hasAllFilesAccess()) {
                 list += StorageOption("$name – NovaIPTV folder", File(driveRoot, "NovaIPTV").absolutePath, "$driveRoot/NovaIPTV")
