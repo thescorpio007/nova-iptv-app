@@ -9,6 +9,11 @@ on:
       - 'docs/**'
       - '.github/workflows/windows-build.yml'
   workflow_dispatch:
+    inputs:
+      android5:
+        description: 'Also build the special Android 5.0 APK'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -65,10 +70,12 @@ jobs:
           mkdir -p out
           cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk"
 
-      # The special build for Android 5.0 and 6 (same app, lower minimum). It never blocks the normal APK:
+      # The special build for Android 5.0 and 6 (same app, lower minimum): ONLY when asked (manual run with android5 = true).
+      # It never blocks the normal APK:
       # when it fails, its log goes to the ci-logs branch (logs/run-N-android5.txt).
       - name: Build the Android 5.0 APK
         id: legacy
+        if: github.event_name == 'workflow_dispatch' && inputs.android5
         continue-on-error: true
         env:
           TMDB_KEY: ${{ secrets.TMDB_KEY }}
@@ -132,6 +139,6 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: Nova IPTV build ${{ github.run_number }}
-          body: Install NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk on your phone or Android TV (Android 7.0 and newer). For Android 5.0 / 6 (older tablets) use NovaIPTV-2.0-WEB-Android5.0-build-${{ github.run_number }}.apk.
+          body: Install NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk on your phone or Android TV (Android 7.0 and newer).${{ steps.legacy.outcome == 'success' && format(' For Android 5.0 / 6 (older tablets) use NovaIPTV-2.0-WEB-Android5.0-build-{0}.apk.', github.run_number) || '' }}
           files: out/NovaIPTV-*.apk
           make_latest: true
