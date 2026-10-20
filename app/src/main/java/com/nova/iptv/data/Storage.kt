@@ -555,6 +555,26 @@ class Storage(context: Context) {
 
     fun setPlayerFor(kind: String, value: String) = prefs.edit().putString("player_$kind", value).apply()
 
+    /** ↗ External players: your order (package names, top first). */
+    var extOrder: List<String>
+        get() = prefs.getString("ext_order", "").orEmpty().split(',').filter { it.isNotBlank() }
+        set(value) = prefs.edit().putString("ext_order", value.joinToString(",")).apply()
+
+    /** Video players you switched off in "Play with…". */
+    var extHidden: Set<String>
+        get() = prefs.getStringSet("ext_hidden", emptySet())?.toSet() ?: emptySet()
+        set(value) = prefs.edit().putStringSet("ext_hidden", value).apply()
+
+    /** Downloaders / other apps (hidden by default) you switched on. */
+    var extShown: Set<String>
+        get() = prefs.getStringSet("ext_shown", emptySet())?.toSet() ?: emptySet()
+        set(value) = prefs.edit().putStringSet("ext_shown", value).apply()
+
+    /** ↗ External player: "ask" (Nova's "Play with…" list) or "first" (always the 1st one of your list). */
+    var extMode: String
+        get() = prefs.getString("ext_mode", "ask") ?: "ask"
+        set(value) = prefs.edit().putString("ext_mode", value).apply()
+
     /** When the built-in player can't play a format, open the external player instead. */
     var externalOnError: Boolean
         get() = prefs.getBoolean("external_on_error", playerMode != "builtin")

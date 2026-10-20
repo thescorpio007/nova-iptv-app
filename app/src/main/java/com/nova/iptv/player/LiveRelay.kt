@@ -108,10 +108,36 @@ class LiveRelay(
                     val input = (resp.body ?: throw IOException("Empty response")).byteStream()
                     var windowStart = System.nanoTime()
                     var windowBytes = 0L
+                    // Some channels (M6, CANAL+…) start with bytes that aren't video (cut packet, a few junk bytes):
+                    // the player then says "stream not recognised" and the connection was restarted again and again.
+                    // Instead, keep only what starts at the first real MPEG-TS packet of each connection.
+                    val start = java.io.ByteArrayOutputStream()
+                    var aligned = false
                     while (running) {
                         val n = input.read(buf)
                         if (n < 0) break
                         if (n == 0) continue
+                        if (!aligned) {
+                            start.write(buf, 0, n)
+                            val bytes = start.toByteArray()
+                            val at = tsSync(bytes)
+                            if (at < 0 && bytes.size < START_SCAN_BYTES) continue
+                            aligned = true
+                            val from = if (at < 0) 0 else at // not MPEG-TS at all: pass everything on as it is
+                            if (from > 0) {
+                                skippedStartBytes += from
+                                android.util.Log.i("NovaTest", "RELAY skipped $from bytes before the first video packet")
+                            }
+                            val len = bytes.size - from
+                            if (len > 0) {
+                                append(bytes, len, from)
+                                tap?.invoke(bytes, from, len)
+                            }
+                            consecutiveFailures = 0
+                            lastError = null
+                            windowBytes += len
+                            continue
+                        }
                         append(buf, n)
                         tap?.invoke(buf, 0, n)
                         consecutiveFailures = 0
@@ -146,7 +172,20 @@ class LiveRelay(
         }
     }
 
-    private fun append(b: ByteArray, n: Int) {
+    /** First offset where 3 MPEG-TS packets (sync byte 0x47 every 188 bytes) follow each other; -1 if none yet. */
+    private fun tsSync(b: ByteArray): Int {
+        val last = b.size - 2 * 188 - 1
+        for (i in 0..last) {
+            if (b[i] == TS_SYNC && b[i + 188] == TS_SYNC && b[i + 376] == TS_SYNC) return i
+        }
+        return -1
+    }
+
+    /** Bytes thrown away at connection starts because they weren't video. */
+    @Volatile var skippedStartBytes = 0L
+        private set
+
+    private fun append(b: ByteArray, n: Int, from: Int = 0) {
         synchronized(lock) {
             var seg = segments.lastOrNull()
             if (seg == null || seg.length >= SEGMENT_BYTES || writer == null) {
@@ -155,7 +194,7 @@ class LiveRelay(
                 segments.addLast(seg)
                 writer = FileOutputStream(seg.file)
             }
-            writer?.write(b, 0, n)
+            writer?.write(b, from, n)
             seg.length += n
             written += n
             lastDataAt = android.os.SystemClock.elapsedRealtime()
@@ -331,6 +370,9 @@ class LiveRelay(
     companion object {
         private const val SEGMENT_BYTES = 4L * 1024 * 1024
         private const val STALL_TIMEOUT_MS = 25_000L
+        private const val TS_SYNC: Byte = 0x47
+        /** Look this far for the first video packet; beyond it the stream is passed on unchanged. */
+        private const val START_SCAN_BYTES = 1024 * 1024
     }
 }
 

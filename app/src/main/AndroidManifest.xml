@@ -185,6 +185,12 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.Nova.Player" />
 
+        <activity
+            android:name=".player.PlayWithActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

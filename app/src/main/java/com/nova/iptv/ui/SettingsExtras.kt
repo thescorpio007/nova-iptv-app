@@ -537,6 +537,8 @@ fun PlayerSettings(vm: MainViewModel) {
         }
     }
 
+    ExternalPlayersCard()
+
     SettingsCard("Built-in player") {
         Text("Video decoder", fontWeight = FontWeight.Medium)
         Hint("Hardware uses the box's chip (needed for 4K, HEVC and HDR). Software can help with a few unusual SD/HD streams but is slow for 4K.")
@@ -1419,4 +1421,39 @@ fun AllFilesNotice() {
         runCatching { context.startActivity(com.nova.iptv.data.Folders.allFilesAccessIntent(context).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
             .onFailure { Toast.makeText(context, "Open Android Settings › Apps › Nova IPTV › All files access", Toast.LENGTH_LONG).show() }
     }) { Text("🔓 Allow all files access") }
+}
+
+
+/** Settings › Players › ↗ External players: your order (▲▼ one place), show / hide in "Play with…", ask or always the 1st. */
+@Composable
+private fun ExternalPlayersCard() {
+    val context = LocalContext.current
+    val st = (context.applicationContext as com.nova.iptv.NovaApp).storage
+    var version by remember { mutableStateOf(0) }
+    val entries = remember(version) { com.nova.iptv.player.ExternalPlayer.entries(context) }
+    var mode by remember { mutableStateOf(st.extMode) }
+    SettingsCard("↗ External players", summary = entries.filter { it.visible }.joinToString(" · ") { it.app.label }.ifBlank { "none installed" }) {
+        Hint("Your order (top = first in “Play with…”). ▲▼ move one place · the switch shows / hides an app. Downloaders (1DM…), file managers and browsers are hidden until you switch them on.")
+        if (entries.isEmpty()) Hint("No app that plays videos is installed. Install VLC, MX Player or Just Player from the store.")
+        var n = 0
+        entries.forEachIndexed { i, e ->
+            val number = if (e.visible) (++n).toString() else "–"
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(number, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(22.dp))
+                Text(
+                    e.app.label + (if (!e.player) "  (not a video player)" else "") + (if (i == 0 && e.visible) "  · default" else ""),
+                    fontSize = 15.sp, modifier = Modifier.weight(1f),
+                    color = if (e.visible) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SmallButton("▲", { com.nova.iptv.player.ExternalPlayer.move(context, e.app.packageName, -1); version++ })
+                SmallButton("▼", { com.nova.iptv.player.ExternalPlayer.move(context, e.app.packageName, 1); version++ })
+                androidx.compose.material3.Switch(
+                    checked = e.visible,
+                    onCheckedChange = { on -> com.nova.iptv.player.ExternalPlayer.setVisible(context, e, on); version++ },
+                )
+            }
+        }
+        Text("When I press ↗ External player", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("ask" to "Ask me (my list)", "first" to "Always the 1st one"), mode) { mode = it; st.extMode = it }
+    }
 }
