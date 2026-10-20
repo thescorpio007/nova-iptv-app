@@ -1725,7 +1725,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (part == "web" || kind == "web") { android.util.Log.i("NovaTest", "BACKUP restored (web browser)"); return }
         storage.importBackup(text)
-        com.nova.iptv.data.Locations.init(getApplication(), storage) // older backups: internal storage, rating sort, 100 MB
+        com.nova.iptv.data.Locations.init(getApplication(), storage) // older backups: internal storage, rating sort, 1 GB
         Folders.customRoot = storage.storageRoot
         DownloadCenter.init(storage)
         accounts.value = storage.accounts

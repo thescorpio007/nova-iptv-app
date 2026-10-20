@@ -65,7 +65,7 @@ object Locations {
 
     /**
      * Once (also after restoring an older backup): internal storage Download/NovaIPTV as the main place,
-     * backups and buffers "Same as main", films sorted by rating, 100 MB disk read-ahead.
+     * backups and buffers "Same as main", films sorted by rating, 1 GB disk read-ahead.
      */
     private fun applyHouseDefaults() {
         if (storage.has(HOUSE_DEFAULTS)) return
@@ -73,9 +73,9 @@ object Locations {
         set(Kind.BACKUPS, Location("main"))
         set(Kind.BUFFERS, Location("main"))
         storage.setSortFor("movie", "rating")
-        storage.readAheadMb = 100
+        storage.readAheadMb = 1000
         storage.markDone(HOUSE_DEFAULTS)
-        android.util.Log.i("NovaTest", "DEFAULTS applied: internal storage, rating sort, 100 MB read-ahead")
+        android.util.Log.i("NovaTest", "DEFAULTS applied: internal storage, rating sort, 1 GB read-ahead")
     }
 
     private const val HOUSE_DEFAULTS = "house_defaults_1"
