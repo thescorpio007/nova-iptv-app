@@ -69,9 +69,9 @@ class PlayerActivity : ComponentActivity() {
     private var readAhead: ReadAheadBuffer? = null
     private var hlsAhead: HlsReadAhead? = null
 
-    // 🔊 Volume boost: Android's loudness enhancer on the player's sound (with its own limiter), 100–200 %.
-    private var enhancer: android.media.audiofx.LoudnessEnhancer? = null
-    private var enhancerSession = 0
+    // 🔊 Volume boost: Nova's own gain + limiter in the sound path ([GainProcessor]), 100–200 %.
+    /** ☀ The picture brightness effect is in the player (needed once the brightness leaves "normal"). */
+    private var brightnessInstalled = false
     /** "This video only" level (not saved); null = use the saved level. */
     private var boostSession: Int? = null
     private var boostKeyOf: String? = null
@@ -451,6 +451,7 @@ class PlayerActivity : ComponentActivity() {
             onBack = { finish() },
             onAspect = { cycleAspect(); resizeNames[resizeIndex] },
             onLoadSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
+            onBrightness = { v -> setPictureBrightness(v) },
             extraButtons = listOf(
                 "🔊 Boost" to { showBoost() },
                 "⬇ Download" to { downloadCurrent() },
@@ -564,6 +565,8 @@ class PlayerActivity : ComponentActivity() {
         player = p
         playerMode = mode
         playerView.player = p
+        brightnessInstalled = false
+        if (PictureBrightness.gain != 1f) installBrightness(p)
         applyBoost()
         return p
     }
@@ -808,24 +811,8 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun applyBoost() {
-        val p = player ?: return
         val level = boostLevel()
-        val session = p.audioSessionId
-        runCatching {
-            if (level <= 100) {
-                enhancer?.enabled = false
-            } else if (session != 0 && session != C.AUDIO_SESSION_ID_UNSET) {
-                if (enhancer == null || enhancerSession != session) {
-                    runCatching { enhancer?.release() }
-                    enhancer = android.media.audiofx.LoudnessEnhancer(session)
-                    enhancerSession = session
-                }
-                // 200 % = twice as loud = +6 dB (millibels).
-                val mB = (2000 * kotlin.math.log10(level / 100.0)).toInt()
-                enhancer?.setTargetGain(mB)
-                enhancer?.enabled = true
-            }
-        }.onFailure { Log.w("NovaTest", "BOOST not available: ${it.message}") }
+        GainProcessor.gain = level / 100f
         boostBadge?.let { b ->
             b.text = "🔊 $level %"
             b.visibility = if (level > 100) View.VISIBLE else View.GONE
@@ -877,6 +864,36 @@ class PlayerActivity : ComponentActivity() {
         dialog.show()
     }
 
+    private fun installBrightness(p: ExoPlayer): Boolean {
+        if (brightnessInstalled) return true
+        val h = p.videoFormat?.height ?: 0
+        if (h > 1200) return false // 4K: the extra picture step would be too heavy for the box
+        return runCatching {
+            p.setVideoEffects(listOf<androidx.media3.common.Effect>(PictureBrightness))
+            brightnessInstalled = true
+            Log.i("NovaTest", "BRIGHTNESS effect on")
+        }.onFailure { Log.w("NovaTest", "BRIGHTNESS not available: ${it.message}") }.isSuccess
+    }
+
+    /** ☀ bar: 0 = darker (50 %), 0.5 = normal, 1 = brighter (150 %). */
+    private fun setPictureBrightness(v: Float) {
+        val g = (0.5f + v.coerceIn(0f, 1f)).let { if (kotlin.math.abs(it - 1f) < 0.03f) 1f else it }
+        PictureBrightness.gain = g
+        val p = player ?: return
+        val item = current ?: return
+        if (g == 1f || brightnessInstalled) return
+        if ((p.videoFormat?.height ?: 0) > 1200) {
+            PictureBrightness.gain = 1f
+            Toast.makeText(this, "Brightness isn't available for 4K videos (too heavy for the box)", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // The effect is fitted when the video starts: restart quietly at the same place once.
+        if (installBrightness(p)) {
+            if (item.isLive) startPlayback(PlaybackQueue.index, quiet = true, keepTweaks = true)
+            else restartAt(item, p.currentPosition.coerceAtLeast(0L))
+        }
+    }
+
     private fun showVideoInfo() {
         val p = player
         val text = VideoBadge.details(p?.videoFormat, p?.audioFormat, videoDecoderName)
@@ -889,7 +906,6 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private val listener = object : Player.Listener {
-        override fun onAudioSessionIdChanged(audioSessionId: Int) { applyBoost() }
         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) { updateBadge() }
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
             updateBadge()
@@ -3249,8 +3265,8 @@ class PlayerActivity : ComponentActivity() {
         readAhead = null
         hlsAhead?.close()
         hlsAhead = null
-        runCatching { enhancer?.release() }
-        enhancer = null
+        GainProcessor.gain = 1f
+        PictureBrightness.gain = 1f
         networkCallback?.let { cb -> runCatching { (getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)?.unregisterNetworkCallback(cb) } }
         super.onDestroy()
     }

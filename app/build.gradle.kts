@@ -97,6 +97,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
     implementation("androidx.media3:media3-ui:$media3")
+    implementation("androidx.media3:media3-effect:$media3")
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("androidx.media3:media3-database:$media3")
     // Extra audio decoders (DTS, AC3, E-AC3, TrueHD, MP2, …) built on FFmpeg, prebuilt by the Jellyfin project.

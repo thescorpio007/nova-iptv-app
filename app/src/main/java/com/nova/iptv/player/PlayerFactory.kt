@@ -206,7 +206,15 @@ object PlayerFactory {
             }
             if (softwareFirst) all.sortedBy { if (it.softwareOnly) 0 else 1 } else all
         }
-        val renderers = DefaultRenderersFactory(context)
+        val renderers = object : DefaultRenderersFactory(context) {
+            // 🔊 Boost: Nova's own gain + limiter in the sound path (works even where Android's sound effects are skipped).
+            override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): androidx.media3.exoplayer.audio.AudioSink =
+                androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(arrayOf<androidx.media3.common.audio.AudioProcessor>(GainProcessor()))
+                    .build()
+        }
             .setMediaCodecSelector(codecSelector)
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(

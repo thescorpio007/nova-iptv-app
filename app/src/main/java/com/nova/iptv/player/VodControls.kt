@@ -110,6 +110,8 @@ class VodControls(
     private val onBack: () -> Unit,
     private val onAspect: () -> String,
     private val onLoadSubtitle: () -> Unit,
+    /** ☀ bar moved: 0 darker … 0.5 normal … 1 brighter (done on the picture, also on a TV box). */
+    private val onBrightness: (Float) -> Unit,
     private val extraButtons: List<Pair<String, () -> Unit>>,
 ) {
     private val ctx: Context = activity
@@ -393,11 +395,7 @@ class VodControls(
 
     // ------------------------------------------------------------------ actions
 
-    private fun setBrightness(v: Float) {
-        val lp = activity.window.attributes
-        lp.screenBrightness = v.coerceIn(0.02f, 1f)
-        activity.window.attributes = lp
-    }
+    private fun setBrightness(v: Float) = onBrightness(v)
 
     private fun setVolume(v: Float) {
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -405,8 +403,7 @@ class VodControls(
     }
 
     private fun syncLevels() {
-        val b = activity.window.attributes.screenBrightness
-        brightness.value = if (b < 0) 0.5f else b
+        brightness.value = (PictureBrightness.gain - 0.5f).coerceIn(0f, 1f)
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         volume.value = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max
     }
