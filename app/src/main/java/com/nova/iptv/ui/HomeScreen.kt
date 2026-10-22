@@ -109,7 +109,8 @@ fun HomeScreen(vm: MainViewModel, isTv: Boolean, onPlay: PlayFn) {
     BackHandler(enabled = movieDetail != null) { vm.closeMovie() }
     BackHandler(enabled = detail == null && edit) { vm.setEditMode(false) }
     // Films & series handle Back themselves (posters → groups → tabs) and never jump to Live TV.
-    BackHandler(enabled = detail == null && !edit && tab != Tab.LIVE && tab != Tab.FILMS && tab != Tab.SERIES) { vm.setTab(Tab.LIVE) }
+    // A film or series page opened from Search / Recent / Downloads: Back closes that page first (back to the same list).
+    BackHandler(enabled = detail == null && movieDetail == null && !edit && tab != Tab.LIVE && tab != Tab.FILMS && tab != Tab.SERIES) { vm.setTab(Tab.LIVE) }
     val tabFocus = remember { FocusRequester() }
     var tabsHaveFocus by remember { mutableStateOf(false) }
     val tabs = TabFocus(
