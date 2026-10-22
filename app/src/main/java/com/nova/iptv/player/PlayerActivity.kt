@@ -68,6 +68,14 @@ class PlayerActivity : ComponentActivity() {
     /** Disk read-ahead of the current film / episode (Settings → Player). */
     private var readAhead: ReadAheadBuffer? = null
     private var hlsAhead: HlsReadAhead? = null
+
+    // 🔊 Volume boost: Android's loudness enhancer on the player's sound (with its own limiter), 100–200 %.
+    private var enhancer: android.media.audiofx.LoudnessEnhancer? = null
+    private var enhancerSession = 0
+    /** "This video only" level (not saved); null = use the saved level. */
+    private var boostSession: Int? = null
+    private var boostKeyOf: String? = null
+    private var boostBadge: TextView? = null
     private var spaceWarned = false
 
     private lateinit var playerView: PlayerView
@@ -343,11 +351,12 @@ class PlayerActivity : ComponentActivity() {
         val tracksButton = pill("CC Audio & subtitles") { vod.openPanel() }
         val infoButton = pill("ℹ Video info") { showVideoInfo() }
         similarButton = pill("≈ Similar") { showSimilar(auto = false) }
+        val boostButton = pill("🔊 Boost") { showBoost() }
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, boostButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -443,6 +452,7 @@ class PlayerActivity : ComponentActivity() {
             onAspect = { cycleAspect(); resizeNames[resizeIndex] },
             onLoadSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
             extraButtons = listOf(
+                "🔊 Boost" to { showBoost() },
                 "⬇ Download" to { downloadCurrent() },
                 "↗ External player" to { openExternal() },
                 "♡ Favorite" to { toggleFavorite() },
@@ -458,6 +468,17 @@ class PlayerActivity : ComponentActivity() {
 
         root.addView(playerView)
         root.addView(vod.view)
+        boostBadge = TextView(this).apply {
+            setTextColor(0xFF003311.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(0xFF39D98A.toInt()) }
+            setPadding(dp(12), dp(5), dp(12), dp(5))
+            visibility = View.GONE
+        }
+        root.addView(boostBadge, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(18); rightMargin = dp(24)
+        })
         root.addView(infoBar)
         root.addView(statusView)
         root.addView(clockView)
@@ -543,6 +564,7 @@ class PlayerActivity : ComponentActivity() {
         player = p
         playerMode = mode
         playerView.player = p
+        applyBoost()
         return p
     }
 
@@ -706,6 +728,7 @@ class PlayerActivity : ComponentActivity() {
         }
         p.prepare()
         p.playWhenReady = true
+        applyBoost()
 
         if (item.isLive) {
             // Never give up before the safety cushion has had time to fill.
@@ -775,6 +798,85 @@ class PlayerActivity : ComponentActivity() {
         if (::vod.isInitialized) vod.setBadge(b)
     }
 
+    /** The boost for what is playing: "this video only" level, else this channel / film's saved level, else the general one. */
+    private fun boostLevel(): Int {
+        val key = current?.key
+        if (key != boostKeyOf) { boostKeyOf = key; boostSession = null }
+        boostSession?.let { return it }
+        val saved = key?.let { app.storage.boostFor(it) } ?: 0
+        return (if (saved > 0) saved else app.storage.boostAll).coerceIn(100, 200)
+    }
+
+    private fun applyBoost() {
+        val p = player ?: return
+        val level = boostLevel()
+        val session = p.audioSessionId
+        runCatching {
+            if (level <= 100) {
+                enhancer?.enabled = false
+            } else if (session != 0 && session != C.AUDIO_SESSION_ID_UNSET) {
+                if (enhancer == null || enhancerSession != session) {
+                    runCatching { enhancer?.release() }
+                    enhancer = android.media.audiofx.LoudnessEnhancer(session)
+                    enhancerSession = session
+                }
+                // 200 % = twice as loud = +6 dB (millibels).
+                val mB = (2000 * kotlin.math.log10(level / 100.0)).toInt()
+                enhancer?.setTargetGain(mB)
+                enhancer?.enabled = true
+            }
+        }.onFailure { Log.w("NovaTest", "BOOST not available: ${it.message}") }
+        boostBadge?.let { b ->
+            b.text = "🔊 $level %"
+            b.visibility = if (level > 100) View.VISIBLE else View.GONE
+        }
+    }
+
+    /** 🔊 Boost panel: 100–200 %, then where it applies (this video only / always for this channel or film / everything). */
+    private fun showBoost() {
+        val item = current ?: return
+        val levels = listOf(100, 125, 150, 175, 200)
+        var chosen = boostLevel()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(4)) }
+        val passthrough = app.storage.audioDecoder == "device"
+        box.addView(TextView(this).apply {
+            text = "For films and channels whose sound is too low. Above 100 % Nova raises the sound itself; a limiter stops loud scenes from crackling." +
+                (if (passthrough) "\nNote: with “Box first (passthrough)”, Dolby / DTS sound going straight to a soundbar can't be boosted." else "")
+            setTextColor(0xFFB8C4DD.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        })
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, dp(10)) }
+        val chips = mutableListOf<TextView>()
+        fun mark() = chips.forEachIndexed { i, c -> c.text = (if (levels[i] == chosen) "● " else "") + "${levels[i]} %" }
+        levels.forEach { l ->
+            val c = pill("$l %") {
+                chosen = l
+                boostSession = l
+                applyBoost()
+                mark()
+            }
+            chips += c
+            row.addView(c, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
+        }
+        mark()
+        box.addView(row)
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("🔊 Volume boost")
+            .setView(box)
+            .setNegativeButton("This video only") { _, _ -> boostSession = chosen; applyBoost() }
+            .setNeutralButton("Everything") { _, _ ->
+                app.storage.boostAll = chosen
+                app.storage.setBoostFor(item.key, 0)
+                boostSession = null; applyBoost()
+            }
+            .setPositiveButton(if (item.isLive) "Always for this channel" else "Always for this film") { _, _ ->
+                app.storage.setBoostFor(item.key, chosen)
+                boostSession = null; applyBoost()
+            }
+            .create()
+        dialog.setOnShowListener { chips.getOrNull(levels.indexOf(chosen).coerceAtLeast(0))?.requestFocus() }
+        dialog.show()
+    }
+
     private fun showVideoInfo() {
         val p = player
         val text = VideoBadge.details(p?.videoFormat, p?.audioFormat, videoDecoderName)
@@ -787,6 +889,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private val listener = object : Player.Listener {
+        override fun onAudioSessionIdChanged(audioSessionId: Int) { applyBoost() }
         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) { updateBadge() }
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
             updateBadge()
@@ -3146,6 +3249,8 @@ class PlayerActivity : ComponentActivity() {
         readAhead = null
         hlsAhead?.close()
         hlsAhead = null
+        runCatching { enhancer?.release() }
+        enhancer = null
         networkCallback?.let { cb -> runCatching { (getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)?.unregisterNetworkCallback(cb) } }
         super.onDestroy()
     }

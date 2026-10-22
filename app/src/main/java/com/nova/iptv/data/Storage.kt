@@ -555,6 +555,17 @@ class Storage(context: Context) {
 
     fun setPlayerFor(kind: String, value: String) = prefs.edit().putString("player_$kind", value).apply()
 
+    /** 🔊 Volume boost for everything, in % (100 = off, up to 200). */
+    var boostAll: Int
+        get() = prefs.getInt("boost_all", 100)
+        set(value) = prefs.edit().putInt("boost_all", value).apply()
+
+    /** 🔊 Volume boost kept for one channel / film (0 = none saved). */
+    fun boostFor(key: String): Int = prefs.getInt("boost_k_$key", 0)
+    fun setBoostFor(key: String, percent: Int) = prefs.edit().apply {
+        if (percent <= 0) remove("boost_k_$key") else putInt("boost_k_$key", percent)
+    }.apply()
+
     /** ↗ External players: your order (package names, top first). */
     var extOrder: List<String>
         get() = prefs.getString("ext_order", "").orEmpty().split(',').filter { it.isNotBlank() }
