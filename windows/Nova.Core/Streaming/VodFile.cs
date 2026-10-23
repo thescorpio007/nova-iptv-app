@@ -107,6 +107,28 @@ namespace Nova.Core.Streaming
             }
         }
 
+        /// <summary>The parts already on disk, as fractions of the file (0–1): "Watch now" can start inside any of them.</summary>
+        public List<Tuple<double, double>> SavedRanges()
+        {
+            var list = new List<Tuple<double, double>>();
+            lock (_lock)
+            {
+                if (_filled == null || _length <= 0) return list;
+                int start = -1;
+                for (int i = 0; i <= _chunks; i++)
+                {
+                    var full = i < _chunks && _filled[i] >= ChunkLen(i);
+                    if (full && start < 0) start = i;
+                    if (!full && start >= 0)
+                    {
+                        list.Add(Tuple.Create((double)start * ChunkSize / _length, Math.Min(1.0, (double)i * ChunkSize / _length)));
+                        start = -1;
+                    }
+                }
+            }
+            return list;
+        }
+
         public bool IsComplete
         {
             get { lock (_lock) return CompleteLocked(); }

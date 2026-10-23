@@ -15,6 +15,14 @@
     <PackageReference Include="Portable.BouncyCastle" Version="1.9.0" />
   </ItemGroup>
 
+  <!-- The film database key for the age filter: given by the build (TMDB_KEY secret), never written in the code. -->
+  <ItemGroup Condition="'$(TmdbKey)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>TmdbKey</_Parameter1>
+      <_Parameter2>$(TmdbKey)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="System.Net.Http" />
     <InternalsVisibleTo Include="Nova.Core.Tests" />

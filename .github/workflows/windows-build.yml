@@ -27,11 +27,15 @@ jobs:
 
       - name: Build (x86, .NET Framework 4.8)
         id: build
+        env:
+          TMDB_KEY: ${{ secrets.TMDB_KEY }}
         run: |
           $ver = "2.0.${{ github.run_number }}"
           $info = "2.0 (build ${{ github.run_number }})"
+          $tmdb = ($env:TMDB_KEY -replace '[^A-Za-z0-9._-]', '')
+          if ($tmdb) { Write-Host ("::notice title=TMDB key::built in ({0} characters)" -f $tmdb.Length) } else { Write-Host "::warning title=TMDB key::the TMDB_KEY secret is not set" }
           msbuild windows\NovaIPTV.sln -restore -m -nologo -v:minimal `
-            -p:Configuration=Release -p:Version=$ver "-p:InformationalVersion=$info" -p:IncludeSourceRevisionInInformationalVersion=false `
+            -p:Configuration=Release -p:Version=$ver "-p:InformationalVersion=$info" -p:IncludeSourceRevisionInInformationalVersion=false "-p:TmdbKey=$tmdb" `
             -p:TreatWarningsAsErrors=false 2>&1 | Tee-Object -FilePath build.log
           if ($LASTEXITCODE -ne 0) { exit 1 }
 

@@ -11,8 +11,9 @@ using Nova.Core;
 namespace Nova.App
 {
     /// <summary>
-    /// The group list on the left of every zone: ★ Favorites, 🆕 Recently added (films, series), then the groups of
-    /// each account in its own section (▾ open / ▸ closed), in your order, hidden groups left out — like the Android app.
+    /// The group list on the left of every zone: ★ Favorites, then the groups of each account in its own section
+    /// (▾ open / ▸ closed), in your order, hidden groups and groups the parental filter hides left out — like the Android app.
+    /// A double click on a group asks "Hide …?" (No first, No by itself after 10 s).
     /// In edit mode: Enter picks a group up (▲ ▼ move it, Enter drops it), H hides / shows, Home / End = top / bottom.
     /// </summary>
     public partial class GroupPanel : UserControl
@@ -46,6 +47,21 @@ namespace Nova.App
             };
             GroupList.ContextMenuOpening += OnContextMenu;
             GroupList.ContextMenu = new ContextMenu();
+            GroupList.MouseDoubleClick += OnDoubleClick;
+            Filtering.Changed += () => { if (_sections.Count > 0 && !_edit) Build(); };
+        }
+
+        /// <summary>Double click on a group: "Hide the group …?" — No first, No by itself after 10 s.</summary>
+        private void OnDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            if (_edit) return;
+            var item = ItemsControl.ContainerFromElement(GroupList, e.OriginalSource as DependencyObject) as ListBoxItem;
+            var row = item == null ? null : item.DataContext as GroupRow;
+            if (row == null || row.Kind != GroupKind.Group) return;
+            e.Handled = true;
+            var w = Window.GetWindow(this);
+            if (!NovaDialog.AskTimed(w, "Hide the group “" + row.Category.Name + "”?", "You can show it again in Settings › Hidden items.", "Yes, hide", "No", 10, false)) return;
+            ToggleHidden(row);
         }
 
         public string OpenKey { get { return _openKey; } }
@@ -120,7 +136,6 @@ namespace Nova.App
             var multi = _sections.Count > 1;
             var showHidden = Organize.ShowsHidden(_edit);
             if (App.Store.FavoritesOf(SavedType).Count > 0) _rows.Add(new GroupRow { Kind = GroupKind.Favorites });
-            if (Type != ContentType.Live) _rows.Add(new GroupRow { Kind = GroupKind.New });
             var anyGroup = false;
             foreach (var s in _sections)
             {
@@ -129,6 +144,7 @@ namespace Nova.App
                 if (multi && closed) continue;
                 foreach (var c in Organize.Groups(Zone, _ordered, s.Account.Id, showHidden))
                 {
+                    if (Filtering.HidesGroup(Zone, c)) continue;
                     _rows.Add(new GroupRow { Kind = GroupKind.Group, Category = c, Account = s.Account, ShowSections = multi, Hidden = Organize.IsGroupHidden(Zone, c.Key) });
                     anyGroup = true;
                 }

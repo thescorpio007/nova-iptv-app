@@ -569,6 +569,14 @@ namespace Nova.Core
         }
 
         /// <summary>Saves a new order of one zone's favorites (others keep their place).</summary>
+        /// <summary>Replaces all favorites (lists backup).</summary>
+        public void SetFavorites(List<SavedItem> favorites)
+        {
+            Favorites = (favorites ?? new List<SavedItem>()).Where(f => f != null && f.Id != null).ToList();
+            Save("favorites.json", Favorites);
+            Raise(FavoritesChanged);
+        }
+
         public void ReorderFavorites(string type, List<SavedItem> ordered)
         {
             var queue = new Queue<SavedItem>(ordered);

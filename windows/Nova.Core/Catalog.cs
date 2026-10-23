@@ -115,6 +115,19 @@ namespace Nova.Core
         // ---------------------------------------------------------------- groups
 
         /// <summary>Groups of every account for one zone, loaded in parallel.</summary>
+        /// <summary>The groups of a zone when they are already loaded, or null (never downloads).</summary>
+        public List<GroupSection> SectionsIfLoaded(ContentType type)
+        {
+            var list = new List<GroupSection>();
+            foreach (var a in _store.Accounts.ToList())
+            {
+                Task<object> t;
+                if (_cache.TryGetValue("cats|" + Code(type) + "|" + a.Id, out t) && t.Status == TaskStatus.RanToCompletion && t.Result is List<Category>)
+                    list.Add(new GroupSection { Account = a, Groups = (List<Category>)t.Result });
+            }
+            return list;
+        }
+
         public async Task<List<GroupSection>> Sections(ContentType type)
         {
             var accounts = _store.Accounts.ToList();

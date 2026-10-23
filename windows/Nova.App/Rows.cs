@@ -127,6 +127,13 @@ namespace Nova.App
         private bool _rec;
         public bool IsRecording { get { return _rec; } set { _rec = value; Changed(); Changed("RecVisibility"); } }
         public Visibility RecVisibility { get { return _rec ? Visibility.Visible : Visibility.Collapsed; } }
+
+        // ---- status dot (green / red / orange / grey)
+        public string DotKey { get; set; }
+        public Brush DotBrush { get { return DotLook.BrushOf(DotKey); } }
+        public string DotTip { get { return DotLook.TipOf(DotKey); } }
+        public Visibility DotVisibility { get { return DotLook.Visible(DotKey) ? Visibility.Visible : Visibility.Collapsed; } }
+        public void RefreshDot() { Changed("DotBrush"); Changed("DotTip"); Changed("DotVisibility"); }
     }
 
     /// <summary>A film or series tile in the poster grid.</summary>
@@ -157,6 +164,55 @@ namespace Nova.App
         private bool _moving;
         public bool Moving { get { return _moving; } set { _moving = value; Changed(); Changed("MoveBrush"); } }
         public Brush MoveBrush { get { return _moving ? (Brush)Application.Current.Resources["StarBrush"] : Brushes.Transparent; } }
+
+        // ---- status dot (green / red / orange / grey)
+        public string DotKey { get; set; }
+        public Brush DotBrush { get { return DotLook.BrushOf(DotKey); } }
+        public string DotTip { get { return DotLook.TipOf(DotKey); } }
+        public Visibility DotVisibility { get { return DotLook.Visible(DotKey) ? Visibility.Visible : Visibility.Collapsed; } }
+        public void RefreshDot() { Changed("DotBrush"); Changed("DotTip"); Changed("DotVisibility"); }
+    }
+
+    /// <summary>Colours and words of the status dots (Settings › Live TV › Status dots).</summary>
+    public static class DotLook
+    {
+        private static readonly Brush Green = Frozen(0x2E, 0xE6, 0x6B);
+        private static readonly Brush Red = Frozen(0xFF, 0x5A, 0x52);
+        private static readonly Brush Orange = Frozen(0xFF, 0xA3, 0x1A);
+        private static readonly Brush Grey = Frozen(0x6E, 0x76, 0x81);
+        private static readonly Brush Checking = Frozen(0xC9, 0xD1, 0xD9);
+
+        private static Brush Frozen(byte r, byte g, byte b) { var x = new SolidColorBrush(Color.FromRgb(r, g, b)); x.Freeze(); return x; }
+
+        public static bool Visible(string key) { return key != null && App.Dots != null && App.Store.Settings.StatusDots; }
+
+        public static Brush BrushOf(string key)
+        {
+            if (!Visible(key)) return Brushes.Transparent;
+            switch (App.Dots.Status(key))
+            {
+                case DotState.Ok: return Green;
+                case DotState.Bad: return Red;
+                case DotState.Device: return Orange;
+                case DotState.Checking: return Checking;
+                default: return Grey;
+            }
+        }
+
+        public static string TipOf(string key)
+        {
+            if (!Visible(key)) return null;
+            string note;
+            switch (App.Dots.Status(key, out note))
+            {
+                case DotState.Ok: return "● Works";
+                case DotState.Bad: return "● Not working" + (note != null ? ": " + note : "");
+                case DotState.Device: return "● Works, but this PC can't play its format" + (note != null ? " (" + note + ")" : "");
+                case DotState.Checking: return "● Checking…";
+                case DotState.Waiting: return "● Not checked yet — " + note;
+                default: return "● Not checked yet";
+            }
+        }
     }
 
     /// <summary>One row of posters (the grid is a virtualized list of rows, so huge lists stay fast).</summary>
@@ -196,6 +252,8 @@ namespace Nova.App
         public bool Hls { get; set; }
         /// <summary>Remembers where you stopped ("type_account_id"), or null.</summary>
         public string ResumeKey { get; set; }
+        /// <summary>Start inside the video at this fraction (0–1), e.g. a part already downloaded ("Watch now").</summary>
+        public double StartFraction { get; set; }
         /// <summary>Saved in Recently watched when it starts.</summary>
         public SavedItem Recent { get; set; }
         public string Icon { get; set; }

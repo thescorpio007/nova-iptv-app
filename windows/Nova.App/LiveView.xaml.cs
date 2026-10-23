@@ -54,7 +54,12 @@ namespace Nova.App
             UpdateSortText();
             Channels.ContextMenu = new ContextMenu();
             Channels.ContextMenuOpening += OnChannelMenu;
+            Filtering.Changed += () => { if (_group != null && !_edit) Fill(_group, Channels.SelectedItem is ChannelRow ? ((ChannelRow)Channels.SelectedItem).Channel.Key : null); };
+            _dotTimer.Tick += (s, e) => { _dotTimer.Stop(); foreach (var r in _rows) r.RefreshDot(); };
+            App.Dots.Changed += () => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible && !_dotTimer.IsEnabled) _dotTimer.Start(); }));
         }
+
+        private readonly DispatcherTimer _dotTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
 
         // ---------------------------------------------------------------- sort and edit
 
@@ -277,6 +282,9 @@ namespace Nova.App
             var size = App.Store.Settings.LiveRowSize;
             var height = size == "compact" ? 30 : size == "large" ? 54 : 40;
             var movingKey = _moving != null ? _moving.Channel.Key : null;
+            var groupName = row.Category != null ? row.Category.Name : null;
+            var filtered = shown.Count(c => Filtering.Hides(c, groupName));
+            if (filtered > 0) shown = shown.Where(c => !Filtering.Hides(c, groupName)).ToList();
             _rows.Clear();
             foreach (var c in shown)
             {
@@ -292,11 +300,13 @@ namespace Nova.App
                     Hidden = Organize.IsItemHidden("live", c.Key),
                     RowHeight = height,
                     Moving = movingKey == c.Key,
+                    DotKey = StreamCheck.KeyOf("live", c.Key),
                 });
             }
             _moving = _rows.FirstOrDefault(r => r.Moving);
-            var hiddenCount = _groupList.Count - shown.Count;
-            Count.Text = shown.Count + (shown.Count == 1 ? " channel" : " channels") + (hiddenCount > 0 && !_edit ? "  ·  " + hiddenCount + " hidden" : "");
+            var hiddenCount = _groupList.Count - shown.Count - filtered;
+            Count.Text = shown.Count + (shown.Count == 1 ? " channel" : " channels") + (hiddenCount > 0 && !_edit ? "  ·  " + hiddenCount + " hidden" : "") +
+                         (filtered > 0 ? "  ·  🔞 " + filtered + " hidden by the filter" : "");
             SetStatus(shown.Count == 0 ? (row.Kind == GroupKind.Favorites ? "No favorite channels yet. Press F on a channel to add it." : "No channels in this group.") : null);
             if (_rows.Count > 0)
             {
@@ -380,9 +390,23 @@ namespace Nova.App
             }
         }
 
+        private DispatcherTimer _clickTimer;
+        private ChannelRow _clickRow;
+
+        /// <summary>A click plays the channel (like Enter: preview, then full screen); a double click asks to hide it (as on the box).</summary>
         private void OnChannelClick(object sender, MouseButtonEventArgs e)
         {
-            // A single click only selects; double-click opens full screen.
+            var item = ItemsControl.ContainerFromElement(Channels, e.OriginalSource as DependencyObject) as ListBoxItem;
+            var row = item == null ? null : item.DataContext as ChannelRow;
+            if (row == null || _edit) return;
+            if (_clickTimer == null)
+            {
+                _clickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                _clickTimer.Tick += (s, a) => { _clickTimer.Stop(); if (_clickRow != null) Activate(_clickRow); };
+            }
+            _clickTimer.Stop();
+            _clickRow = row;
+            _clickTimer.Start();
         }
 
         private void OnChannelDoubleClick(object sender, MouseButtonEventArgs e)
@@ -390,7 +414,14 @@ namespace Nova.App
             var item = ItemsControl.ContainerFromElement(Channels, e.OriginalSource as DependencyObject) as ListBoxItem;
             if (item == null) return;
             e.Handled = true;
-            OpenFull(item.DataContext as ChannelRow);
+            if (_clickTimer != null) _clickTimer.Stop();
+            var row = item.DataContext as ChannelRow;
+            if (row == null || _edit) return;
+            if (_group == null || _group.Kind != GroupKind.Group) { OpenFull(row); return; }
+            var w = Window.GetWindow(this);
+            if (!NovaDialog.AskTimed(w, "Hide the channel “" + row.Name + "”?", "You can show it again in Settings › Hidden items.", "Yes, hide", "No", 10, false)) return;
+            if (!PinGate.Unlock(w, "Your PIN protects hiding channels.")) return;
+            ToggleChannelHidden(row);
         }
 
         private void ToggleFavorite(ChannelRow row)
@@ -514,7 +545,12 @@ namespace Nova.App
             _preview = new MediaPlayer(App.Vlc);
             _preview.EncounteredError += (s, e) => Dispatcher.BeginInvoke(new Action(OnPreviewStopped));
             _preview.EndReached += (s, e) => Dispatcher.BeginInvoke(new Action(OnPreviewStopped));
-            _preview.Playing += (s, e) => Dispatcher.BeginInvoke(new Action(() => { _previewRetries = 0; UpdatePreviewStatus(); }));
+            _preview.Playing += (s, e) => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _previewRetries = 0;
+                UpdatePreviewStatus();
+                if (_previewChannel != null) App.Dots.Played(StreamCheck.KeyOf("live", _previewChannel.Key), true);
+            }));
         }
 
         private bool PreviewUsesBuffer
@@ -539,6 +575,7 @@ namespace Nova.App
             Video.MediaPlayer = _preview;
             MarkPlaying(ch);
             _previewRetries = 0;
+            App.Dots.Playing(ch.AccountId);
             PlayPreviewMedia(ch);
         }
 
@@ -619,6 +656,7 @@ namespace Nova.App
         private void StopPreview(bool keepStream = false)
         {
             MarkPlaying(null);
+            if (!_playerOpen) App.Dots.Playing(null);
             Video.Visibility = Visibility.Hidden;
             PreviewIdle.Visibility = Visibility.Visible;
             UpdatePreviewHint();

@@ -84,6 +84,9 @@
                                                             CornerRadius="5" Background="#CC000000" Visibility="{Binding FavVisibility}">
                                                         <TextBlock Text="★" Foreground="{StaticResource FavBrush}" FontSize="13"/>
                                                     </Border>
+                                                    <Ellipse Width="13" Height="13" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,7,24"
+                                                             Fill="{Binding DotBrush}" Stroke="#C0000000" StrokeThickness="2" ToolTip="{Binding DotTip}"
+                                                             Visibility="{Binding DotVisibility}" Panel.ZIndex="2"/>
                                                     <Border HorizontalAlignment="Stretch" VerticalAlignment="Bottom" Padding="6,2"
                                                             Background="#B0000000" Visibility="{Binding TagVisibility}">
                                                         <TextBlock Text="{Binding AccountTag}" FontSize="11" Foreground="#C0FFFFFF" TextTrimming="CharacterEllipsis"/>

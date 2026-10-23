@@ -17,9 +17,15 @@ namespace Nova.App
             public string Label { get; set; }
         }
 
-        public class EpisodeItem
+        public class EpisodeItem : Notify
         {
             public Episode Episode { get; set; }
+            // status dot (green / red / orange / grey)
+            public string DotKey { get; set; }
+            public System.Windows.Media.Brush DotBrush { get { return DotLook.BrushOf(DotKey); } }
+            public string DotTip { get { return DotLook.TipOf(DotKey); } }
+            public Visibility DotVisibility { get { return DotLook.Visible(DotKey) ? Visibility.Visible : Visibility.Collapsed; } }
+            public void RefreshDot() { Changed("DotBrush"); Changed("DotTip"); Changed("DotVisibility"); }
             public string Number { get; set; }
             public string Title { get; set; }
             public string Plot { get; set; }
@@ -114,15 +120,32 @@ namespace Nova.App
         {
             var s = Seasons.SelectedItem as SeasonItem;
             if (s == null || _info == null) { Episodes.ItemsSource = null; return; }
-            Episodes.ItemsSource = _info.Episodes[s.Number].Select(ep => new EpisodeItem
+            var list = _info.Episodes[s.Number].Select(ep => new EpisodeItem
             {
                 Episode = ep,
+                DotKey = StreamCheck.KeyOf("episode", _series.AccountId + "|" + ep.Id),
                 Number = (ep.EpisodeNum > 0 ? ep.EpisodeNum : 0).ToString(),
                 Title = (ep.EpisodeNum > 0 ? ep.EpisodeNum + ".  " : "") + ep.Title,
                 Plot = ep.Plot,
                 Image = ep.Image ?? _series.Cover,
             }).ToList();
+            Episodes.ItemsSource = list;
+            // Status dots: the episodes of this season are checked quietly.
+            App.Dots.Want(list.Select(x => new StreamCheck.Target { Key = x.DotKey, Url = App.Catalog.EpisodeUrl(_series.AccountId, x.Episode), AccountId = _series.AccountId }));
+            if (_dotTimer == null)
+            {
+                _dotTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+                _dotTimer.Tick += (a, b) =>
+                {
+                    _dotTimer.Stop();
+                    var items = Episodes.ItemsSource as List<EpisodeItem>;
+                    if (items != null) foreach (var x in items) x.RefreshDot();
+                };
+                App.Dots.Changed += () => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible && !_dotTimer.IsEnabled) _dotTimer.Start(); }));
+            }
         }
+
+        private System.Windows.Threading.DispatcherTimer _dotTimer;
 
         // ---------------------------------------------------------------- keys
 

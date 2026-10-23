@@ -26,7 +26,7 @@ namespace Nova.App
     /// </summary>
     public partial class PlayerWindow : Window
     {
-        private enum Source { Direct, LiveBuffer, FilmBuffer, LocalFile, Growing }
+        private enum Source { Direct, LiveBuffer, FilmBuffer, LocalFile, Growing, HlsReadAhead }
 
         private List<PlayItem> _items;
         private readonly TaskCompletionSource<int> _done = new TaskCompletionSource<int>();
@@ -65,6 +65,22 @@ namespace Nova.App
         private long _lastTime = -1;
         private DateTime _lastTimeChange = DateTime.UtcNow;
         private long _resumeAt;
+
+        // Playback report, status dots, picture & sound, slow line, read-ahead.
+        private PlaybackLog.Session _session;
+        private DateTime _startAt = DateTime.UtcNow;
+        private bool _everPlayed;
+        private double _brightness = 1.0;
+        private int _boost = 100;
+        private int _userVolume = 100;
+        private DateTime _slowSince = DateTime.MinValue;
+        private DateTime _lowWarnAt = DateTime.MinValue;
+        private readonly HashSet<string> _slowSwitched = new HashSet<string>();
+        private bool _cushionSlow;
+        private HlsDownload _hlsRa;
+        private DateTime _backPressedAt = DateTime.MinValue;
+        private DateTime _qualityAt = DateTime.MinValue;
+        private bool _offerOpen;
 
         // Full repair (Settings › Watchdog): 0 = normal, 1 = safer settings, 2 = other account tried.
         private int _repairStage;
@@ -190,6 +206,13 @@ namespace Nova.App
             }
             _playingSince = DateTime.MaxValue;
             _livePausedAt = -1;
+            BeginSession(item, fresh);
+            App.Dots.Playing(item.AccountId);
+            _startAt = DateTime.UtcNow;
+            _everPlayed = false;
+            _slowSince = DateTime.MinValue;
+            _cushionSlow = false;
+            LoadBoost(item);
             ShowHeader(item);
             SetControlsVisible(true);
             NetBox.Visibility = Visibility.Collapsed;
@@ -217,7 +240,7 @@ namespace Nova.App
                 {
                     if (_live == null)
                     {
-                        _live = App.Hub.OpenLive(item.LiveId, item.Url, item.Headers);
+                        _live = App.Hub.OpenLive(item.LiveId, item.Url, item.Headers, StartTimeoutSeconds(item));
                         _live.Relay.Changed += OnRelayChanged;
                         _live.Relay.Dead += OnRelayDead;
                     }
@@ -260,6 +283,29 @@ namespace Nova.App
                     ShowStatus("Waiting for the first parts…");
                     StartMedia(App.Hub.ServeGrowing(StreamHub.Id(item.Url), hls), true, true);
                     return;
+                }
+                // A HLS film: read ahead on disk in pieces (the player still jumps anywhere); live HLS / special formats play directly.
+                if (App.Store.Settings.UseDiskBuffer)
+                {
+                    if (_hlsRa == null || _hlsRa.Url != item.Url)
+                    {
+                        ReleaseHlsRa();
+                        var folder = Path.Combine(App.Hub.FilmsFolder, "hls-" + StreamHub.Id(item.Url));
+                        _hlsRa = new HlsDownload(item.Url, folder, 1) { Headers = item.Headers, LimitBytes = Math.Max(256L, App.Store.Settings.FilmBufferMb) * 1024 * 1024 };
+                        _hlsRa.Begin();
+                    }
+                    ShowStatus("Connecting…");
+                    var ra = _hlsRa;
+                    var ok = await Task.Run(() => ra.WaitParts(20000, () => _closing || id != _playId));
+                    if (_closing || id != _playId) return;
+                    if (ok)
+                    {
+                        _source = Source.HlsReadAhead;
+                        if (_session != null) _session.Mode = "HLS read-ahead (disk)";
+                        StartMedia(App.Hub.ServeHlsReadAhead(StreamHub.Id(item.Url), ra), false, true);
+                        return;
+                    }
+                    ReleaseHlsRa();
                 }
                 _source = Source.Direct;
                 ShowStatus("Connecting…");
@@ -311,9 +357,12 @@ namespace Nova.App
             _lastTimeChange = DateTime.UtcNow;
             try
             {
-                using (var media = Playback.MakeMedia(Vlc, url, live, local, _softwareOnly, local ? null : Current.Headers))
+                using (var media = Playback.MakeMedia(Vlc, url, live, local, _softwareOnly, local ? null : Current.Headers, _boost))
                     _mp.Play(media);
+                ApplySound();
+                ApplyBrightness();
                 if (!live && _resumeAt > 0) { var at = _resumeAt; var id = _playId; var ignored = SeekWhenReady(at, id); }
+                else if (!live && Current.StartFraction > 0) { var f = Current.StartFraction; Current.StartFraction = 0; var id = _playId; var ignored = SeekFractionWhenReady(f, id); }
             }
             catch (Exception e)
             {
@@ -348,6 +397,8 @@ namespace Nova.App
             var buffered = item.IsLive && BufferLive(item);
             LiveButton.Visibility = buffered ? Visibility.Visible : Visibility.Collapsed;
             RecButton.Visibility = item.IsLive && item.Channel != null ? Visibility.Visible : Visibility.Collapsed;
+            SimilarButton.Visibility = item.IsLive && item.Channel != null ? Visibility.Visible : Visibility.Collapsed;
+            QualityBadge.Visibility = Visibility.Collapsed;
             ListButton.Visibility = item.IsLive ? Visibility.Visible : Visibility.Collapsed;
             DownloadButton.Visibility = !item.IsLive && item.LocalPath == null && (item.Movie != null || item.Episode != null || item.Kind == "link") ? Visibility.Visible : Visibility.Collapsed;
             KeysHint.Text = item.IsLive
@@ -371,6 +422,16 @@ namespace Nova.App
         {
             if (_live != null && (item.LiveId == null || _live.Relay.Key != item.LiveId || !BufferLive(item))) ReleaseLive();
             if (_vod != null && (item.IsLive || _vod.File.Url != item.Url)) ReleaseVod();
+            if (_hlsRa != null && (item.IsLive || _hlsRa.Url != item.Url)) ReleaseHlsRa();
+        }
+
+        private void ReleaseHlsRa()
+        {
+            if (_hlsRa == null) return;
+            var h = _hlsRa;
+            _hlsRa = null;
+            App.Hub.StopServing(StreamHub.Id(h.Url));
+            Task.Run(() => h.DisposeAndDelete());
         }
 
         private void ReleaseLive()
@@ -398,6 +459,10 @@ namespace Nova.App
             {
                 if (_live == null || _live.Relay != r) return;
                 var s = App.Store.Settings;
+                App.Dots.Failed(DotKeyOf(Current), r.Message != null && r.Message.Contains("HTTP 404") ? "not found" : "no signal");
+                if (_session != null) _session.Fail("FAIL", r.Message ?? "no signal");
+                LogHealth(Current, "no video at all", s.AutoSkip && _items.Count > 1 ? "skipped" : "kept trying");
+                if (s.FailApp != "none" && s.FailAppWhen == "any" && !_offerOpen) { OfferOtherApp("It isn't working here (" + (r.Message ?? "no signal") + ")", false); return; }
                 if (s.AutoSkip && _items.Count > 1 && _skips < 15)
                 {
                     _skips++;
@@ -503,6 +568,14 @@ namespace Nova.App
 
         private void OnPlaying()
         {
+            if (!_everPlayed)
+            {
+                _everPlayed = true;
+                var ms = (long)(DateTime.UtcNow - _startAt).TotalMilliseconds;
+                if (_session != null && _session.StartMs < 0) _session.StartMs = ms;
+                if (Current.IsLive) LearnStart(Current.AccountId, ms);
+                App.Dots.Played(DotKeyOf(Current), true);
+            }
             ShowStatus(null);
             PlayPauseButton.Content = "❚❚";
             _playingSince = DateTime.Now;
@@ -551,11 +624,14 @@ namespace Nova.App
             _attempts++;
             if (!item.IsLive && _mp.Time > 0) _resumeAt = _mp.Time;
 
-            // A film the built-in player can't play: the external player, if you chose that (Settings › Player selection).
-            if (!item.IsLive && _attempts >= 3 && !ended && App.Store.Settings.ExternalOnError && ExternalPlayers.Fallback() != null)
+            // The data arrives but the built-in player can't play it: a format problem (orange dot) → offer another player.
+            var dataArrives = (_live != null && _live.Relay.EverReceived && _live.Relay.State == RelayState.Playing) ||
+                              (_vod != null && _vod.File.Downloaded > 0) || _source == Source.LocalFile || _source == Source.HlsReadAhead;
+            if (_attempts >= 3 && !ended && dataArrives && !_everPlayed)
             {
-                OpenExternal("The built-in player can't play this — opening the external player");
-                return;
+                App.Dots.DeviceFailed(DotKeyOf(item), "format");
+                if (_session != null) _session.Fail("DEVICE", "Nova's player can't decode this format");
+                if (App.Store.Settings.FailApp != "none" && !_offerOpen) { OfferOtherApp("Nova's player can't play this format", true); return; }
             }
 
             var wait = Math.Min(30, (int)Math.Pow(2, Math.Min(5, _attempts - 1)));
@@ -576,6 +652,16 @@ namespace Nova.App
                 await Task.Delay(250);
                 if (_closing || id != _playId || _mp == null) return;
                 if (_mp.IsPlaying && _mp.IsSeekable && _mp.Length > 0) { _mp.Time = Math.Min(ms, _mp.Length - 3000); _resumeAt = 0; return; }
+            }
+        }
+
+        private async Task SeekFractionWhenReady(double fraction, int id)
+        {
+            for (int i = 0; i < 80; i++)
+            {
+                await Task.Delay(250);
+                if (_closing || id != _playId || _mp == null) return;
+                if (_mp.IsPlaying && _mp.IsSeekable) { _mp.Position = (float)Math.Max(0, Math.Min(0.98, fraction)); return; }
             }
         }
 
@@ -624,7 +710,8 @@ namespace Nova.App
             }
             if (_playingSince != DateTime.MaxValue && (DateTime.Now - _playingSince).TotalSeconds > 60) { _repairFailures = 0; }
 
-            if (item.IsLive) { UpdateLiveBadge(); UpdateRecBadge(); return; }
+            UpdateQualityBadge();
+            if (item.IsLive) { UpdateLiveBadge(); UpdateRecBadge(); CushionTick(); return; }
             var len = _mp.Length;
             if (len > 0 && !Seek.IsMouseCaptureWithin)
             {
@@ -638,6 +725,7 @@ namespace Nova.App
                 var pct = (int)(100.0 * _vod.File.Downloaded / _vod.File.Length);
                 DiskText.Text = (_vod.File.Full ? "Downloaded " : "On disk ") + pct + "%";
             }
+            else if (_source == Source.HlsReadAhead && _hlsRa != null) DiskText.Text = "On disk: " + Playback.Time((long)(_hlsRa.BufferedAheadSeconds * 1000)) + " ahead";
             else DiskText.Text = _source == Source.LocalFile ? "From your PC" : _source == Source.Growing ? "Downloading while you watch" : "";
 
             // Remember where you are (every 10 s).
@@ -806,7 +894,8 @@ namespace Nova.App
         /// <summary>Opens the current item in the external player (after Nova's own connection is closed).</summary>
         private void OpenExternal(string message)
         {
-            var player = ExternalPlayers.Fallback();
+            var player = ExternalPlayers.PickFor(this, Current.Title);
+            if (player == "") return; // the list was closed
             if (player == null)
             {
                 Osd("No external player found. Install VLC, MPC-HC or PotPlayer, or choose one in Settings › Player selection.");
@@ -916,8 +1005,17 @@ namespace Nova.App
             e.Handled = true;
             switch (action)
             {
-                case "live_close":
-                case "vod_close": Close(); break;
+                case "live_close": Close(); break;
+                case "vod_close":
+                    // Films & series: Back twice to stop the video (Settings › Remote control).
+                    if (App.Store.Settings.DoubleBackVod && (DateTime.UtcNow - _backPressedAt).TotalSeconds > 2.5)
+                    {
+                        _backPressedAt = DateTime.UtcNow;
+                        Osd("Press " + K("vod_close") + " again to stop the video");
+                        break;
+                    }
+                    Close();
+                    break;
                 case "live_next": Step(1); break;
                 case "live_prev": Step(-1); break;
                 case "live_list": OpenListOverlay(); break;
@@ -1062,10 +1160,10 @@ namespace Nova.App
         private void Volume(int delta)
         {
             if (_mp == null) return;
-            var v = Math.Max(0, Math.Min(150, _mp.Volume + delta));
-            _mp.Volume = v;
+            _userVolume = Math.Max(0, Math.Min(100, _userVolume + delta));
+            ApplySound();
             if (_mp.Mute && delta > 0) _mp.Mute = false;
-            Osd("Volume " + v + "%");
+            Osd("Volume " + _userVolume + "%" + (_boost > 100 ? "  ·  🔊 boost " + _boost + " %" : ""));
         }
 
         private void ToggleMute()
@@ -1440,6 +1538,8 @@ namespace Nova.App
             }
             TracksContent.Children.Add(Option("Dark background behind the text", s.SubtitleBackground, () => ChangeSubs(x => x.SubtitleBackground = !x.SubtitleBackground)));
 
+            AddPictureAndSound();
+
             TracksContent.Children.Add(Section("ℹ  Stream info"));
             TracksContent.Children.Add(new TextBlock { Text = StreamInfo(), TextWrapping = TextWrapping.Wrap, LineHeight = 21, Foreground = (Brush)FindResource("SubText") });
         }
@@ -1525,6 +1625,14 @@ namespace Nova.App
             return sb.ToString().TrimEnd();
         }
 
+        private void OnPictureSound(object sender, RoutedEventArgs e)
+        {
+            OpenTracks();
+            // Straight to the 🔊 / ☀ part.
+            var b = TracksContent.Children.OfType<Button>().FirstOrDefault(x => x.Tag as string == "boost");
+            if (b != null) { FocusPanel(b); b.BringIntoView(); }
+        }
+
         private void OnTracksKey(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Up || e.Key == Key.Down)
@@ -1538,6 +1646,418 @@ namespace Nova.App
             }
         }
 
+        // ---------------------------------------------------------------- playback report & status dots
+
+        private static string DotKeyOf(PlayItem item)
+        {
+            if (item.Channel != null) return StreamCheck.KeyOf("live", item.Channel.Key);
+            if (item.Movie != null) return StreamCheck.KeyOf("movie", item.Movie.Key);
+            if (item.Episode != null) return StreamCheck.KeyOf("episode", item.AccountId + "|" + item.Episode.Id);
+            return null;
+        }
+
+        private void BeginSession(PlayItem item, bool fresh)
+        {
+            // A quiet restart of the same item (retry, watchdog) stays in the same report line.
+            if (!fresh && _session != null && _session.Key == (item.LiveId ?? item.Url)) return;
+            EndSession();
+            var acc = App.Store.Account(item.AccountId);
+            var kind = item.LocalPath != null ? "file" : item.Kind ?? (item.IsLive ? "live" : "movie");
+            string group = null;
+            if (item.Channel != null)
+            {
+                try
+                {
+                    var sec = App.Catalog.SectionsIfLoaded(ContentType.Live);
+                    var cat = sec == null ? null : sec.SelectMany(x => x.Groups).FirstOrDefault(c => c.AccountId == item.Channel.AccountId && c.Id == item.Channel.CategoryId);
+                    if (cat != null) group = cat.Name;
+                }
+                catch { }
+            }
+            _session = new PlaybackLog.Session
+            {
+                Title = item.Title, Kind = kind, Server = acc != null ? acc.DisplayName : item.LocalPath != null ? "this PC" : "link",
+                Group = group, Key = item.LiveId ?? item.Url,
+            };
+            // Only the file type, never the address (it holds the login).
+            var path = (item.Url ?? "").Split('?')[0];
+            var dot = path.LastIndexOf('.');
+            var ext = dot >= 0 ? path.Substring(dot + 1) : "";
+            _session.Container = ext.Length >= 2 && ext.Length <= 5 ? ext.ToUpperInvariant() : "";
+            _session.Mode = item.IsLive ? (BufferLive(item) ? "disk buffer" : "direct") : item.LocalPath != null ? "file" : App.Store.Settings.UseDiskBuffer ? "disk read-ahead" : "direct";
+            _session.Decoder = App.Store.Settings.HardwareDecoding ? "graphics card" : "processor";
+        }
+
+        private void EndSession()
+        {
+            if (_session == null) return;
+            try { App.Report.End(_session); } catch { }
+            _session = null;
+        }
+
+        private void LogHealth(PlayItem item, string problem, string action)
+        {
+            try
+            {
+                var log = App.Store.State.HealthLog;
+                log.Insert(0, DateTime.Now.ToString("dd/MM HH:mm") + "|" + item.Title + "|" + problem + "|" + action);
+                if (log.Count > 50) log.RemoveRange(50, log.Count - 50);
+                App.Store.SaveState();
+            }
+            catch { }
+            if (_session != null) _session.Action(problem + " → " + action);
+        }
+
+        // ---------------------------------------------------------------- start time learned per server
+
+        /// <summary>
+        /// Seconds a channel may take to start before it counts as "not working": the setting (8 s), or more for a server
+        /// whose channels usually start slowly (learned: a server that needs 11 s gets ~22 s).
+        /// </summary>
+        private int StartTimeoutSeconds(PlayItem item)
+        {
+            var s = App.Store.Settings;
+            var startCushion = s.LiveStart == "fast" ? Math.Min(2, s.CushionSeconds) : s.CushionSeconds;
+            var b = Math.Max(s.DeadSeconds, startCushion + 6);
+            long learned;
+            if (item.AccountId != null && App.Store.State.StartTimes.TryGetValue(item.AccountId, out learned) && learned > 0)
+                b = Math.Max(b, (int)Math.Min(40, (learned * 18 / 10 + 2000) / 1000));
+            return b;
+        }
+
+        private static void LearnStart(string account, long ms)
+        {
+            if (string.IsNullOrEmpty(account) || ms <= 0 || ms > 120000) return;
+            var times = App.Store.State.StartTimes;
+            long old;
+            times[account] = times.TryGetValue(account, out old) && old > 0 ? (old * 3 + ms) / 4 : ms;
+        }
+
+        // ---------------------------------------------------------------- 🔊 boost and ☀ brightness
+
+        private static string BoostKey(PlayItem item)
+        {
+            if (item.Channel != null) return "live|" + item.Channel.Key;
+            if (item.Movie != null) return "movie|" + item.Movie.Key;
+            if (item.Series != null) return "series|" + item.Series.Key;
+            return null;
+        }
+
+        private void LoadBoost(PlayItem item)
+        {
+            var key = BoostKey(item);
+            int b;
+            _boost = key != null && App.Store.State.BoostFor.TryGetValue(key, out b) && b > 0 ? b : Math.Max(100, App.Store.Settings.BoostAll);
+            UpdateBoostBadge();
+        }
+
+        private void ApplySound()
+        {
+            if (_mp == null) return;
+            try { _mp.Volume = Math.Max(0, Math.Min(200, _userVolume * _boost / 100)); } catch { }
+        }
+
+        private void UpdateBoostBadge()
+        {
+            BoostBadge.Visibility = _boost > 100 ? Visibility.Visible : Visibility.Collapsed;
+            BoostText.Text = "🔊 " + _boost + " %";
+        }
+
+        /// <summary>Boost 100–200 %: this video only, always for this channel / film, or everything.</summary>
+        private void SetBoost(int percent, string scope)
+        {
+            _boost = Math.Max(100, Math.Min(200, percent));
+            var key = BoostKey(Current);
+            if (scope == "item" && key != null)
+            {
+                if (_boost <= 100) App.Store.State.BoostFor.Remove(key); else App.Store.State.BoostFor[key] = _boost;
+                App.Store.SaveState();
+            }
+            else if (scope == "all")
+            {
+                var st = App.Store.Settings.Copy();
+                st.BoostAll = _boost;
+                App.Store.SaveSettings(st);
+            }
+            ApplySound();
+            UpdateBoostBadge();
+            Osd(_boost > 100 ? "🔊 Volume boost " + _boost + " %" + (scope == "item" ? " — always for this one" : scope == "all" ? " — for everything" : " — this video") : "🔊 Boost off");
+            // The soft limiter (compressor) is part of the stream: restart quietly when the boost was just switched on.
+            if (_boost > 100 && _mp != null && !Current.IsLive && _mp.IsSeekable) { _resumeAt = _mp.Time; Restart(); }
+        }
+
+        private void ApplyBrightness()
+        {
+            if (_mp == null) return;
+            try
+            {
+                var on = Math.Abs(_brightness - 1.0) > 0.01;
+                _mp.SetAdjustInt(VideoAdjustOption.Enable, on ? 1 : 0);
+                if (on) _mp.SetAdjustFloat(VideoAdjustOption.Brightness, (float)_brightness);
+            }
+            catch { }
+        }
+
+        private void AddPictureAndSound()
+        {
+            TracksContent.Children.Add(Section("🔊  Volume boost (up to 200 %, with a soft limiter)"));
+            var key = BoostKey(Current);
+            int saved;
+            var itemSaved = key != null && App.Store.State.BoostFor.TryGetValue(key, out saved) && saved > 0;
+            var first = true;
+            foreach (var p in new[] { 100, 125, 150, 175, 200 })
+            {
+                var pct = p;
+                var b = Option(pct == 100 ? "Off (100 %)" : pct + " %", _boost == pct, () =>
+                {
+                    var scopes = new List<string> { "This video only", key != null ? "Always for this " + (Current.IsLive ? "channel" : "film / series") : null, "Everything" }.Where(x => x != null).ToList();
+                    var i = NovaDialog.Choose(this, "🔊 " + (pct == 100 ? "Boost off" : pct + " %"), "For what?", scopes, 0);
+                    if (i < 0) return;
+                    var scope = scopes[i] == "Everything" ? "all" : scopes[i].StartsWith("Always") ? "item" : "video";
+                    SetBoost(pct, scope);
+                    BuildTracksKeepFocus();
+                });
+                if (first) { b.Tag = "boost"; first = false; }
+                TracksContent.Children.Add(b);
+            }
+            if (itemSaved) TracksContent.Children.Add(new TextBlock { Text = "Kept for this " + (Current.IsLive ? "channel" : "film") + ": " + App.Store.State.BoostFor[key] + " %", Foreground = (Brush)FindResource("DimText") });
+
+            TracksContent.Children.Add(Section("☀  Brightness of the picture"));
+            TracksContent.Children.Add(Option("Brighter  (+)", false, () => { _brightness = Math.Min(1.5, _brightness + 0.1); ApplyBrightness(); Osd("☀ " + (int)Math.Round(_brightness * 100) + " %"); BuildTracksKeepFocus(); }));
+            TracksContent.Children.Add(Option("Darker  (−)", false, () => { _brightness = Math.Max(0.5, _brightness - 0.1); ApplyBrightness(); Osd("☀ " + (int)Math.Round(_brightness * 100) + " %"); BuildTracksKeepFocus(); }));
+            TracksContent.Children.Add(Option("Normal" + (Math.Abs(_brightness - 1) < 0.01 ? "" : "  (now " + (int)Math.Round(_brightness * 100) + " %)"), Math.Abs(_brightness - 1) < 0.01,
+                () => { _brightness = 1.0; ApplyBrightness(); Osd("☀ Normal"); BuildTracksKeepFocus(); }));
+        }
+
+        // ---------------------------------------------------------------- quality badge
+
+        /// <summary>"FHD 1080p · HEVC · 50 fps" from the video really playing.</summary>
+        private void UpdateQualityBadge()
+        {
+            if (_mp == null || (DateTime.UtcNow - _qualityAt).TotalSeconds < 2) return;
+            _qualityAt = DateTime.UtcNow;
+            try
+            {
+                uint w = 0, h = 0;
+                if (!_mp.IsPlaying || !_mp.Size(0, ref w, ref h) || h == 0) { QualityBadge.Visibility = Visibility.Collapsed; return; }
+                var label = h >= 2000 ? "4K" : h >= 1000 ? "FHD " + h + "p" : h >= 700 ? "HD " + h + "p" : "SD " + h + "p";
+                var tags = new List<string> { label };
+                var media = _mp.Media;
+                if (media != null)
+                {
+                    foreach (var t in media.Tracks)
+                    {
+                        if (t.TrackType != TrackType.Video) continue;
+                        var codec = Playback.FourCC(t.Codec).ToLowerInvariant();
+                        if (codec.Contains("hevc") || codec.Contains("h265")) tags.Add("HEVC");
+                        else if (codec.Contains("av01")) tags.Add("AV1");
+                        var fps = t.Data.Video.FrameRateDen > 0 ? (double)t.Data.Video.FrameRateNum / t.Data.Video.FrameRateDen : 0;
+                        if (fps >= 48) tags.Add(Math.Round(fps) + " fps");
+                        break;
+                    }
+                }
+                QualityText.Text = string.Join(" · ", tags);
+                QualityText.Foreground = h >= 2000 ? (Brush)FindResource("StarBrush") : (Brush)FindResource("Accent");
+                QualityBadge.Visibility = Visibility.Visible;
+                if (_session != null) _session.Video = QualityText.Text;
+            }
+            catch { }
+        }
+
+        // ---------------------------------------------------------------- live: cushion grows while watching, slow line
+
+        /// <summary>
+        /// Fast start: the channel starts ~2 s behind live; the safety cushion is then built while you watch by playing
+        /// 4 % slower until it reaches "grow while watching" (2 min). The same quietly rebuilds it after a hiccup.
+        /// </summary>
+        private void CushionTick()
+        {
+            if (_mp == null || _source != Source.LiveBuffer || _live == null || _livePausedAt >= 0) return;
+            var s = App.Store.Settings;
+            var r = _live.Relay;
+            if (!r.EverReceived || !_mp.IsPlaying) return;
+            var bps = LiveBytesPerSecond;
+            var behind = (r.End - LiveScreenOffset()) / bps;
+            if (_session != null)
+            {
+                _session.Cushion((int)behind);
+                if (r.BytesPerSecond > 0) _session.Arrival(r.BytesPerSecond * 8 / 1000000.0);
+            }
+            var want = Math.Min(Math.Max(s.CushionSeconds, s.LiveGrowTarget), Math.Max(s.CushionSeconds, s.LiveDiskMinutes * 60 - 30));
+            var grow = s.LiveStart == "fast" || s.LiveGrowTarget > s.CushionSeconds;
+            if (grow)
+            {
+                if (!_cushionSlow && behind < want - 1.5) { _cushionSlow = true; try { _mp.SetRate(0.96f); } catch { } }
+                else if (_cushionSlow && behind >= want) { _cushionSlow = false; try { _mp.SetRate(1f); } catch { } }
+            }
+            SlowLineTick(behind);
+        }
+
+        private double NeedMbit()
+        {
+            try
+            {
+                var media = _mp.Media;
+                if (media == null) return 0;
+                var st = media.Statistics;
+                return st.DemuxBitrate > 0 ? st.DemuxBitrate * 8000 / 1000.0 : 0;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>
+        /// The line stays slower than the channel needs: a warning when the cushion is almost used up, and after ~20 s
+        /// "≈ Similar channels" (or the same channel on your other server, Settings › Live TV).
+        /// </summary>
+        private void SlowLineTick(double behind)
+        {
+            var need = NeedMbit();
+            var got = _live.Relay.BytesPerSecond * 8 / 1000000.0;
+            if (_session != null && need > 0) _session.NeedMbit = need;
+            var tooSlow = need > 0 && got > 0 && got < need * 0.9;
+            if (behind > 0 && behind <= 5 && _everPlayed && (DateTime.UtcNow - _lowWarnAt).TotalSeconds > 60)
+            {
+                _lowWarnAt = DateTime.UtcNow;
+                Osd("⚠ Slow connection — only " + (int)behind + " s of cushion left" + (tooSlow ? " (" + got.ToString("0.0") + " of " + need.ToString("0.0") + " Mbit/s)" : ""));
+            }
+            if (!tooSlow) { _slowSince = DateTime.MinValue; return; }
+            if (_slowSince == DateTime.MinValue) _slowSince = DateTime.UtcNow;
+            if ((DateTime.UtcNow - _slowSince).TotalSeconds < 20) return;
+            if (_session != null && _session.Result == "OK") { _session.Result = "SLOW"; _session.Note = "line too slow: " + got.ToString("0.0") + " of " + need.ToString("0.0") + " Mbit/s"; }
+            var item = Current;
+            if (item.Channel == null || !_slowSwitched.Add(item.Channel.Key)) return;
+            _slowSince = DateTime.MinValue;
+            var action = App.Store.Settings.LiveSlowAction;
+            if (action == "similar") ShowSimilar(true);
+            else if (action == "switch") SwitchToOtherServer("line too slow (" + got.ToString("0.0") + " of " + need.ToString("0.0") + " Mbit/s)");
+        }
+
+        private async void SwitchToOtherServer(string why)
+        {
+            var item = Current;
+            if (item.Channel == null || App.Store.Accounts.Count < 2) return;
+            foreach (var a in App.Store.Accounts.Where(x => x.Id != item.Channel.AccountId).ToList())
+            {
+                try
+                {
+                    var other = ChannelMatch.SameElsewhere(item.Channel, await App.Catalog.AllChannels(a));
+                    if (other == null || _closing || !ReferenceEquals(item, Current)) continue;
+                    _slowSwitched.Add(other.Key);
+                    LogHealth(item, why, "switched to “" + other.Name + "” on " + a.DisplayName);
+                    _items[_index] = PlayItem.Of(other);
+                    Osd("Switched to “" + other.Name + "” (" + a.DisplayName + ")");
+                    PlayCurrent(false);
+                    return;
+                }
+                catch { }
+            }
+        }
+
+        private void OnSimilar(object sender, RoutedEventArgs e) { ShowSimilar(false); }
+
+        /// <summary>≈ Similar: the same channel in the other groups of this server (lighter versions first), or on your other server.</summary>
+        private async void ShowSimilar(bool auto)
+        {
+            var item = Current;
+            var ch = item.Channel;
+            if (ch == null) return;
+            var acc = App.Store.Account(ch.AccountId);
+            List<ChannelMatch.Similar> found;
+            LiveChannel elsewhere = null;
+            Account elsewhereAcc = null;
+            try
+            {
+                var all = await App.Catalog.AllChannels(acc);
+                var names = new Dictionary<string, string>();
+                try
+                {
+                    foreach (var sec in await App.Catalog.Sections(ContentType.Live))
+                        foreach (var c in sec.Groups) if (c.AccountId == ch.AccountId) names[c.Id] = c.Name;
+                }
+                catch { }
+                found = ChannelMatch.OnSameServer(ch, all, names).Where(x => !Filtering.Hides(x.Channel, null)).Take(12).ToList();
+                foreach (var a in App.Store.Accounts.Where(x => x.Id != ch.AccountId).ToList())
+                {
+                    try { elsewhere = ChannelMatch.SameElsewhere(ch, await App.Catalog.AllChannels(a)); } catch { }
+                    if (elsewhere != null) { elsewhereAcc = a; break; }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!auto) Osd("The channel list didn't load: " + ex.Message);
+                if (_session != null) _session.Action("similar: list didn't load");
+                return;
+            }
+            if (_closing || !ReferenceEquals(item, Current)) return;
+            if (_session != null) _session.Action("similar “" + ChannelMatch.Key(ch.Name) + "”: " + found.Count + " found" + (elsewhere != null ? " · also on another server" : ""));
+            if (found.Count == 0 && elsewhere == null)
+            {
+                if (!auto) Osd("No other version of “" + ch.Name + "” on " + (acc != null ? acc.DisplayName : "this server"));
+                return;
+            }
+            var options = found.Select(x => (x.Lighter ? "⬇ " : "") + x.Channel.Name + (x.Group.Length > 0 ? "   ·  " + x.Group : "") +
+                                            (x.Quality >= 0 ? "   [" + ChannelMatch.QualityLabel(x.Quality) + "]" : "")).ToList();
+            if (elsewhere != null) options.Add("Try " + elsewhereAcc.DisplayName + ": " + elsewhere.Name);
+            options.Add("Stay on this one");
+            var heading = auto ? "⚠ The line is too slow for “" + ch.Name + "”" : "≈ Same channel on " + (acc != null ? acc.DisplayName : "this server") + ", other groups";
+            var message = auto ? "Lighter versions (⬇) need less speed. Or stay — Nova keeps building the cushion." : "Lighter versions (⬇) first.";
+            var stay = options.Count - 1;
+            var i = auto ? NovaDialog.ChooseTimed(this, heading, message, options, -1, 20, stay) : NovaDialog.Choose(this, heading, message, options, -1);
+            if (i < 0 || i == stay || _closing || !ReferenceEquals(item, Current)) return;
+            LiveChannel pick = i < found.Count ? found[i].Channel : elsewhere;
+            _slowSwitched.Add(pick.Key);
+            LogHealth(item, auto ? "line too slow" : "≈ similar", "chose “" + pick.Name + "”");
+            var items = _items.ToList();
+            items[_index] = PlayItem.Of(pick);
+            PlayItemNow(items, _index);
+        }
+
+        // ---------------------------------------------------------------- open in another app
+
+        /// <summary>
+        /// "… can't be played here · Opening in VLC in 10 s" with Open now / Stay in Nova / Next channel (any key stops the countdown).
+        /// </summary>
+        private void OfferOtherApp(string why, bool format)
+        {
+            var item = Current;
+            var s = App.Store.Settings;
+            var player = s.FailApp != "ask" && s.FailApp != "none" && File.Exists(s.FailApp) ? s.FailApp : ExternalPlayers.First();
+            if (player == null)
+            {
+                if (format) ShowStatus("Nova's player can't play this format.\nInstall VLC, MPC-HC or PotPlayer to open it there.");
+                else NextOrExplain(why);
+                return;
+            }
+            _offerOpen = true;
+            _retry.Stop();
+            var mp = _mp;
+            Task.Run(() => { try { if (mp != null) mp.Stop(); } catch { } }); // frees the server connection for the other player
+            var name = Path.GetFileNameWithoutExtension(player);
+            var options = new List<string> { "▶ Open in " + name + " now", "Stay in Nova" };
+            if (item.IsLive && _items.Count > 1) options.Add("Next channel");
+            var i = NovaDialog.ChooseTimed(this, "“" + item.Title + "” can't be played here", why, options, -1, 10, 0);
+            _offerOpen = false;
+            if (_closing || !ReferenceEquals(item, Current)) return;
+            if (i == 0)
+            {
+                LogHealth(item, why, "opened in " + name);
+                var url = item.LocalPath ?? item.Url;
+                SaveResume();
+                _afterClose = () => ExternalPlayers.Launch(player, url, item.Title, item.Headers);
+                Close();
+            }
+            else if (i == 2) Step(1);
+            else if (format) ShowStatus("Nova's player can't play this format.\n" + why + ".");
+            else NextOrExplain(why);
+        }
+
+        private void NextOrExplain(string why)
+        {
+            var s = App.Store.Settings;
+            if (Current.IsLive && s.AutoSkip && _items.Count > 1 && _skips < 15) { _skips++; Osd("“" + Current.Title + "” isn't working — next channel"); Step(_lastDirection); }
+            else { ShowStatus("“" + Current.Title + "” isn't working (" + why + ").\nStill trying… ▲ ▼ for another channel"); Restart(); }
+        }
+
         // ---------------------------------------------------------------- closing
 
         private void OnClosing(object sender, CancelEventArgs e)
@@ -1547,6 +2067,8 @@ namespace Nova.App
             e.Cancel = true;
             if (_closing) return;
             SaveResume();
+            EndSession();
+            App.Dots.Playing(null);
             _closing = true;
             _tick.Stop(); _hide.Stop(); _retry.Stop(); _switch.Stop(); _osd.Stop(); _digitsTimer.Stop(); _overlayOpen.Stop();
             if (_guideCts != null) _guideCts.Cancel();
@@ -1561,6 +2083,7 @@ namespace Nova.App
                 {
                     ReleaseLive();
                     ReleaseVod();
+                    ReleaseHlsRa();
                     if (Current.Hls) App.Hub.StopServing(StreamHub.Id(Current.Url));
                     _stopped = true;
                     Close();

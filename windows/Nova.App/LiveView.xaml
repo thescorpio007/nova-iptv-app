@@ -72,6 +72,8 @@
                                            Visibility="{Binding ArchiveVisibility}"/>
                                 <TextBlock Text="★" Foreground="{StaticResource FavBrush}" FontSize="15" Margin="6,0"
                                            Visibility="{Binding FavVisibility}"/>
+                                <Ellipse Width="11" Height="11" Margin="6,0,2,0" VerticalAlignment="Center" Fill="{Binding DotBrush}"
+                                         ToolTip="{Binding DotTip}" Visibility="{Binding DotVisibility}"/>
                             </StackPanel>
                         </Grid>
                         </Border>

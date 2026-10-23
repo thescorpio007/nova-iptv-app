@@ -15,9 +15,12 @@ namespace Nova.App
         /// <summary>Saves a .bak in Downloads\NovaIPTV\Backups (optionally password-protected). Returns the file.</summary>
         public static string Save(Window owner)
         {
-            var choice = NovaDialog.Choose(owner, "Save backup",
-                "A .bak file keeps all servers (with passwords), favorites, hidden items, order and settings. It works on the PC and on the box. " +
-                "Keep it private, or protect it with a password.",
+            var kindChoice = NovaDialog.Choose(owner, "Save backup",
+                "A .bak file keeps all servers (with passwords), favorites, hidden items, order, filters and settings. It works on the PC and on the box.",
+                new[] { "Everything (with the box's web browser part, if one was restored here)", "IPTV only (servers & settings)" }, 0);
+            if (kindChoice < 0) return null;
+            var kind = kindChoice == 1 ? "iptv" : "all";
+            var choice = NovaDialog.Choose(owner, "Save backup", "Keep it private, or protect it with a password.",
                 new[] { "Save without password", "Save with a password" }, 1);
             if (choice < 0) return null;
             string password = null;
@@ -32,11 +35,11 @@ namespace Nova.App
             }
             try
             {
-                var text = Backup.Export(App.Store);
+                var text = Backup.Export(App.Store, kind);
                 if (password != null) text = NovaCrypto.Encrypt(text, password);
                 var folder = KnownFolders.Backups(App.Store.Settings);
                 Directory.CreateDirectory(folder);
-                var path = Path.Combine(folder, Backup.FileName(password != null));
+                var path = Path.Combine(folder, Backup.FileName(password != null, kind));
                 File.WriteAllText(path, text, new System.Text.UTF8Encoding(false));
                 if (NovaDialog.Ask(owner, "Backup saved", path + "\n\nCopy it to a USB stick or to OneDrive to restore it on the box or another PC.", "Show the file", "OK"))
                 {
@@ -127,6 +130,7 @@ namespace Nova.App
                 }
                 App.Catalog.Clear();
                 App.Store.ReplaceAll(c.Accounts, c.Settings, c.Favorites, c.State);
+                Filtering.Reload();
                 PinGate.Lock();
                 App.Home.Toast("Backup restored: " + c.Summary);
                 var ignored = App.Catalog.CheckAccounts();
@@ -135,6 +139,52 @@ namespace Nova.App
             catch (NovaException e) { NovaDialog.Info(owner, "Can't restore", e.Message); }
             catch (Exception e) { App.Log(e); NovaDialog.Info(owner, "Can't restore", e.Message); }
             return false;
+        }
+
+        // ---------------------------------------------------------------- lists only (_list.bakL)
+
+        /// <summary>Saves only how the lists are arranged (order, favorites, hidden) — same _list.bakL file as the box.</summary>
+        public static void SaveLists(Window owner)
+        {
+            var summary = Backup.ListsSummary(App.Store.Org, App.Store.Favorites.Count);
+            if (summary.Length == 0) { NovaDialog.Info(owner, "Nothing to save yet", "No favorites, no order of your own and nothing hidden yet."); return; }
+            try
+            {
+                var folder = KnownFolders.Backups(App.Store.Settings);
+                Directory.CreateDirectory(folder);
+                var path = Path.Combine(folder, Backup.ListsFileName());
+                File.WriteAllText(path, Backup.ExportLists(App.Store), new System.Text.UTF8Encoding(false));
+                if (NovaDialog.Ask(owner, "Lists saved", summary + "\n" + path, "Show the file", "OK"))
+                    try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + path + "\""); } catch { }
+            }
+            catch (Exception e) { NovaDialog.Info(owner, "Couldn't save the lists", e.Message); }
+        }
+
+        /// <summary>Puts back the lists only (servers and settings are not touched).</summary>
+        public static void RestoreLists(Window owner)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Choose a Nova lists backup (_list.bakL)", Filter = "Nova lists backup|*.bakL|All files|*.*" };
+            var folder = KnownFolders.Backups(App.Store.Settings);
+            if (Directory.Exists(folder)) dlg.InitialDirectory = folder;
+            if (dlg.ShowDialog(owner) != true) return;
+            try
+            {
+                var r = Backup.ReadLists(File.ReadAllText(dlg.FileName));
+                var summary = Backup.ListsSummary(r.Item1, r.Item2.Count);
+                if (!NovaDialog.Ask(owner, "Restore these lists?", Path.GetFileName(dlg.FileName) + "\n" + (summary.Length == 0 ? "(empty)" : summary) +
+                    "\n\nYour order, favorites and hidden items are replaced. Servers and settings stay.", "Yes, restore")) return;
+                if (!PinGate.Unlock(owner, "Your PIN protects the lists.")) return;
+                var st = App.Store.State;
+                App.Store.UpdateOrg(o =>
+                {
+                    o.HiddenGroups = r.Item1.HiddenGroups; o.HiddenItems = r.Item1.HiddenItems; o.GroupOrder = r.Item1.GroupOrder;
+                    o.ItemOrder = r.Item1.ItemOrder; o.ClosedSections = r.Item1.ClosedSections; o.Names = r.Item1.Names;
+                });
+                App.Store.SetFavorites(r.Item2);
+                App.Home.Toast("Lists restored: " + summary);
+            }
+            catch (NovaException e) { NovaDialog.Info(owner, "Can't restore", e.Message); }
+            catch (Exception e) { NovaDialog.Info(owner, "Can't restore", e.Message); }
         }
 
         // ---------------------------------------------------------------- accounts link

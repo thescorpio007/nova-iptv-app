@@ -21,6 +21,15 @@
                    Text="Enter: play  ·  Space: pause / resume (or stop a recording)  ·  O: show in folder  ·  Delete: remove"/>
 
         <ListBox x:Name="DlList" Grid.Row="2" Style="{StaticResource NovaList}" PreviewKeyDown="OnListKey" MouseDoubleClick="OnDoubleClick">
+            <ListBox.GroupStyle>
+                <GroupStyle>
+                    <GroupStyle.HeaderTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Accent}" Margin="4,14,0,6"/>
+                        </DataTemplate>
+                    </GroupStyle.HeaderTemplate>
+                </GroupStyle>
+            </ListBox.GroupStyle>
             <ListBox.ItemTemplate>
                 <DataTemplate DataType="{x:Type local:DownloadRow}">
                     <Grid Height="74">

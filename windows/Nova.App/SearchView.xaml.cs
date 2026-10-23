@@ -137,6 +137,10 @@ namespace Nova.App
                 var a = App.Store.Account(id);
                 return a == null ? null : a.DisplayName;
             };
+            // The parental filters apply to search too.
+            res.Channels = res.Channels.Where(c => !Filtering.Hides(c, null)).ToList();
+            res.Movies = res.Movies.Where(m => !Filtering.Hides(m, null)).ToList();
+            res.Series = res.Series.Where(x => !Filtering.Hides(x, null)).ToList();
             ChList.ItemsSource = res.Channels.Select(c => new ResultItem
             {
                 Payload = c, Title = c.Name, Sub = Join(c.Num > 0 ? "No. " + c.Num : null, acc(c.AccountId)), Image = c.Icon,

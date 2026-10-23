@@ -21,6 +21,12 @@ namespace Nova.App
         public static StreamHub Hub { get; private set; }
         public static DownloadManager Downloads { get; private set; }
         public static RecordingManager Recordings { get; private set; }
+        /// <summary>Parental age filter and word filter.</summary>
+        public static AgeFilter Filter { get; private set; }
+        /// <summary>Status dots (green / red / orange / grey).</summary>
+        public static StreamCheck Dots { get; private set; }
+        /// <summary>Playback report and last problem (Settings › System).</summary>
+        public static PlaybackLog Report { get; private set; }
         public static string AppFolder { get; private set; }
 
         private static System.Threading.Mutex _single;
@@ -52,7 +58,13 @@ namespace Nova.App
             StartPipe();
             AppFolder = AppDomain.CurrentDomain.BaseDirectory;
             DispatcherUnhandledException += OnUiError;
-            AppDomain.CurrentDomain.UnhandledException += (s, a) => Log(a.ExceptionObject as Exception);
+            AppDomain.CurrentDomain.UnhandledException += (s, a) =>
+            {
+                var ex = a.ExceptionObject as Exception;
+                Log(ex);
+                // Nova closes: remember why (Settings › System › Last problem).
+                try { if (Report != null && ex != null) Report.Problem(Brand.Version, "Error: " + ex.GetType().Name + ": " + ex.Message + "\n\n" + ex); } catch { }
+            };
             TaskScheduler.UnobservedTaskException += (s, a) => { Log(a.Exception); a.SetObserved(); };
 
             try
@@ -77,7 +89,13 @@ namespace Nova.App
             Hub = new StreamHub(() => Store.Settings, () => KnownFolders.Buffer(Store.Settings));
             Downloads = new DownloadManager(Hub, () => Store.Settings, id => Catalog.MaxConnections(id), Store.DataFolder);
             Recordings = new RecordingManager(Hub, Downloads, () => Store.Settings);
-            Store.AccountsChanged += () => { var again = Catalog.CheckAccounts(); };
+            Store.AccountsChanged += () => { var again = Catalog.CheckAccounts(); try { Catalog.AdoptFromExports(); } catch { } };
+
+            Report = new PlaybackLog(Store.DataFolder) { LogsFolder = () => Path.Combine(KnownFolders.NovaDownloads(Store.Settings), "Logs") };
+            Dots = new StreamCheck(Store.DataFolder, () => Store.Settings.StatusDots,
+                id => Filtering.ConnectionsUsed(id), id => Catalog.MaxConnections(id));
+            Filter = new AgeFilter { Folder = () => Path.Combine(KnownFolders.NovaDownloads(Store.Settings), "Filter") };
+            Filtering.Start();
 
             try
             {
@@ -157,8 +175,11 @@ namespace Nova.App
             if (problems.Count > 0)
                 w.Toast("⚠ " + string.Join("  ·  ", problems) + (Vpn.Active() == null ? "  — is your VPN on?" : ""));
 
-            // The search index is refreshed quietly once a day.
+            // The search index is refreshed quietly once a day, saved as index-latest.novaindex, and the filter checked.
+            try { Catalog.AdoptFromExports(); } catch { }
             try { await Catalog.RefreshIndex(System.Threading.CancellationToken.None); } catch { }
+            if (Store.State.AutoExportIndex) { try { await Task.Run(() => Catalog.AutoExport(Brand.Version)); } catch (Exception e) { Log(e); } }
+            Filtering.CheckSoon();
 
             // Nova may stay open for days: look again every hour (the link itself is read once a day).
             var daily = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
@@ -187,6 +208,7 @@ namespace Nova.App
 
         protected override void OnExit(ExitEventArgs e)
         {
+            try { if (Dots != null) Dots.Stop(); } catch { }
             try { if (Recordings != null) Recordings.Dispose(); } catch { }
             try { if (Downloads != null) Downloads.Dispose(); } catch { }
             try { if (Hub != null) Hub.Dispose(); } catch { }

@@ -37,7 +37,21 @@ namespace Nova.Core
         public const int Adult = 6;
 
         /// <summary>The built-in film database key (set by the build), used when you don't type your own.</summary>
-        public static string BuiltInKey = "";
+        public static string BuiltInKey = ReadBuiltInKey();
+
+        private static string ReadBuiltInKey()
+        {
+            try
+            {
+                foreach (var a in typeof(AgeFilter).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false))
+                {
+                    var m = (System.Reflection.AssemblyMetadataAttribute)a;
+                    if (m.Key == "TmdbKey" && !string.IsNullOrWhiteSpace(m.Value)) return m.Value.Trim();
+                }
+            }
+            catch { }
+            return "";
+        }
 
         // ------------------------------------------------------------------ words
 

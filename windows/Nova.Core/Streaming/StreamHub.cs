@@ -104,7 +104,7 @@ namespace Nova.Core.Streaming
         // ------------------------------------------------------------------ live
 
         /// <summary>Starts (or joins) the download of a live channel.</summary>
-        public LiveLease OpenLive(string key, string url, Dictionary<string, string> headers = null)
+        public LiveLease OpenLive(string key, string url, Dictionary<string, string> headers = null, int deadSeconds = 0)
         {
             var s = _settings();
             LiveRelay relay;
@@ -114,7 +114,7 @@ namespace Nova.Core.Streaming
                 {
                     var folder = Path.Combine(LiveFolder, Guid.NewGuid().ToString("N").Substring(0, 10));
                     relay = new LiveRelay(key, url, () => _settings().UserAgent, folder,
-                        (long)Math.Max(100, s.LiveBufferMb) * 1024 * 1024, s.StallSeconds, s.DeadSeconds) { Headers = headers, MaxSeconds = Math.Max(0, s.LiveDiskMinutes) * 60 };
+                        (long)Math.Max(100, s.LiveBufferMb) * 1024 * 1024, s.StallSeconds, deadSeconds > 0 ? deadSeconds : s.DeadSeconds) { Headers = headers, MaxSeconds = Math.Max(0, s.LiveDiskMinutes) * 60 };
                     _live[key] = relay;
                     _liveRefs[relay] = 0;
                     _routes["live/" + Id(key)] = relay;

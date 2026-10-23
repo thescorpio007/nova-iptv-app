@@ -29,6 +29,13 @@ namespace Nova.App
         }
 
         public string Title { get { return Item.Title; } }
+        public int SectionOrder { get { return Item.Kind == "recording" ? 2 : Item.Kind == "link" ? 1 : 0; } }
+
+        /// <summary>The two sections, as on the box: your IPTV servers (one at a time each) and links (4 at once); then recordings.</summary>
+        public string Section
+        {
+            get { return Item.Kind == "recording" ? "● Recordings" : Item.Kind == "link" ? "🔗 Links (up to 4 at once)" : "📺 From your IPTV servers (one at a time per server)"; }
+        }
         public string Icon { get { return Item.Icon; } }
         public string KindIcon { get { return Item.Kind == "recording" ? "●" : Item.Kind == "episode" ? "▤" : Item.Kind == "link" ? "🔗" : "▶"; } }
 
@@ -53,11 +60,11 @@ namespace Nova.App
                     case DownloadStatus.Done: return "✓ Done  ·  " + Size(i.TotalBytes > 0 ? i.TotalBytes : i.DoneBytes) + (File.Exists(i.FinalPath) ? "" : "  ·  file missing");
                     case DownloadStatus.Downloading:
                         return (i.Error != null ? "⟳ " + i.Error + " Reconnecting…  ·  " : "Downloading  ·  ") + Done(i) + Rate(i);
-                    case DownloadStatus.Waiting: return "Waiting — your account's only connection is in use  ·  " + Done(i);
+                    case DownloadStatus.Waiting: return "Waiting — " + (i.WaitingFor ?? "your account's only connection is in use") + "  ·  " + Done(i);
                     case DownloadStatus.Paused: return "Paused  ·  " + Done(i);
                     case DownloadStatus.Finishing: return "Saving the file…";
                     case DownloadStatus.Failed: return "Failed: " + (i.Error ?? "unknown error");
-                    default: return "Waiting in line  ·  " + Done(i);
+                    default: return "Waiting in line" + (string.IsNullOrEmpty(i.WaitingFor) ? "" : " — " + i.WaitingFor) + "  ·  " + Done(i);
                 }
             }
         }
@@ -132,7 +139,11 @@ namespace Nova.App
         public DownloadsView()
         {
             InitializeComponent();
-            DlList.ItemsSource = _rows;
+            var view = new System.Windows.Data.CollectionViewSource { Source = _rows };
+            view.GroupDescriptions.Add(new System.Windows.Data.PropertyGroupDescription("Section"));
+            view.SortDescriptions.Add(new System.ComponentModel.SortDescription("SectionOrder", System.ComponentModel.ListSortDirection.Ascending));
+            view.IsLiveSortingRequested = true;
+            DlList.ItemsSource = view.View;
             _refresh.Tick += (s, e) => { _refresh.Stop(); Refresh(); };
             App.Downloads.Changed += () => Dispatcher.BeginInvoke(new Action(() => { if (!_refresh.IsEnabled) _refresh.Start(); }));
         }
@@ -238,11 +249,23 @@ namespace Nova.App
             }
             else
             {
-                // Still downloading: Download & Watch on the same connection.
+                // Still downloading: "Watch now" — from the start, or inside a part already saved.
+                double start = 0;
+                var file = i.Hls ? null : App.Downloads.ActiveFile(i.Url);
+                var ranges = file != null ? file.SavedRanges().Where(r => r.Item2 - r.Item1 > 0.01).ToList() : new List<Tuple<double, double>>();
+                if (ranges.Count > 1 || (ranges.Count == 1 && ranges[0].Item1 > 0.01))
+                {
+                    var labels = new List<string> { "▶ From the start" };
+                    labels.AddRange(ranges.Select(r => "▶ Inside the saved part " + (int)(r.Item1 * 100) + " % – " + (int)(r.Item2 * 100) + " %"));
+                    var c = NovaDialog.Choose(Window.GetWindow(this), "Watch now: " + i.Title, "Parts already on disk. Inside a saved part it plays at once; elsewhere it downloads that part first.", labels, 0);
+                    if (c < 0) return;
+                    if (c > 0) start = ranges[c - 1].Item1 + 0.002;
+                }
                 item = new PlayItem
                 {
                     Title = i.Title, Url = i.Url, Ext = i.Ext, AccountId = i.AccountId, DownloadWatch = true,
                     Hls = i.Hls, Headers = i.Headers, Kind = i.Kind == "link" ? "link" : i.Kind == "episode" ? "series" : "movie",
+                    StartFraction = start,
                 };
             }
             await PlayerWindow.Play(Window.GetWindow(this), new List<PlayItem> { item }, 0);

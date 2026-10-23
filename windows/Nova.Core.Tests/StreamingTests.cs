@@ -83,6 +83,8 @@ namespace Nova.Core.Tests
                     }
                     if (lines.Count == 0) return;
                     var path = lines[0].Split(' ')[1];
+                    var qi = path.IndexOf('?');
+                    if (qi >= 0) path = path.Substring(0, qi); // "?a=1": the same film under another address
                     var ua = lines.FirstOrDefault(l => l.StartsWith("User-Agent:")) ?? "";
                     long from = -1;
                     foreach (var l in lines)

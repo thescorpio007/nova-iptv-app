@@ -301,6 +301,40 @@ namespace Nova.App
             return first == null ? null : first.Path;
         }
 
+        /// <summary>↗ "Play with…" list: the players found, in your order, without the ones you switched off.</summary>
+        public static List<PlayerApp> Ordered()
+        {
+            var s = App.Store.Settings;
+            var all = Installed();
+            var order = s.ExtOrder ?? new List<string>();
+            var hidden = new HashSet<string>(s.ExtHidden ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+            return all.Where(p => !hidden.Contains(p.Path))
+                .OrderBy(p => { var i = order.FindIndex(x => string.Equals(x, p.Path, StringComparison.OrdinalIgnoreCase)); return i < 0 ? 1000 + all.IndexOf(p) : i; })
+                .ToList();
+        }
+
+        /// <summary>The first player of your list (or the one chosen as external player), or null.</summary>
+        public static string First()
+        {
+            var s = App.Store.Settings.ExternalPlayer;
+            if (!string.IsNullOrEmpty(s) && s != Builtin && File.Exists(s)) return s;
+            var first = Ordered().FirstOrDefault() ?? Installed().FirstOrDefault();
+            return first == null ? null : first.Path;
+        }
+
+        /// <summary>
+        /// The player for "↗ External": Nova's "Play with…" list when Settings › External players says "Ask",
+        /// otherwise the first one. "" = the list was closed, null = no player installed.
+        /// </summary>
+        public static string PickFor(Window owner, string title)
+        {
+            var list = Ordered();
+            if (list.Count == 0) return First();
+            if (App.Store.Settings.ExtMode == "first" || list.Count == 1) return list[0].Path;
+            var i = NovaDialog.Choose(owner, "Play with…", title, list.Select(p => p.Name + "   ·  " + Path.GetDirectoryName(p.Path)).ToList(), 0);
+            return i < 0 ? "" : list[i].Path;
+        }
+
         public static bool Launch(string player, string url, string title, IDictionary<string, string> headers)
         {
             if (string.IsNullOrEmpty(player) || string.IsNullOrEmpty(url)) return false;

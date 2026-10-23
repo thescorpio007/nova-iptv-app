@@ -16,6 +16,12 @@ namespace Nova.App
 
         public static Media MakeMedia(LibVLC vlc, string url, bool live, bool local, bool softwareOnly, IDictionary<string, string> headers)
         {
+            return MakeMedia(vlc, url, live, local, softwareOnly, headers, 100);
+        }
+
+        /// <summary>boost above 100 % adds a soft limiter (compressor), so loud scenes don't crackle.</summary>
+        public static Media MakeMedia(LibVLC vlc, string url, bool live, bool local, bool softwareOnly, IDictionary<string, string> headers, int boost)
+        {
             var s = App.Store.Settings;
             var media = new Media(vlc, new Uri(url));
             var caching = local ? (live ? 1200 : 1500) : Math.Max(300, s.NetworkCachingMs);
@@ -27,6 +33,7 @@ namespace Nova.App
             if (!string.IsNullOrEmpty(referer)) media.AddOption(":http-referrer=" + referer);
             media.AddOption(":avcodec-hw=" + (s.HardwareDecoding && !softwareOnly ? "any" : "none"));
             media.AddOption(":http-reconnect");
+            if (boost > 100) media.AddOption(":audio-filter=compressor");
             return media;
         }
 

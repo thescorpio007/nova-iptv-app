@@ -39,7 +39,22 @@ namespace Nova.App
             App.Store.FavoritesChanged += OnFavoritesChanged;
             App.Store.SettingsChanged += () => { UpdateSortText(); if (_group != null) Fill(null); };
             App.Store.OrgChanged += () => Dispatcher.BeginInvoke(new Action(() => { if (!_edit) Groups.Build(); }));
+            Filtering.Changed += () => { if (_group != null) Fill(FocusedItem() != null ? FocusedItem().Key : null); };
+            _dotTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+            _dotTimer.Tick += (s, e) => { _dotTimer.Stop(); foreach (var p in _items) p.RefreshDot(); };
+            App.Dots.Changed += () => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible && !_dotTimer.IsEnabled) _dotTimer.Start(); }));
+            IsVisibleChanged += (s, e) => { if (IsVisible) WantDots(); };
             UpdateSortText();
+        }
+
+        private readonly System.Windows.Threading.DispatcherTimer _dotTimer;
+
+        /// <summary>Status dots: the films of the open group are checked quietly (one at a time).</summary>
+        private void WantDots()
+        {
+            if (_type != ContentType.Movie || !App.Store.Settings.StatusDots) return;
+            App.Dots.Want(_items.Where(p => p.Movie != null && !p.Hidden).Take(300)
+                .Select(p => new StreamCheck.Target { Key = p.DotKey, Url = App.Catalog.MovieUrl(p.Movie), AccountId = p.Movie.AccountId }));
         }
 
         private string SavedType { get { return _type == ContentType.Movie ? ItemType.Movie : ItemType.Series; } }
@@ -227,30 +242,41 @@ namespace Nova.App
             var movingKey = _moving != null ? _moving.Key : null;
             var list = new List<PosterItem>();
             int total;
+            var groupName = _group.Category != null ? _group.Category.Name : null;
+            var filtered = 0;
             if (_type == ContentType.Movie)
             {
                 total = _movies.Count;
                 foreach (var m in Organize.Items(Zone, gk, _movies, x => x.Key, _edit, ZoneSort, Organize.Info))
-                    list.Add(new PosterItem { Movie = m, IsFavorite = favs.Contains(m.Key), AccountTag = AccountTagFor(m.AccountId, multi), Hidden = Organize.IsItemHidden(Zone, m.Key) });
+                {
+                    if (Filtering.Hides(m, groupName)) { filtered++; continue; }
+                    list.Add(new PosterItem { Movie = m, IsFavorite = favs.Contains(m.Key), AccountTag = AccountTagFor(m.AccountId, multi), Hidden = Organize.IsItemHidden(Zone, m.Key), DotKey = StreamCheck.KeyOf("movie", m.Key) });
+                }
             }
             else
             {
                 total = _series.Count;
                 foreach (var s in Organize.Items(Zone, gk, _series, x => x.Key, _edit, ZoneSort, Organize.Info))
+                {
+                    if (Filtering.Hides(s, groupName)) { filtered++; continue; }
                     list.Add(new PosterItem { Series = s, IsFavorite = favs.Contains(s.Key), AccountTag = AccountTagFor(s.AccountId, multi), Hidden = Organize.IsItemHidden(Zone, s.Key) });
+                }
             }
+            total -= filtered;
             if (_group.Kind == GroupKind.Favorites) list.ForEach(p => p.Hidden = false);
             _moving = null;
             if (movingKey != null) { _moving = list.FirstOrDefault(p => p.Key == movingKey); if (_moving != null) _moving.Moving = true; }
             _items = list;
             var hidden = total - list.Count(p => !p.Hidden);
             var noun = _type == ContentType.Movie ? (list.Count == 1 ? "film" : "films") : "series";
-            Count.Text = list.Count(p => !p.Hidden) + " " + noun + (hidden > 0 && _group.Kind == GroupKind.Group ? "  ·  " + hidden + " hidden" : "");
+            Count.Text = list.Count(p => !p.Hidden) + " " + noun + (hidden > 0 && _group.Kind == GroupKind.Group ? "  ·  " + hidden + " hidden" : "") +
+                         (filtered > 0 ? "  ·  🔞 " + filtered + " hidden by the filter" : "");
             SetStatus(list.Count == 0 ? (_group.Kind == GroupKind.Favorites ? "No favorite " + Noun + " yet. Press F on a poster to add it."
                 : _group.Kind == GroupKind.New ? "Nothing new yet (open a few groups first; new " + (_type == ContentType.Movie ? "films" : "series") + " show here)." : "Nothing in this group.") : null);
             PosterItem keep = keepKey == null ? null : list.FirstOrDefault(p => p.Key == keepKey);
             if (keep == null && keepIndex >= 0 && list.Count > 0) keep = list[Math.Min(keepIndex, list.Count - 1)];
             Rebuild(keep);
+            WantDots();
         }
 
         private static string AccountTagFor(string accountId, bool multi)

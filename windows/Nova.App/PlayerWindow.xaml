@@ -31,8 +31,14 @@
                         <Border x:Name="RecBadge" CornerRadius="5" Padding="8,2" Background="#CCB3261E" Visibility="Collapsed" Margin="0,0,8,0">
                             <TextBlock x:Name="RecText" FontSize="13" FontWeight="SemiBold" Foreground="White"/>
                         </Border>
-                        <Border x:Name="FavBadge" CornerRadius="5" Padding="8,2" Background="#CC000000" Visibility="Collapsed">
+                        <Border x:Name="FavBadge" CornerRadius="5" Padding="8,2" Background="#CC000000" Visibility="Collapsed" Margin="0,0,8,0">
                             <TextBlock Text="★ Favorite" FontSize="13" Foreground="{StaticResource FavBrush}"/>
+                        </Border>
+                        <Border x:Name="QualityBadge" CornerRadius="5" Padding="8,2" Background="#CC000000" Visibility="Collapsed" Margin="0,0,8,0">
+                            <TextBlock x:Name="QualityText" FontSize="13" FontWeight="SemiBold" Foreground="#2EE66B"/>
+                        </Border>
+                        <Border x:Name="BoostBadge" CornerRadius="5" Padding="8,2" Background="#CC000000" Visibility="Collapsed" Margin="0,0,8,0">
+                            <TextBlock x:Name="BoostText" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource StarBrush}"/>
                         </Border>
                     </StackPanel>
                     <StackPanel x:Name="GuideBox" Margin="0,10,0,0" MaxWidth="760" HorizontalAlignment="Left">
@@ -102,9 +108,12 @@
                         <Button x:Name="ListButton" Style="{StaticResource NovaButton}" Content="☰ Channels" Click="OnListButton" Focusable="False" Margin="0,4,8,0"/>
                         <Button x:Name="LiveButton" Style="{StaticResource NovaButton}" Content="Live (L)" Click="OnBackToLive" Focusable="False" Margin="0,4,8,0" Visibility="Collapsed"/>
                         <Button x:Name="RecButton" Style="{StaticResource NovaButton}" Content="● Rec (R)" Click="OnRec" Focusable="False" Margin="0,4,8,0" Visibility="Collapsed"/>
+                        <Button x:Name="SimilarButton" Style="{StaticResource NovaButton}" Content="≈ Similar" Click="OnSimilar" Focusable="False" Margin="0,4,8,0" Visibility="Collapsed"
+                                ToolTip="The same channel in other groups of this server (lighter versions first)"/>
                         <Button x:Name="DownloadButton" Style="{StaticResource NovaButton}" Content="⬇ Download (D)" Click="OnDownload" Focusable="False" Margin="0,4,8,0" Visibility="Collapsed"/>
                         <Button Style="{StaticResource NovaButton}" Content="CC Audio &amp; subtitles (T)" Click="OnTracks" Focusable="False" Margin="0,4,8,0"/>
                         <Button Style="{StaticResource NovaButton}" Content="Aspect (Z)" Click="OnAspect" Focusable="False" Margin="0,4,8,0"/>
+                        <Button Style="{StaticResource NovaButton}" Content="🔊 Boost · ☀ Brightness" Click="OnPictureSound" Focusable="False" Margin="0,4,8,0"/>
                         <Button x:Name="ExternalButton" Style="{StaticResource NovaButton}" Content="↗ External (E)" Click="OnExternal" Focusable="False" Margin="0,4,8,0"/>
                         <Button Style="{StaticResource NovaButton}" Content="Full screen (F)" Click="OnFullScreen" Focusable="False" Margin="0,4,8,0"/>
                         <Button Style="{StaticResource NovaButton}" Content="Close (Esc)" Click="OnCloseClick" Focusable="False" Margin="0,4,8,0"/>

@@ -97,7 +97,11 @@
                                 </Grid>
                             </Border>
                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                <TextBlock Text="{Binding Title}" FontSize="15.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                <DockPanel>
+                                    <Ellipse DockPanel.Dock="Right" Width="11" Height="11" Margin="8,0,4,0" VerticalAlignment="Center" Fill="{Binding DotBrush}"
+                                             ToolTip="{Binding DotTip}" Visibility="{Binding DotVisibility}"/>
+                                    <TextBlock Text="{Binding Title}" FontSize="15.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
                                 <TextBlock Text="{Binding Plot}" Style="{StaticResource Hint}" FontSize="13" MaxHeight="36"
                                            TextTrimming="WordEllipsis" Margin="0,4,0,0"/>
                             </StackPanel>
