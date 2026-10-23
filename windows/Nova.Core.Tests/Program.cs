@@ -71,6 +71,11 @@ namespace Nova.Core.Tests
             Run("Backup (Android format)", BackupRoundTrip);
             Run("Accounts list", AccountsListTest);
             Run("Catch-up, M3U, order", Misc);
+            Run("Age & word filter", FilterTests);
+            Run("Similar channels", SimilarTests);
+            Run("Filter and lists backups (box keys)", FilterBackupTests);
+            Run("Search index file (.novaindex)", IndexFileTests);
+            Run("Playback report", ReportTests);
             RunStreamingTests();
             Console.WriteLine();
             Console.WriteLine("Passed: " + _passed + "   Failed: " + _failed);
@@ -160,6 +165,172 @@ namespace Nova.Core.Tests
                 var bad = false;
                 try { Backup.Read("{\"app\":\"Other\"}", null); } catch (NovaException) { bad = true; }
                 Check(bad, "other files refused");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        private static void FilterTests()
+        {
+            var f = new AgeFilter();
+            f.Configure(new FilterSettings()); // the box's default: NC-17 + words
+            Eq(5, f.Level, "default level NC-17");
+            Check(f.Blocked("movie", "a|1", "Love Actually", null), "romance word hides by default");
+            Eq("word: love", f.Reason("movie", "a|1", "Love Actually", null), "reason names the word");
+            Check(!f.Blocked("movie", "a|2", "The Matrix", null), "ordinary title shown");
+            Check(f.Blocked("movie", "a|3", "|FR| Amoür Fou (2010)", null), "accents and tags: amour → amoür");
+            Check(!f.Blocked("movie", "a|4", "Glover", null), "whole words only (love ≠ Glover)");
+            Check(f.Blocked("movie", "a|5", "XXX Party", null), "adult always hidden");
+            var s = new FilterSettings { Level = 2, WordsOn = false };
+            f.Configure(s);
+            Check(f.Blocked("movie", "a|6", "Zombie Night", "Horreur"), "horror above PG hidden by the name rule");
+            Check(!f.Blocked("movie", "a|7", "Toy Story", "Kids"), "kids group is G");
+            Check(f.LiveBlocked(new LiveChannel { AccountId = "a", StreamId = "9", Name = "Adult XXX", CategoryId = "1" }, "Adults"), "adult channel hidden");
+            Check(f.GroupBlocked("live", "a|1", "XXX Adult"), "adult group hidden");
+            s.Allowed.Add("movie|a|6");
+            f.Configure(s);
+            Check(!f.Blocked("movie", "a|6", "Zombie Night", "Horreur"), "exception: allowed anyway");
+            f.Configure(new FilterSettings { Level = 0, WordsOn = false });
+            Check(!f.Active && !f.Blocked("movie", "a|5", "XXX Party", null), "both OFF: nothing hidden");
+            var c = AgeFilter.CleanName("FR_Le Roi Lion_4K (2019) VF", null);
+            Eq("le roi lion", c.Item1, "clean name");
+            Eq(2019, c.Item2 ?? 0, "year from the name");
+        }
+
+        private static void SimilarTests()
+        {
+            Eq("tf1", ChannelMatch.Key("|FR| TF1 HD"), "tags and quality removed");
+            Eq("tf1", ChannelMatch.Key("FR_TF1 FHD HEVC"), "underscore tag");
+            Eq("tf1 1", ChannelMatch.Key("FR: TF1 +1"), "+1 kept as a number");
+            Eq("fr", ChannelMatch.CountryOf("|FR| TF1 HD"), "country");
+            Check(ChannelMatch.CountryOf("|4K| TF1") == null, "4K is not a country");
+            Eq(3, ChannelMatch.QualityOf("TF1 4K"), "4K");
+            Eq(1, ChannelMatch.QualityOf("TF1 HD"), "HD");
+            var watched = new LiveChannel { AccountId = "a", StreamId = "1", Name = "|FR| TF1 4K", CategoryId = "uhd" };
+            var all = new List<LiveChannel>
+            {
+                watched,
+                new LiveChannel { AccountId = "a", StreamId = "2", Name = "FR: TF1 HD", CategoryId = "hd" },
+                new LiveChannel { AccountId = "a", StreamId = "3", Name = "FR: TF1 FHD", CategoryId = "fhd" },
+                new LiveChannel { AccountId = "a", StreamId = "4", Name = "|BE| TF1 HD", CategoryId = "be" },
+                new LiveChannel { AccountId = "a", StreamId = "5", Name = "FR: France 2 HD", CategoryId = "hd" },
+            };
+            var sim = ChannelMatch.OnSameServer(watched, all, new Dictionary<string, string> { { "fhd", "France FHD" } });
+            Eq(2, sim.Count, "same channel, same country only");
+            Eq("3", sim[0].Channel.StreamId, "lighter version closest first (FHD)");
+            Eq("France FHD", sim[0].Group, "group name");
+            var other = ChannelMatch.SameElsewhere(watched, all.Skip(1).ToList());
+            Eq("3", other.StreamId, "same channel elsewhere: closest quality");
+        }
+
+        private static void FilterBackupTests()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "nova-fbak-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var android = new JObject
+                {
+                    ["app"] = "NovaIPTV", ["version"] = 1, ["kind"] = "all",
+                    ["web"] = new JObject { ["bookmarks"] = "x" },
+                    ["prefs"] = new JObject
+                    {
+                        ["age_level"] = new JObject { ["t"] = "i", ["v"] = 3 },
+                        ["age_source"] = new JObject { ["t"] = "s", ["v"] = "tmdb" },
+                        ["age_allowed"] = new JObject { ["t"] = "s", ["v"] = "movie|a|1\nseries|a|2" },
+                        ["age_word_groups_on"] = new JObject { ["t"] = "s", ["v"] = "adult,own" },
+                        ["age_words_own"] = new JObject { ["t"] = "s", ["v"] = "dragon\nwitch" },
+                        ["live_disk_minutes"] = new JObject { ["t"] = "i", ["v"] = 10 },
+                        ["boost_k_live|a|9"] = new JObject { ["t"] = "i", ["v"] = 150 },
+                    },
+                };
+                var store = new Store(dir, Path.Combine(dir, "cache"));
+                var c = Backup.Read(android.ToString(), store.Settings);
+                Eq(3, c.State.Filter.Level, "age level read");
+                Eq("tmdb", c.State.Filter.Source, "age source read");
+                Eq(2, c.State.Filter.Allowed.Count, "exceptions read");
+                Check(c.State.Filter.WordGroupsOn.SequenceEqual(new[] { "adult", "own" }), "word groups read");
+                Eq("witch", c.State.Filter.Words["own"][1], "own words read");
+                Eq(10, c.Settings.LiveDiskMinutes, "live buffer length read");
+                Eq(150, c.State.BoostFor["live|a|9"], "volume boost per channel read");
+                Check(c.State.AndroidWeb != null, "box browser part kept");
+                Check(!c.State.AndroidExtras.ContainsKey("age_level"), "filter not left in the extras");
+                store.ReplaceAll(c.Accounts, c.Settings, c.Favorites, c.State);
+                var back = JObject.Parse(Backup.Export(store));
+                Eq(3, (int)back["prefs"]["age_level"]["v"], "age level written back");
+                Eq("dragon\nwitch", (string)back["prefs"]["age_words_own"]["v"], "own words written back");
+                Check(back["web"] != null, "browser part goes back with everything");
+                Check(JObject.Parse(Backup.Export(store, "iptv"))["web"] == null, "IPTV-only backup without the browser");
+
+                // Lists only.
+                store.SetPin(null);
+                var lists = Backup.ExportLists(store);
+                var r = Backup.ReadLists(lists);
+                Check(r.Item1 != null && r.Item2 != null, "lists backup reads back");
+                var bad = false;
+                try { Backup.ReadLists(Backup.Export(store)); } catch (NovaException) { bad = true; }
+                Check(bad, "a full backup is not a lists backup");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        private static void IndexFileTests()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "nova-idx-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var store = new Store(Path.Combine(dir, "data"), Path.Combine(dir, "cache"));
+                store.SaveAccount(new Account { Id = "x1", Name = "Main", Server = "http://S4.Example.net:8000/", Username = "u", Password = "p" });
+                var catalog = new Catalog(new XtreamApi(() => "UA", new FakeServer()), store);
+                var folder = Path.Combine(dir, "Index");
+                catalog.IndexFolder = () => folder;
+                Directory.CreateDirectory(folder);
+                var acc = store.Accounts[0];
+                File.WriteAllText(Path.Combine(folder, "x1-live.json"), Newtonsoft.Json.JsonConvert.SerializeObject(new[] { new LiveChannel { AccountId = "x1", StreamId = "1", Name = "TF1 HD", CategoryId = "2", Num = 1 } }));
+                File.WriteAllText(Path.Combine(folder, "x1-movie.json"), Newtonsoft.Json.JsonConvert.SerializeObject(new[] { new Movie { AccountId = "x1", StreamId = "7", Name = "Film\tTab", CategoryId = "3", Extension = "mkv", Year = 2001, Tmdb = "603" } }));
+                File.WriteAllText(Path.Combine(folder, "x1-series.json"), Newtonsoft.Json.JsonConvert.SerializeObject(new[] { new Series { AccountId = "x1", SeriesId = "9", Name = "Show", CategoryId = "4" } }));
+                Eq("s4.example.net:8000", Catalog.HostOf(acc.Server), "host of a server");
+                var path = Path.Combine(dir, "out.novaindex");
+                Eq(3, catalog.ExportIndex(path, store.Accounts, "2.0"), "three items exported");
+                long at;
+                var sections = Catalog.ReadIndexFile(path, out at);
+                Eq(1, sections.Count, "one server section");
+                Eq("s4.example.net:8000", sections[0].Host, "linked by host, no login inside");
+                Eq("603", sections[0].Movies[0].Tmdb, "film database number kept");
+                Eq("Film Tab", sections[0].Movies[0].Name, "tabs cleaned");
+                Check(!File.ReadAllText(path).Contains("u:p"), "no password");
+                foreach (var f in Directory.GetFiles(folder)) File.Delete(f);
+                var res = catalog.ImportIndex(path);
+                Eq(1, res.Item1.Count, "imported to the account with the same host");
+                Check(File.Exists(Path.Combine(folder, "x1-movie.json")), "index files written");
+                var bad = false;
+                File.WriteAllText(Path.Combine(dir, "bad.novaindex"), "hello");
+                try { Catalog.ReadIndexFile(Path.Combine(dir, "bad.novaindex"), out at); } catch (NovaException) { bad = true; }
+                Check(bad, "other files refused");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        private static void ReportTests()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "nova-log-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var log = new PlaybackLog(dir) { LogsFolder = () => Path.Combine(dir, "Logs") };
+                var s = new PlaybackLog.Session { Title = "TF1 HD", Kind = "live", Server = "Main", Group = "France" };
+                s.StartMs = 2300; s.NeedMbit = 6; s.Arrival(4); s.Fail("SLOW", "line too slow");
+                log.End(s);
+                var f = new PlaybackLog.Session { Title = "Dead channel", Kind = "live", Server = "Main" };
+                f.Fail("FAIL", "no signal");
+                log.End(f);
+                var text = log.Report(7, "2.0 (build 9)", "test", new[] { "12:00|TF1|froze|jumped to live" });
+                Check(text.Contains("TF1 HD") && text.Contains("Dead channel"), "both plays listed");
+                Check(text.Contains("Failed most") && text.Contains("no signal"), "failures summed up");
+                Check(text.Contains("needs 6.0 / got 4.0 Mbit/s"), "line speed shown");
+                Check(log.Glance(7).StartsWith("Played 2"), "glance: " + log.Glance(7));
+                var path = log.SaveReport(text);
+                Check(File.Exists(path) && path.Contains("Logs"), "saved in Logs");
+                log.Problem("2.0", "Error: test");
+                Check((log.LastProblem() ?? "").Contains("Error: test"), "last problem kept");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }

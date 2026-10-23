@@ -516,6 +516,52 @@ namespace Nova.Core.Tests
                     }
                 });
 
+                Run("Downloads: one per server, server and links together, waiting reason", () =>
+                {
+                    settings.DlSpeedServers = 1; // slow on purpose: the server download takes ~10 s
+                    settings.DlConnServers = 1;
+                    using (var dm = new DownloadManager(hub, () => settings, a => 0, Path.Combine(root, "data8")))
+                    {
+                        var f1 = dm.AddFilm(new Movie { AccountId = "acc", StreamId = "11", Name = "First", Extension = "mkv" }, provider.Url("/vod/film.mkv?a=1"));
+                        var f2 = dm.AddFilm(new Movie { AccountId = "acc", StreamId = "12", Name = "Second", Extension = "mkv" }, provider.Url("/vod/film.mkv?a=2"));
+                        var link = dm.AddLink(provider.Url("/vod/film.mkv?link=1"), "A link", "mkv", false, null);
+                        Check(WaitFor(() => dm.Items.Any(i => i.Id == f1.Id && i.Status == DownloadStatus.Downloading), 10000), "first server download runs");
+                        Thread.Sleep(2500);
+                        var second = dm.Items.First(i => i.Id == f2.Id);
+                        Check(second.Status == DownloadStatus.Queued, "second film of the same server waits (" + second.Status + ")");
+                        Check((second.WaitingFor ?? "").Contains("First"), "says what it waits for: " + second.WaitingFor);
+                        Check(WaitFor(() => dm.Items.First(i => i.Id == link.Id).IsDone, 20000), "a link downloads at the same time (" + dm.Items.First(i => i.Id == link.Id).Status + ")");
+                        Check(!dm.Items.First(i => i.Id == f1.Id).IsDone, "while the server film is still downloading");
+                    }
+                    settings.DlSpeedServers = 0;
+                });
+
+                Run("HLS read-ahead: local playlist, parts on demand, old parts deleted", () =>
+                {
+                    var folder = Path.Combine(root, "hlsra");
+                    var hls = new HlsDownload(provider.Url("/hls/master.m3u8"), folder, 1) { LimitBytes = 188 * 50 * 2 };
+                    hls.Begin();
+                    try
+                    {
+                        Check(hls.WaitParts(10000, () => false), "parts listed");
+                        var url = hub.ServeHlsReadAhead("ra1", hls);
+                        var list = Encoding.UTF8.GetString(ReadLocal(url, -1, null));
+                        Check(list.Contains("#EXT-X-ENDLIST") && list.Contains("/hlsra/ra1/5.ts") && list.Contains("#EXTINF:4,"), "playlist made: " + list.Replace("\n", " | "));
+                        var part4 = ReadLocal(url.Replace(".m3u8", "/4.ts"), -1, null);
+                        Check(part4.SequenceEqual(FakeProvider.HlsPart(4)), "a jump: part 4 fetched first and decrypted");
+                        var part5 = ReadLocal(url.Replace(".m3u8", "/5.ts"), -1, null);
+                        Check(part5.SequenceEqual(FakeProvider.HlsPart(5)), "next part");
+                        var part0 = ReadLocal(url.Replace(".m3u8", "/0.ts"), -1, null);
+                        Check(part0.SequenceEqual(FakeProvider.HlsPart(0)), "back to the start");
+                        Thread.Sleep(500);
+                        var files = Directory.GetFiles(folder, "p*.ts").Length;
+                        Check(files <= 4, "cache kept small (" + files + " parts on disk)");
+                        hub.StopServing("ra1");
+                    }
+                    finally { hls.DisposeAndDelete(); }
+                    Check(!Directory.Exists(folder), "cache deleted when closed");
+                });
+
                 Run("Websites: retry as a browser, then remembered", () =>
                 {
                     var remembered = new Dictionary<string, Dictionary<string, string>>();

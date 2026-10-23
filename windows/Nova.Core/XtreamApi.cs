@@ -236,7 +236,15 @@ namespace Nova.Core
                 Extension = Str(o, "container_extension") ?? "mp4",
                 Added = (long)ToDouble(Str(o, "added")),
                 Year = YearOf(o, Str(o, "name")),
+                Tmdb = TmdbOf(o),
             };
+        }
+
+        /// <summary>The film database number some providers give ("tmdb" / "tmdb_id"), or null.</summary>
+        private static string TmdbOf(JObject o)
+        {
+            var t = Str(o, "tmdb") ?? Str(o, "tmdb_id");
+            return string.IsNullOrWhiteSpace(t) || t == "0" ? null : t.Trim();
         }
 
         public Task<List<Series>> SeriesList(Account a, string categoryId, CancellationToken ct = default(CancellationToken))
@@ -261,6 +269,7 @@ namespace Nova.Core
                 Rating = RatingOf(o),
                 Added = (long)ToDouble(Str(o, "last_modified") ?? Str(o, "added")),
                 Year = YearOf(o, Str(o, "name")),
+                Tmdb = TmdbOf(o),
             };
         }
 

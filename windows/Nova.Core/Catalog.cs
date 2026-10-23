@@ -229,6 +229,207 @@ namespace Nova.Core
             }
         }
 
+        // ================================================================== portable index (.novaindex, same as the box)
+        //
+        // One gzip text file holding the index of one or more servers:
+        //   NOVAINDEX2 <tab> exportedAt <tab> appVersion
+        //   A <tab> server label <tab> host <tab> builtAt        (starts a server section)
+        //   L / M / S lines (channels, films, series)
+        // No usernames, passwords or stream links: a section is linked to an account by its host.
+
+        public const string IndexExt = "novaindex";
+        public const string IndexLatest = "index-latest." + IndexExt;
+
+        /// <summary>"http://S4.Example.net:8000/" → "s4.example.net:8000".</summary>
+        public static string HostOf(string server)
+        {
+            var s = (server ?? "").Trim().ToLowerInvariant();
+            var i = s.IndexOf("://", StringComparison.Ordinal);
+            if (i >= 0) s = s.Substring(i + 3);
+            var slash = s.IndexOf('/');
+            if (slash >= 0) s = s.Substring(0, slash);
+            return s.TrimEnd('.');
+        }
+
+        private static string Tsv(string s) { return (s ?? "").Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' '); }
+
+        /// <summary>When the index of this account was built (unix ms), or 0 when there is none.</summary>
+        public long IndexBuiltAt(Account a)
+        {
+            var times = new[] { "live", "movie", "series" }.Select(k => IndexPath(a, k)).Where(p => p != null && System.IO.File.Exists(p))
+                .Select(p => new DateTimeOffset(System.IO.File.GetLastWriteTimeUtc(p)).ToUnixTimeMilliseconds()).ToList();
+            return times.Count == 3 ? times.Min() : 0;
+        }
+
+        /// <summary>Accounts whose whole index (channels, films, series) is on disk.</summary>
+        public List<Account> Exportable() { return _store.Accounts.Where(a => IndexBuiltAt(a) > 0).ToList(); }
+
+        private static List<T> ReadJson<T>(string path)
+        {
+            try { return path != null && System.IO.File.Exists(path) ? Newtonsoft.Json.JsonConvert.DeserializeObject<List<T>>(System.IO.File.ReadAllText(path)) ?? new List<T>() : new List<T>(); }
+            catch { return new List<T>(); }
+        }
+
+        /// <summary>Writes the index of these accounts as a .novaindex file. Returns the number of items.</summary>
+        public int ExportIndex(string path, IList<Account> accounts, string appVersion)
+        {
+            var n = 0;
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+            var tmp = path + ".tmp";
+            using (var gz = new System.IO.Compression.GZipStream(System.IO.File.Create(tmp), System.IO.Compression.CompressionMode.Compress))
+            using (var w = new System.IO.StreamWriter(gz, new System.Text.UTF8Encoding(false)))
+            {
+                w.Write("NOVAINDEX2\t" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "\t" + Tsv(appVersion) + "\n");
+                foreach (var a in accounts)
+                {
+                    var built = IndexBuiltAt(a);
+                    if (built == 0) continue;
+                    var live = ReadJson<LiveChannel>(IndexPath(a, "live"));
+                    var movies = ReadJson<Movie>(IndexPath(a, "movie"));
+                    var series = ReadJson<Series>(IndexPath(a, "series"));
+                    w.Write("A\t" + Tsv(a.DisplayName) + "\t" + HostOf(a.Server) + "\t" + built + "\n");
+                    foreach (var c in live)
+                        w.Write("L\t" + c.StreamId + "\t" + Tsv(c.Name) + "\t" + Tsv(c.Icon) + "\t" + c.CategoryId + "\t" + c.Num + "\t" + (c.HasArchive ? 1 : 0) + "\t" + c.Added + "\n");
+                    foreach (var m in movies)
+                        w.Write("M\t" + m.StreamId + "\t" + Tsv(m.Name) + "\t" + Tsv(m.Icon) + "\t" + m.CategoryId + "\t" + Tsv(m.Rating) + "\t" + m.Extension + "\t" + m.Added + "\t" + (m.Year.HasValue ? m.Year.Value.ToString() : "") + "\t" + (m.Tmdb ?? "") + "\n");
+                    foreach (var x in series)
+                        w.Write("S\t" + x.SeriesId + "\t" + Tsv(x.Name) + "\t" + Tsv(x.Cover) + "\t" + x.CategoryId + "\t" + Tsv(x.Rating) + "\t" + x.Added + "\t" + (x.Year.HasValue ? x.Year.Value.ToString() : "") + "\t" + (x.Tmdb ?? "") + "\n");
+                    n += live.Count + movies.Count + series.Count;
+                }
+            }
+            if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+            System.IO.File.Move(tmp, path);
+            return n;
+        }
+
+        public sealed class IndexSection
+        {
+            public string Name, Host;
+            public long BuiltAt;
+            public List<LiveChannel> Live = new List<LiveChannel>();
+            public List<Movie> Movies = new List<Movie>();
+            public List<Series> Series = new List<Series>();
+            public int Items { get { return Live.Count + Movies.Count + Series.Count; } }
+        }
+
+        private static int ToInt(string s) { int n; return int.TryParse(s, out n) ? n : 0; }
+        private static long ToLong(string s) { long n; return long.TryParse(s, out n) ? n : 0; }
+        private static int? ToYear(string s) { int n; return int.TryParse(s, out n) ? n : (int?)null; }
+        private static string Col(string[] p, int i) { return i < p.Length && p[i].Length > 0 ? p[i] : null; }
+
+        /// <summary>Reads a .novaindex file (from the box or this PC). Throws NovaException when it isn't one.</summary>
+        public static List<IndexSection> ReadIndexFile(string path, out long exportedAt)
+        {
+            exportedAt = 0;
+            var list = new List<IndexSection>();
+            IndexSection cur = null;
+            try
+            {
+                using (var gz = new System.IO.Compression.GZipStream(System.IO.File.OpenRead(path), System.IO.Compression.CompressionMode.Decompress))
+                using (var r = new System.IO.StreamReader(gz, System.Text.Encoding.UTF8))
+                {
+                    var first = r.ReadLine();
+                    if (first == null || !first.StartsWith("NOVAINDEX")) throw new NovaException("This isn't a Nova search index file (.novaindex).");
+                    var head = first.Split('\t');
+                    int ver;
+                    if (!int.TryParse(head[0].Substring(9), out ver) || ver > 2) throw new NovaException("This index file was made by a newer Nova — update Nova first.");
+                    if (head.Length > 1) exportedAt = ToLong(head[1]);
+                    string line;
+                    while ((line = r.ReadLine()) != null)
+                    {
+                        var p = line.Split('\t');
+                        if (p[0] == "A") { cur = new IndexSection { Name = Col(p, 1) ?? "", Host = Col(p, 2) ?? "", BuiltAt = ToLong(Col(p, 3)) }; list.Add(cur); continue; }
+                        if (cur == null) continue;
+                        if (p[0] == "L" && p.Length >= 8)
+                            cur.Live.Add(new LiveChannel { StreamId = p[1], Name = p[2], Icon = Col(p, 3), CategoryId = p[4], Num = ToInt(p[5]), HasArchive = p[6] == "1", Added = ToLong(p[7]) });
+                        else if (p[0] == "M" && p.Length >= 9)
+                            cur.Movies.Add(new Movie { StreamId = p[1], Name = p[2], Icon = Col(p, 3), CategoryId = p[4], Rating = Col(p, 5), Extension = p[6], Added = ToLong(p[7]), Year = ToYear(p[8]), Tmdb = Col(p, 9) });
+                        else if (p[0] == "S" && p.Length >= 8)
+                            cur.Series.Add(new Series { SeriesId = p[1], Name = p[2], Cover = Col(p, 3), CategoryId = p[4], Rating = Col(p, 5), Added = ToLong(p[6]), Year = ToYear(p[7]), Tmdb = Col(p, 8) });
+                    }
+                }
+            }
+            catch (NovaException) { throw; }
+            catch (Exception) { throw new NovaException("This isn't a Nova search index file (.novaindex)."); }
+            return list;
+        }
+
+        /// <summary>
+        /// Imports a .novaindex file: each server section goes to the accounts with the same host (replacing their index).
+        /// Returns (accounts linked, servers waiting for an account, items).
+        /// </summary>
+        public Tuple<List<string>, List<string>, int> ImportIndex(string path, IList<Account> accounts = null)
+        {
+            long exported;
+            var sections = ReadIndexFile(path, out exported);
+            var linked = new List<string>(); var waiting = new List<string>(); var items = 0;
+            foreach (var sec in sections)
+            {
+                var matches = (accounts ?? _store.Accounts).Where(a => HostOf(a.Server) == sec.Host).ToList();
+                if (matches.Count == 0) { waiting.Add(sec.Name); continue; }
+                foreach (var a in matches)
+                {
+                    var when = sec.BuiltAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(sec.BuiltAt).UtcDateTime : DateTime.UtcNow;
+                    WriteIndex(IndexPath(a, "live"), sec.Live.Select(c => { c.AccountId = a.Id; return c; }).ToList(), when);
+                    WriteIndex(IndexPath(a, "movie"), sec.Movies.Select(m => { m.AccountId = a.Id; return m; }).ToList(), when);
+                    WriteIndex(IndexPath(a, "series"), sec.Series.Select(x => { x.AccountId = a.Id; return x; }).ToList(), when);
+                    foreach (var k in new[] { "live", "movie", "series" }) Forget("all|" + k + "|" + a.Id);
+                    linked.Add(a.DisplayName);
+                    items += sec.Items;
+                }
+            }
+            return Tuple.Create(linked, waiting, items);
+        }
+
+        private static void WriteIndex<T>(string path, List<T> list, DateTime builtUtc)
+        {
+            if (path == null) return;
+            SaveIndex(path, list);
+            try { System.IO.File.SetLastWriteTimeUtc(path, builtUtc); } catch { }
+        }
+
+        /// <summary>Saves index-latest.novaindex in the Index folder when something changed since the last export.</summary>
+        public string AutoExport(string appVersion)
+        {
+            var folder = IndexFolder();
+            if (folder == null) return null;
+            var list = Exportable();
+            if (list.Count == 0) return null;
+            var stamp = string.Join(",", list.Select(a => HostOf(a.Server) + "@" + IndexBuiltAt(a)).OrderBy(x => x));
+            if (stamp == _store.State.IndexExportStamp && System.IO.File.Exists(System.IO.Path.Combine(folder, IndexLatest))) return null;
+            var path = System.IO.Path.Combine(folder, IndexLatest);
+            ExportIndex(path, list, appVersion);
+            _store.State.IndexExportStamp = stamp;
+            _store.State.IndexExportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _store.SaveState();
+            return path;
+        }
+
+        /// <summary>New account (or new install): takes its index from an export file in the Index folder, if one has its server.</summary>
+        public void AdoptFromExports()
+        {
+            var folder = IndexFolder();
+            if (folder == null || !System.IO.Directory.Exists(folder)) return;
+            var missing = _store.Accounts.Where(a => IndexBuiltAt(a) == 0).ToList();
+            if (missing.Count == 0) return;
+            var files = new System.IO.DirectoryInfo(folder).GetFiles("*." + IndexExt)
+                .OrderByDescending(f => f.Name == IndexLatest).ThenByDescending(f => f.LastWriteTimeUtc).ToList();
+            foreach (var f in files)
+            {
+                if (missing.Count == 0) break;
+                try
+                {
+                    long at;
+                    var hosts = new HashSet<string>(ReadIndexFile(f.FullName, out at).Select(x => x.Host));
+                    var here = missing.Where(a => hosts.Contains(HostOf(a.Server))).ToList();
+                    if (here.Count == 0) continue;
+                    ImportIndex(f.FullName, here);
+                    missing = missing.Except(here).ToList();
+                }
+                catch { }
+            }
+        }
+
         /// <summary>The newest films or series of every account (the 🆕 Recently added group).</summary>
         public async Task<List<T>> RecentlyAdded<T>(ContentType type, int max) where T : class
         {

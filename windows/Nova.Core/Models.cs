@@ -91,6 +91,8 @@ namespace Nova.Core
         public string Extension { get; set; }
         public long Added { get; set; }
         public int? Year { get; set; }
+        /// <summary>Film database (TMDB) number, when the provider gives it.</summary>
+        public string Tmdb { get; set; }
         public string Key { get { return AccountId + "|" + StreamId; } }
     }
 
@@ -105,6 +107,7 @@ namespace Nova.Core
         public string Rating { get; set; }
         public long Added { get; set; }
         public int? Year { get; set; }
+        public string Tmdb { get; set; }
         public string Key { get { return AccountId + "|" + SeriesId; } }
     }
 

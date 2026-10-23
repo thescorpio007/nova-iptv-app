@@ -114,7 +114,7 @@ namespace Nova.Core.Streaming
                 {
                     var folder = Path.Combine(LiveFolder, Guid.NewGuid().ToString("N").Substring(0, 10));
                     relay = new LiveRelay(key, url, () => _settings().UserAgent, folder,
-                        (long)Math.Max(100, s.LiveBufferMb) * 1024 * 1024, s.StallSeconds, s.DeadSeconds) { Headers = headers };
+                        (long)Math.Max(100, s.LiveBufferMb) * 1024 * 1024, s.StallSeconds, s.DeadSeconds) { Headers = headers, MaxSeconds = Math.Max(0, s.LiveDiskMinutes) * 60 };
                     _live[key] = relay;
                     _liveRefs[relay] = 0;
                     _routes["live/" + Id(key)] = relay;
@@ -222,7 +222,16 @@ namespace Nova.Core.Streaming
 
         public void StopServing(string id)
         {
-            lock (_lock) _routes.Remove("grow/" + id);
+            lock (_lock) { _routes.Remove("grow/" + id); _routes.Remove("hlsra/" + id); }
+        }
+
+        private sealed class HlsServe { public HlsDownload Hls; }
+
+        /// <summary>Serves a HLS film read ahead on disk as a local playlist (the player can still jump anywhere). Returns its address.</summary>
+        public string ServeHlsReadAhead(string id, HlsDownload hls)
+        {
+            lock (_lock) _routes["hlsra/" + id] = new HlsServe { Hls = hls };
+            return Base + "/hlsra/" + id + ".m3u8";
         }
 
         /// <summary>How many users hold this film / episode (player, download…).</summary>
@@ -353,6 +362,8 @@ namespace Nova.Core.Streaming
                     Func<bool> gone = () => _stopped || ClientGone(client);
                     var relay = route as LiveRelay;
                     if (relay != null) { ServeLive(s, method, query, relay, gone); return; }
+                    var hra = route as HlsServe;
+                    if (hra != null) { ServeHlsPart(s, method, parts, hra.Hls, gone); return; }
                     var grow = route as IGrowingSource;
                     if (grow != null) { ServeGrowing(s, method, grow, gone); return; }
                     var file = route as VodFile;
@@ -406,7 +417,9 @@ namespace Nova.Core.Streaming
         {
             Send(s, "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n");
             if (method == "HEAD") return;
-            var cushion = Math.Max(0, _settings().CushionSeconds);
+            // Fast start: begin ~2 s behind live; the player builds the full cushion while you watch (plays 4 % slower).
+            var st = _settings();
+            var cushion = Math.Max(0, st.LiveStart == "fast" ? Math.Min(2, st.CushionSeconds) : st.CushionSeconds);
             long pos;
             long at;
             var atText = ParseQuery(query, "at");
@@ -427,6 +440,33 @@ namespace Nova.Core.Streaming
                 if (n <= 0) break;
                 s.Write(buf, 0, n);
             }
+        }
+
+        private void ServeHlsPart(NetworkStream s, string method, string[] parts, HlsDownload hls, Func<bool> gone)
+        {
+            if (parts.Length == 2)
+            {
+                // The playlist.
+                if (!hls.WaitParts(30000, gone)) { Send(s, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return; }
+                var id = parts[1].Split('.')[0];
+                var body = Encoding.UTF8.GetBytes(hls.Playlist(Base + "/hlsra/" + id + "/"));
+                Send(s, "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n");
+                if (method != "HEAD") { s.Write(body, 0, body.Length); s.Flush(); }
+                return;
+            }
+            int index;
+            if (parts.Length < 3 || !int.TryParse(parts[2].Split('.')[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out index))
+            {
+                Send(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                return;
+            }
+            var path = hls.WaitPart(index, gone);
+            if (path == null) { Send(s, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return; }
+            byte[] data;
+            try { data = File.ReadAllBytes(path); }
+            catch { Send(s, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return; }
+            Send(s, "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: " + data.Length + "\r\nConnection: close\r\n\r\n");
+            if (method != "HEAD") { s.Write(data, 0, data.Length); s.Flush(); }
         }
 
         private static void ServeGrowing(NetworkStream s, string method, IGrowingSource src, Func<bool> gone)

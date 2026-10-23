@@ -29,6 +29,7 @@ namespace Nova.Core.Streaming
             public string KeyUrl;
             public byte[] Iv;
             public long Seq;
+            public double Duration;
             public long Size = -1; // -1 = not downloaded
         }
 
@@ -50,6 +51,15 @@ namespace Nova.Core.Streaming
         public VodState State { get; private set; }
         public string Message { get; private set; }
         public int Readers;
+
+        /// <summary>
+        /// Read-ahead mode for watching (0 = download everything): ONE connection downloads the next parts of the version
+        /// being played into the disk cache, in order; at most this many bytes are kept (~80 % ahead, older parts behind the
+        /// picture are deleted as you watch). The player reads a local playlist, so it can still jump anywhere.
+        /// </summary>
+        public long LimitBytes { get; set; }
+        private volatile int _readIndex;
+        private volatile int _want = -1;
 
         public event Action<HlsDownload> Changed;
         public event Action<HlsDownload> Completed;
@@ -132,7 +142,7 @@ namespace Nova.Core.Streaming
             }
             if (_stopped) return;
             Set(VodState.Downloading, null);
-            for (int w = 0; w < Connections; w++)
+            for (int w = 0; w < (LimitBytes > 0 ? 1 : Connections); w++)
             {
                 var t = new Thread(Worker) { IsBackground = true, Name = "Nova HLS part" };
                 lock (_lock) _threads.Add(t);
@@ -175,9 +185,15 @@ namespace Nova.Core.Streaming
             var parts = new List<Part>();
             long seq = 0;
             string keyUrl = null; byte[] keyIv = null;
+            double dur = 0;
             foreach (var l in lines)
             {
                 if (l.StartsWith("#EXT-X-MEDIA-SEQUENCE:")) long.TryParse(l.Substring(22), out seq);
+                else if (l.StartsWith("#EXTINF:"))
+                {
+                    var d = l.Substring(8).Split(',')[0].Trim();
+                    double.TryParse(d, NumberStyles.Float, CultureInfo.InvariantCulture, out dur);
+                }
                 else if (l.StartsWith("#EXT-X-KEY"))
                 {
                     var method = Attr(l, "METHOD");
@@ -193,7 +209,8 @@ namespace Nova.Core.Streaming
                 else if (l.StartsWith("#EXT-X-MAP")) throw new NovaException("This HLS format (fMP4 parts) can't be downloaded yet. Play it instead.");
                 else if (l.Length > 0 && !l.StartsWith("#"))
                 {
-                    parts.Add(new Part { Url = new Uri(baseUri, l).AbsoluteUri, KeyUrl = keyUrl, Iv = keyIv, Seq = seq });
+                    parts.Add(new Part { Url = new Uri(baseUri, l).AbsoluteUri, KeyUrl = keyUrl, Iv = keyIv, Seq = seq, Duration = dur > 0 ? dur : 6 });
+                    dur = 0;
                     seq++;
                 }
             }
@@ -243,9 +260,19 @@ namespace Nova.Core.Streaming
                 Part part = null;
                 lock (_lock)
                 {
-                    while (_next < _parts.Count && _parts[_next].Size >= 0) _next++;
-                    for (int i = _next; i < _parts.Count; i++)
-                        if (_parts[i].Size == -1) { index = i; part = _parts[i]; part.Size = -2; break; } // -2 = being downloaded
+                    if (LimitBytes > 0)
+                    {
+                        index = NextAheadLocked();
+                        if (index < 0) { Monitor.Wait(_lock, 500); continue; }
+                        part = _parts[index];
+                        part.Size = -2;
+                    }
+                    else
+                    {
+                        while (_next < _parts.Count && _parts[_next].Size >= 0) _next++;
+                        for (int i = _next; i < _parts.Count; i++)
+                            if (_parts[i].Size == -1) { index = i; part = _parts[i]; part.Size = -2; break; } // -2 = being downloaded
+                    }
                 }
                 if (part == null) return;
                 var backoff = 1000;
@@ -321,6 +348,116 @@ namespace Nova.Core.Streaming
             File.WriteAllText(path + ".ok", "ok");
             lock (_lock) { part.Size = data.Length; Monitor.PulseAll(_lock); }
             var h = Changed; if (h != null) try { h(this); } catch { }
+        }
+
+        // ------------------------------------------------------------------ read-ahead (watching a HLS film)
+
+        /// <summary>The next part to fetch in read-ahead mode, or -1 (enough ahead, or nothing missing).</summary>
+        private int NextAheadLocked()
+        {
+            var from = _want >= 0 ? _want : _readIndex;
+            var known = _parts.Where(p => p.Size > 0).ToList();
+            var avg = known.Count > 0 ? known.Average(p => p.Size) : 1024 * 1024;
+            double ahead = 0;
+            for (int i = Math.Max(0, _readIndex); i < _parts.Count; i++)
+            {
+                if (ahead > LimitBytes * 0.8) return -1;
+                if (i >= from && _parts[i].Size == -1) return i;
+                ahead += _parts[i].Size > 0 ? _parts[i].Size : avg;
+            }
+            return -1;
+        }
+
+        /// <summary>Waits until the list of parts is known (or failed). False when it can't be used.</summary>
+        public bool WaitParts(int maxMs, Func<bool> cancelled)
+        {
+            var until = DateTime.UtcNow.AddMilliseconds(maxMs);
+            while (!_stopped && !cancelled() && DateTime.UtcNow < until)
+            {
+                lock (_lock) if (_parts != null) return true;
+                if (State == VodState.Failed) return false;
+                Thread.Sleep(100);
+            }
+            lock (_lock) return _parts != null;
+        }
+
+        /// <summary>A local playlist of the parts (each one served by Nova from the disk cache).</summary>
+        public string Playlist(string partBase)
+        {
+            List<Part> parts;
+            lock (_lock) parts = _parts == null ? new List<Part>() : _parts.ToList();
+            var sb = new StringBuilder("#EXTM3U\n#EXT-X-VERSION:3\n");
+            var target = parts.Count == 0 ? 10 : (int)Math.Ceiling(parts.Max(p => p.Duration));
+            sb.Append("#EXT-X-TARGETDURATION:" + Math.Max(1, target) + "\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n");
+            for (int i = 0; i < parts.Count; i++)
+            {
+                sb.Append("#EXTINF:" + parts[i].Duration.ToString("0.###", CultureInfo.InvariantCulture) + ",\n");
+                sb.Append(partBase + i.ToString(CultureInfo.InvariantCulture) + ".ts\n");
+            }
+            sb.Append("#EXT-X-ENDLIST\n");
+            return sb.ToString();
+        }
+
+        /// <summary>The player wants part i: it is fetched first, and the file path returned once it is on disk (null = gave up).</summary>
+        public string WaitPart(int i, Func<bool> cancelled)
+        {
+            lock (_lock)
+            {
+                if (_parts == null || i < 0 || i >= _parts.Count) return null;
+                _readIndex = i;
+                if (_parts[i].Size < 0) _want = i;
+                TrimBehindLocked();
+                Monitor.PulseAll(_lock);
+            }
+            while (!_stopped && !cancelled())
+            {
+                lock (_lock)
+                {
+                    if (_parts[i].Size >= 0) { if (_want == i) _want = -1; Monitor.PulseAll(_lock); return PartPath(i); }
+                    if (State == VodState.Failed) return null;
+                    Monitor.Wait(_lock, 300);
+                }
+            }
+            return null;
+        }
+
+        /// <summary>Parts far behind the picture are deleted (~20 % of the cache stays behind for small jumps back).</summary>
+        private void TrimBehindLocked()
+        {
+            double behind = 0;
+            for (int j = _readIndex - 1; j >= 0; j--)
+            {
+                var size = _parts[j].Size;
+                if (size < 0) continue;
+                behind += size;
+                if (behind > LimitBytes * 0.2)
+                {
+                    try { File.Delete(PartPath(j)); File.Delete(PartPath(j) + ".ok"); } catch { }
+                    _parts[j].Size = -1;
+                }
+            }
+        }
+
+        /// <summary>Seconds of video ready on disk ahead of the picture.</summary>
+        public double BufferedAheadSeconds
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    if (_parts == null) return 0;
+                    double s = 0;
+                    for (int i = Math.Max(0, _readIndex); i < _parts.Count && _parts[i].Size >= 0; i++) s += _parts[i].Duration;
+                    return s;
+                }
+            }
+        }
+
+        /// <summary>Stops and deletes the read-ahead cache.</summary>
+        public void DisposeAndDelete()
+        {
+            Dispose();
+            try { Directory.Delete(_folder, true); } catch { }
         }
 
         // ------------------------------------------------------------------ watching while downloading

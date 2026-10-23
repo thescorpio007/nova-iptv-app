@@ -47,6 +47,10 @@ namespace Nova.Core.Streaming
         [JsonIgnore] public int Connections { get; set; }
         /// <summary>Current speed in bytes per second.</summary>
         [JsonIgnore] public double Speed { get; set; }
+        /// <summary>While queued: what it waits for, with the time left ("waits for “Film” · about 4 min").</summary>
+        [JsonIgnore] public string WaitingFor { get; set; }
+        /// <summary>From one of your IPTV servers (not a link).</summary>
+        [JsonIgnore] public bool FromServer { get { return AccountId != null && Kind != "link" && Kind != "recording"; } }
 
         [JsonIgnore] public bool IsDone { get { return Status == DownloadStatus.Done; } }
 
@@ -54,27 +58,36 @@ namespace Nova.Core.Streaming
     }
 
     /// <summary>
-    /// Downloads films, episodes and links one item at a time, each with 1–16 connections and an optional
-    /// speed limit (Settings → Downloads). For your IPTV servers Nova never uses more connections than the
-    /// account allows and keeps one free for watching; on a 1-connection account a download waits while you watch.
-    /// Downloads resume after drops and restarts, then the pieces are joined into a normal video file.
+    /// Downloads films, episodes and links, each with 1–16 connections and an optional speed limit (Settings → Downloads).
+    /// One download at a time per IPTV server, and up to 4 links at once, all running together (same rules as the box).
+    /// For your IPTV servers Nova never uses more connections than the account allows and keeps one free for watching;
+    /// on a 1-connection account a download waits while you watch. Downloads resume after drops and restarts, then the
+    /// pieces are joined into a normal video file.
     /// </summary>
     public sealed class DownloadManager : IDisposable
     {
+        /// <summary>Links downloading at the same time.</summary>
+        public const int LinksAtOnce = 4;
+
+        private sealed class Job
+        {
+            public DownloadItem Item;
+            public VodLease Lease;
+            public HlsDownload Hls;
+            public long LastBytes;
+            public DateTime LastSpeedAt = DateTime.UtcNow;
+        }
+
         private readonly object _lock = new object();
         private readonly StreamHub _hub;
         private readonly Func<Settings> _settings;
         private readonly Func<string, int> _maxConnections;
         private readonly string _listPath;
         private readonly List<DownloadItem> _items;
+        private readonly List<Job> _jobs = new List<Job>();
         private readonly Timer _timer;
         private readonly Throttle _serverThrottle;
         private readonly Throttle _linkThrottle;
-        private DownloadItem _active;
-        private VodLease _lease;
-        private HlsDownload _hls;
-        private long _lastBytes;
-        private DateTime _lastSpeedAt = DateTime.UtcNow;
         private DateTime _lastSave = DateTime.MinValue;
         private bool _dirty;
         private volatile bool _disposed;
@@ -126,14 +139,28 @@ namespace Nova.Core.Streaming
         /// <summary>The HLS download of this address while it runs (Download &amp; Watch), or null.</summary>
         public HlsDownload ActiveHls(string url)
         {
-            lock (_lock) return _hls != null && _hls.Url == url && !_hls.IsStopped ? _hls : null;
+            lock (_lock)
+            {
+                var j = _jobs.FirstOrDefault(x => x.Hls != null && x.Hls.Url == url && !x.Hls.IsStopped);
+                return j == null ? null : j.Hls;
+            }
+        }
+
+        /// <summary>The piece file of a download in progress (for "Watch now": which parts are saved), or null.</summary>
+        public VodFile ActiveFile(string url)
+        {
+            lock (_lock)
+            {
+                var j = _jobs.FirstOrDefault(x => x.Lease != null && x.Item.Url == url);
+                return j == null ? null : j.Lease.File;
+            }
         }
 
         /// <summary>Connections a download from this account / link may use now.</summary>
         public int ConnectionsFor(DownloadItem item)
         {
             var s = _settings();
-            if (item.AccountId == null || item.Kind == "link") return Math.Max(1, Math.Min(16, s.DlConnLinks));
+            if (!item.FromServer) return Math.Max(1, Math.Min(16, s.DlConnLinks));
             var max = _maxConnections(item.AccountId);
             var wanted = Math.Max(1, Math.Min(16, s.DlConnServers));
             if (max <= 1) return 1;               // unknown, or a 1-connection account
@@ -213,15 +240,22 @@ namespace Nova.Core.Streaming
             return item.Copy();
         }
 
-        /// <summary>Download &amp; Watch: this item goes first (others wait).</summary>
+        /// <summary>Download &amp; Watch: this item goes first (a download using its place steps aside).</summary>
         public void Prioritize(string id)
         {
             lock (_lock)
             {
                 var item = _items.FirstOrDefault(x => x.Id == id);
                 if (item == null || item.IsDone) return;
-                if (_active != null && _active.Id != id) StopActiveLocked(DownloadStatus.Queued);
-                if (_active == null || _active.Id != id) item.Status = DownloadStatus.Queued;
+                if (JobOf(id) == null)
+                {
+                    // Free its place: the server's running download, or the oldest link when 4 run.
+                    var blocking = item.FromServer
+                        ? _jobs.FirstOrDefault(j => j.Item.FromServer && j.Item.AccountId == item.AccountId)
+                        : (_jobs.Count(j => !j.Item.FromServer) >= LinksAtOnce ? _jobs.LastOrDefault(j => !j.Item.FromServer) : null);
+                    if (blocking != null) StopJobLocked(blocking, DownloadStatus.Queued);
+                    item.Status = DownloadStatus.Queued;
+                }
                 _items.Remove(item);
                 _items.Insert(0, item);
                 _dirty = true;
@@ -271,12 +305,15 @@ namespace Nova.Core.Streaming
             if (accountId == null || _maxConnections(accountId) != 1) return;
             lock (_lock)
             {
-                if (_active != null && _active.AccountId == accountId) StopActiveLocked(DownloadStatus.Waiting);
+                foreach (var j in _jobs.Where(x => x.Item.FromServer && x.Item.AccountId == accountId).ToList())
+                    StopJobLocked(j, DownloadStatus.Waiting);
             }
             Notify();
         }
 
         // ------------------------------------------------------------------ controls
+
+        private Job JobOf(string id) { return _jobs.FirstOrDefault(j => j.Item.Id == id); }
 
         public void Pause(string id)
         {
@@ -284,7 +321,8 @@ namespace Nova.Core.Streaming
             {
                 var item = _items.FirstOrDefault(x => x.Id == id);
                 if (item == null || item.IsDone || item.Kind == "recording") return;
-                if (_active != null && _active.Id == id) StopActiveLocked(DownloadStatus.Paused);
+                var job = JobOf(id);
+                if (job != null) StopJobLocked(job, DownloadStatus.Paused);
                 else item.Status = DownloadStatus.Paused;
                 _dirty = true;
             }
@@ -313,7 +351,8 @@ namespace Nova.Core.Streaming
             {
                 item = _items.FirstOrDefault(x => x.Id == id);
                 if (item == null || item.Status == DownloadStatus.Recording) return;
-                if (_active != null && _active.Id == id) StopActiveLocked(DownloadStatus.Paused);
+                var job = JobOf(id);
+                if (job != null) StopJobLocked(job, DownloadStatus.Paused);
                 _items.Remove(item);
                 _dirty = true;
             }
@@ -325,16 +364,16 @@ namespace Nova.Core.Streaming
             Notify();
         }
 
-        private void StopActiveLocked(string newStatus)
+        private void StopJobLocked(Job job, string newStatus)
         {
-            if (_active == null) return;
-            _active.Status = newStatus;
-            _active.Connections = 0;
-            _active.Speed = 0;
-            if (_lease != null) { _lease.File.Changed -= OnFileChanged; _lease.Dispose(); }
-            if (_hls != null) { var h = _hls; _hls = null; ThreadPool.QueueUserWorkItem(_ => h.Dispose()); }
-            _lease = null;
-            _active = null;
+            job.Item.Status = newStatus;
+            job.Item.Connections = 0;
+            job.Item.Speed = 0;
+            if (job.Lease != null) { job.Lease.File.Changed -= OnFileChanged; job.Lease.Dispose(); }
+            if (job.Hls != null) { var h = job.Hls; ThreadPool.QueueUserWorkItem(_ => h.Dispose()); }
+            job.Lease = null;
+            job.Hls = null;
+            _jobs.Remove(job);
             _dirty = true;
         }
 
@@ -342,124 +381,88 @@ namespace Nova.Core.Streaming
 
         private int _ticking;
 
+        private sealed class Finish
+        {
+            public DownloadItem Item;
+            public VodLease Lease;
+            public HlsDownload Hls;
+        }
+
         private void Tick()
         {
             if (_disposed || Interlocked.Exchange(ref _ticking, 1) == 1) return;
             try
             {
-                DownloadItem finish = null;
-                VodLease finishLease = null;
-                HlsDownload finishHls = null;
+                var finishes = new List<Finish>();
                 lock (_lock)
                 {
-                    if (_active != null && (_lease != null || _hls != null))
+                    foreach (var job in _jobs.ToList())
                     {
+                        var item = job.Item;
                         long done, total; VodState state; string msg; bool complete; int users;
-                        if (_lease != null)
+                        if (job.Lease != null)
                         {
-                            var f = _lease.File;
+                            var f = job.Lease.File;
                             done = f.Downloaded; total = f.Length; state = f.State; msg = f.Message; complete = f.IsComplete; users = _hub.Users(f);
-                            f.Connections = ConnectionsFor(_active);
-                            _active.Connections = f.Connections;
+                            f.Connections = ConnectionsFor(item);
+                            item.Connections = f.Connections;
                         }
                         else
                         {
-                            done = _hls.DoneBytes; total = _hls.EstimatedBytes; state = _hls.State; msg = _hls.Message; complete = _hls.IsComplete;
-                            users = _hls.Readers > 0 ? 2 : 1;
-                            _active.Connections = _hls.Connections;
+                            done = job.Hls.DoneBytes; total = job.Hls.EstimatedBytes; state = job.Hls.State; msg = job.Hls.Message; complete = job.Hls.IsComplete;
+                            users = job.Hls.Readers > 0 ? 2 : 1;
+                            item.Connections = job.Hls.Connections;
                         }
                         var now = DateTime.UtcNow;
-                        var secs = (now - _lastSpeedAt).TotalSeconds;
+                        var secs = (now - job.LastSpeedAt).TotalSeconds;
                         if (secs >= 1)
                         {
-                            var rate = Math.Max(0, (done - _lastBytes) / secs);
-                            _active.Speed = _active.Speed <= 0 ? rate : _active.Speed * 0.6 + rate * 0.4;
-                            _lastBytes = done; _lastSpeedAt = now;
+                            var rate = Math.Max(0, (done - job.LastBytes) / secs);
+                            item.Speed = item.Speed <= 0 ? rate : item.Speed * 0.6 + rate * 0.4;
+                            job.LastBytes = done; job.LastSpeedAt = now;
                         }
-                        _active.DoneBytes = done;
-                        _active.TotalBytes = total;
+                        item.DoneBytes = done;
+                        item.TotalBytes = total;
+                        item.WaitingFor = null;
                         if (state == VodState.Failed)
                         {
-                            _active.Error = msg ?? "This file can't be downloaded.";
-                            StopActiveLocked(DownloadStatus.Failed);
+                            item.Error = msg ?? "This file can't be downloaded.";
+                            StopJobLocked(job, DownloadStatus.Failed);
                         }
                         else if (complete)
                         {
                             // Join the pieces once nobody watches it any more (Download & Watch).
                             if (users <= 1)
                             {
-                                finish = _active;
-                                finishLease = _lease;
-                                finishHls = _hls;
-                                _active.Status = DownloadStatus.Finishing;
-                                _active.Speed = 0;
-                                if (_lease != null) _lease.File.Changed -= OnFileChanged;
-                                _lease = null;
-                                _hls = null;
-                                _active = null;
+                                finishes.Add(new Finish { Item = item, Lease = job.Lease, Hls = job.Hls });
+                                item.Status = DownloadStatus.Finishing;
+                                item.Speed = 0;
+                                if (job.Lease != null) job.Lease.File.Changed -= OnFileChanged;
+                                _jobs.Remove(job);
                             }
                         }
-                        else if (Waits(_active, _lease != null ? _lease.File : null))
+                        else if (Waits(item, job.Lease != null ? job.Lease.File : null))
                         {
-                            StopActiveLocked(DownloadStatus.Waiting);
+                            StopJobLocked(job, DownloadStatus.Waiting);
                         }
                         else
                         {
-                            _active.Status = DownloadStatus.Downloading;
-                            _active.Error = state == VodState.Reconnecting ? msg : null;
+                            item.Status = DownloadStatus.Downloading;
+                            item.Error = state == VodState.Reconnecting ? msg : null;
                         }
                         _dirty = true;
                     }
-                    if (_active == null && finish == null)
+
+                    // Start what may start: one per IPTV server, up to 4 links.
+                    foreach (var next in _items.Where(i => i.Status == DownloadStatus.Queued || i.Status == DownloadStatus.Waiting).ToList())
                     {
-                        var next = _items.FirstOrDefault(i => (i.Status == DownloadStatus.Queued || i.Status == DownloadStatus.Waiting) && !Waits(i, _hub.FindVod(i.Url)));
-                        if (next != null)
-                        {
-                            _active = next;
-                            next.Status = DownloadStatus.Downloading;
-                            next.Error = null;
-                            _lastBytes = 0;
-                            _lastSpeedAt = DateTime.UtcNow;
-                            var conns = ConnectionsFor(next);
-                            var throttle = next.AccountId != null && next.Kind != "link" ? _serverThrottle : _linkThrottle;
-                            if (next.Hls)
-                            {
-                                _hls = new HlsDownload(next.Url, next.PartsFolder, conns) { Headers = next.Headers, Throttle = throttle };
-                                _hls.Changed += h => ThreadPool.QueueUserWorkItem(_ => Tick());
-                                _hls.Begin();
-                            }
-                            else
-                            {
-                                _lease = _hub.OpenVod(next.Url, next.Ext, next.PartsFolder, true, next.AccountId, next.Headers, conns, throttle);
-                                _lease.File.Changed += OnFileChanged;
-                            }
-                            _dirty = true;
-                        }
+                        if (JobOf(next.Id) != null) continue;
+                        string why;
+                        if (!CanStart(next, out why)) { if (next.WaitingFor != why) { next.WaitingFor = why; _dirty = true; } continue; }
+                        StartLocked(next);
                     }
                 }
-                if (finish != null)
-                {
-                    try
-                    {
-                        if (finishLease != null)
-                        {
-                            var file = finishLease.File;
-                            finishLease.Dispose();
-                            file.Assemble(finish.FinalPath);
-                        }
-                        else finishHls.Assemble(finish.FinalPath);
-                        lock (_lock)
-                        {
-                            finish.Status = DownloadStatus.Done;
-                            finish.DoneBytes = finish.TotalBytes = new FileInfo(finish.FinalPath).Length;
-                            _dirty = true;
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        lock (_lock) { finish.Status = DownloadStatus.Failed; finish.Error = "Couldn't save the file: " + e.Message; _dirty = true; }
-                    }
-                }
+                foreach (var f in finishes) Assemble(f);
                 SaveIfNeeded();
                 Notify();
             }
@@ -470,10 +473,89 @@ namespace Nova.Core.Streaming
             }
         }
 
+        /// <summary>May this download start now? Otherwise why ("waits for “Film” · about 4 min left").</summary>
+        private bool CanStart(DownloadItem item, out string why)
+        {
+            why = null;
+            if (Waits(item, _hub.FindVod(item.Url)))
+            {
+                why = "waits — your account's only connection is in use (watching)";
+                return false;
+            }
+            Job busy;
+            if (item.FromServer) busy = _jobs.FirstOrDefault(j => j.Item.FromServer && j.Item.AccountId == item.AccountId);
+            else busy = _jobs.Count(j => !j.Item.FromServer) >= LinksAtOnce
+                ? _jobs.Where(j => !j.Item.FromServer).OrderBy(j => TimeLeft(j.Item)).FirstOrDefault() : null;
+            if (busy == null) return true;
+            var left = TimeLeft(busy.Item);
+            why = "waits for “" + busy.Item.Title + "”" + (left < TimeSpan.MaxValue ? " · about " + Short(left) + " left" : "");
+            return false;
+        }
+
+        private static TimeSpan TimeLeft(DownloadItem i)
+        {
+            if (i.Speed <= 1 || i.TotalBytes <= 0) return TimeSpan.MaxValue;
+            return TimeSpan.FromSeconds(Math.Max(0, (i.TotalBytes - i.DoneBytes) / i.Speed));
+        }
+
+        public static string Short(TimeSpan t)
+        {
+            if (t.TotalMinutes < 1) return Math.Max(1, (int)t.TotalSeconds) + " s";
+            if (t.TotalHours < 1) return (int)Math.Ceiling(t.TotalMinutes) + " min";
+            return (int)t.TotalHours + " h " + t.Minutes.ToString("00") + " min";
+        }
+
+        private void StartLocked(DownloadItem next)
+        {
+            next.Status = DownloadStatus.Downloading;
+            next.Error = null;
+            next.WaitingFor = null;
+            var job = new Job { Item = next };
+            var conns = ConnectionsFor(next);
+            var throttle = next.FromServer ? _serverThrottle : _linkThrottle;
+            if (next.Hls)
+            {
+                job.Hls = new HlsDownload(next.Url, next.PartsFolder, conns) { Headers = next.Headers, Throttle = throttle };
+                job.Hls.Changed += h => ThreadPool.QueueUserWorkItem(_ => Tick());
+                job.Hls.Begin();
+            }
+            else
+            {
+                job.Lease = _hub.OpenVod(next.Url, next.Ext, next.PartsFolder, true, next.AccountId, next.Headers, conns, throttle);
+                job.Lease.File.Changed += OnFileChanged;
+            }
+            _jobs.Add(job);
+            _dirty = true;
+        }
+
+        private void Assemble(Finish f)
+        {
+            try
+            {
+                if (f.Lease != null)
+                {
+                    var file = f.Lease.File;
+                    f.Lease.Dispose();
+                    file.Assemble(f.Item.FinalPath);
+                }
+                else f.Hls.Assemble(f.Item.FinalPath);
+                lock (_lock)
+                {
+                    f.Item.Status = DownloadStatus.Done;
+                    f.Item.DoneBytes = f.Item.TotalBytes = new FileInfo(f.Item.FinalPath).Length;
+                    _dirty = true;
+                }
+            }
+            catch (Exception e)
+            {
+                lock (_lock) { f.Item.Status = DownloadStatus.Failed; f.Item.Error = "Couldn't save the file: " + e.Message; _dirty = true; }
+            }
+        }
+
         /// <summary>True when this download must wait: its account allows one connection and it's in use.</summary>
         private bool Waits(DownloadItem item, VodFile own)
         {
-            if (item.AccountId == null || item.Kind == "link") return false;
+            if (!item.FromServer) return false;
             var max = _maxConnections(item.AccountId);
             if (max != 1) return false;
             return _hub.BusyAccounts(own).Contains(item.AccountId);
@@ -515,7 +597,7 @@ namespace Nova.Core.Streaming
             lock (_lock)
             {
                 if (!_dirty) return;
-                if ((DateTime.UtcNow - _lastSave).TotalSeconds < 3 && _active != null) return;
+                if ((DateTime.UtcNow - _lastSave).TotalSeconds < 3 && _jobs.Count > 0) return;
                 _dirty = false;
                 _lastSave = DateTime.UtcNow;
                 json = JsonConvert.SerializeObject(_items, Formatting.Indented);
@@ -538,7 +620,7 @@ namespace Nova.Core.Streaming
             _timer.Dispose();
             lock (_lock)
             {
-                if (_active != null) StopActiveLocked(DownloadStatus.Queued);
+                foreach (var j in _jobs.ToList()) StopJobLocked(j, DownloadStatus.Queued);
                 _dirty = true;
             }
             _lastSave = DateTime.MinValue;

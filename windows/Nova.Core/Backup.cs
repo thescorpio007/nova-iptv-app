@@ -31,7 +31,8 @@ namespace Nova.Core
 
         // ------------------------------------------------------------------ export
 
-        public static string Export(Store store)
+        /// <summary>The backup as text. kind: "all" (everything) or "iptv" (servers &amp; settings, without the box's browser part).</summary>
+        public static string Export(Store store, string kind = "all")
         {
             var s = store.Settings;
             var st = store.State;
@@ -82,6 +83,21 @@ namespace Nova.Core
             prefs["dl_conn_links"] = I(s.DlConnLinks);
             prefs["dl_speed_servers"] = I(s.DlSpeedServers);
             prefs["dl_speed_links"] = I(s.DlSpeedLinks);
+            prefs["live_disk_minutes"] = I(s.LiveDiskMinutes);
+            prefs["live_start"] = S(s.LiveStart);
+            prefs["live_grow_target"] = I(s.LiveGrowTarget);
+            prefs["live_slow_action"] = S(s.LiveSlowAction);
+            prefs["status_dots"] = B(s.StatusDots);
+            prefs["double_back_vod"] = B(s.DoubleBackVod);
+            prefs["read_ahead_mb"] = I(s.FilmBufferMb);
+            prefs["boost_all"] = I(s.BoostAll);
+            prefs["ext_mode"] = S(s.ExtMode);
+            prefs["fail_app_when"] = S(s.FailAppWhen);
+            if (s.FailApp == "ask" || s.FailApp == "none") prefs["fail_app"] = S(s.FailApp);
+            foreach (var kv in st.BoostFor) prefs["boost_k_" + kv.Key] = I(kv.Value);
+            if (st.HealthLog.Count > 0) prefs["health_log"] = S(JsonConvert.SerializeObject(st.HealthLog.Take(50)));
+            prefs["auto_export_index"] = B(st.AutoExportIndex);
+            WriteFilter(prefs, st.Filter);
             if (s.UserAgent != Store.DefaultUserAgent) prefs["user_agent"] = S(s.UserAgent);
 
             prefs["recent_links"] = S(string.Join("\n", st.RecentLinks.Take(15)));
@@ -108,8 +124,11 @@ namespace Nova.Core
                 ["version"] = 1,
                 ["created"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 ["from"] = "windows",
+                ["kind"] = kind == "iptv" ? "iptv" : "all",
                 ["prefs"] = prefs,
             };
+            // The box's web browser part (bookmarks…) travels with "everything".
+            if (kind != "iptv" && st.AndroidWeb != null) root["web"] = st.AndroidWeb.DeepClone();
             return root.ToString(Formatting.Indented);
         }
 
@@ -124,6 +143,8 @@ namespace Nova.Core
             public UserState State;
             public bool FromAndroid;
             public DateTime? Created;
+            /// <summary>"all", "iptv" or "web" (a box backup of its browser only).</summary>
+            public string Kind;
 
             public string Summary
             {
@@ -144,6 +165,9 @@ namespace Nova.Core
             catch { throw new NovaException("This file is not a Nova IPTV backup."); }
             if ((string)root["app"] != "NovaIPTV") throw new NovaException("This file is not a Nova IPTV backup.");
             var prefs = root["prefs"] as JObject;
+            var webPart = root["web"] as JObject;
+            if (prefs == null && webPart != null)
+                throw new NovaException("This backup only holds the box's web browser (bookmarks). The PC has no web tab, so there is nothing to restore here.");
             if (prefs == null) throw new NovaException("The backup is empty.");
 
             var c = new Contents
@@ -151,7 +175,9 @@ namespace Nova.Core
                 FromAndroid = (string)root["from"] != "windows",
                 Created = root["created"] != null ? DateTimeOffset.FromUnixTimeMilliseconds((long)root["created"]).LocalDateTime : (DateTime?)null,
                 State = new UserState().Fix(),
+                Kind = webPart != null ? "all" : "iptv",
             };
+            if (webPart != null) c.State.AndroidWeb = (JObject)webPart.DeepClone();
             var used = new HashSet<string>();
             Func<string, JToken> v = key =>
             {
@@ -175,6 +201,7 @@ namespace Nova.Core
                     var keepW = s.WindowWidth; var keepH = s.WindowHeight; var keepM = s.WindowMaximized;
                     s = JsonConvert.DeserializeObject<Settings>(winText) ?? s;
                     s.WindowWidth = keepW; s.WindowHeight = keepH; s.WindowMaximized = keepM;
+                    if (!winText.Contains("\"SettingsVersion\"")) { s.SettingsVersion = 1; s.Upgrade(); }
                 }
                 catch { }
             }
@@ -249,6 +276,29 @@ namespace Nova.Core
             s.DlConnLinks = num("dl_conn_links") ?? s.DlConnLinks;
             s.DlSpeedServers = num("dl_speed_servers") ?? s.DlSpeedServers;
             s.DlSpeedLinks = num("dl_speed_links") ?? s.DlSpeedLinks;
+            s.LiveDiskMinutes = num("live_disk_minutes") ?? s.LiveDiskMinutes;
+            s.LiveStart = str("live_start") ?? s.LiveStart;
+            s.LiveGrowTarget = num("live_grow_target") ?? s.LiveGrowTarget;
+            s.LiveSlowAction = str("live_slow_action") ?? s.LiveSlowAction;
+            s.StatusDots = flag("status_dots") ?? s.StatusDots;
+            s.DoubleBackVod = flag("double_back_vod") ?? s.DoubleBackVod;
+            s.FilmBufferMb = num("read_ahead_mb") ?? s.FilmBufferMb;
+            s.BoostAll = num("boost_all") ?? s.BoostAll;
+            s.ExtMode = str("ext_mode") ?? s.ExtMode;
+            s.FailAppWhen = str("fail_app_when") ?? s.FailAppWhen;
+            var failApp = str("fail_app");
+            if (failApp == "ask" || failApp == "none") s.FailApp = failApp;
+            else if (failApp != null && s.FailApp == "none") s.FailApp = "ask"; // a box app name: the PC asks
+            s.Upgrade();
+            foreach (var p in prefs.Properties().Where(p => p.Name.StartsWith("boost_k_")).ToList())
+            {
+                var b = num(p.Name);
+                if (b.HasValue && b.Value > 0) c.State.BoostFor[p.Name.Substring(8)] = b.Value;
+            }
+            var health = str("health_log");
+            if (health != null) { try { c.State.HealthLog = JsonConvert.DeserializeObject<List<string>>(health) ?? new List<string>(); } catch { } }
+            c.State.AutoExportIndex = flag("auto_export_index") ?? true;
+            c.State.Filter = ReadFilter(prefs, used);
             var ua = str("user_agent");
             if (!string.IsNullOrWhiteSpace(ua) && ua != AndroidDefaultAgent) s.UserAgent = ua;
             c.Settings = s;
@@ -269,6 +319,106 @@ namespace Nova.Core
             foreach (var p in prefs.Properties())
                 if (!used.Contains(p.Name) && p.Value is JObject) c.State.AndroidExtras[p.Name] = (JObject)p.Value.DeepClone();
             return c;
+        }
+
+        // ------------------------------------------------------------------ filter (box keys age_*, tmdb_key)
+
+        private static void WriteFilter(JObject prefs, FilterSettings f)
+        {
+            foreach (var p in prefs.Properties().Where(p => p.Name.StartsWith("age_") || p.Name == "tmdb_key").ToList()) prefs.Remove(p.Name);
+            prefs["age_level"] = I(f.Level);
+            prefs["age_source"] = S(f.Source);
+            prefs["age_hide_unknown"] = B(f.HideUnknown);
+            prefs["age_live_mode"] = S(f.LiveMode);
+            prefs["age_allowed_groups"] = S(string.Join("\n", f.AllowedGroups));
+            prefs["tmdb_key"] = S(f.TmdbKey ?? "");
+            prefs["age_allowed"] = S(string.Join("\n", f.Allowed));
+            prefs["age_words_on"] = B(f.WordsOn);
+            if (f.WordGroupsOn != null) prefs["age_word_groups_on"] = S(string.Join(",", f.WordGroupsOn));
+            foreach (var kv in f.Words) if (kv.Value != null) prefs["age_words_" + kv.Key] = S(string.Join("\n", kv.Value));
+        }
+
+        private static FilterSettings ReadFilter(JObject prefs, HashSet<string> used)
+        {
+            var f = new FilterSettings();
+            Func<string, JToken> v = key =>
+            {
+                var e = prefs[key] as JObject;
+                if (e == null) return null;
+                used.Add(key);
+                return e["v"];
+            };
+            Func<string, string> str = key => { var t = v(key); return t == null || t.Type == JTokenType.Null ? null : (string)t; };
+            Func<string, List<string>> lines = key => { var t = str(key); return t == null ? null : t.Split('\n').Where(x => x.Trim().Length > 0).ToList(); };
+            var any = prefs.Properties().Any(p => p.Name.StartsWith("age_"));
+            var lv = v("age_level");
+            if (lv != null) f.Level = (int)(double)lv;
+            f.Source = str("age_source") ?? f.Source;
+            var hu = v("age_hide_unknown");
+            if (hu != null) f.HideUnknown = (bool)hu;
+            f.LiveMode = str("age_live_mode") ?? f.LiveMode;
+            f.AllowedGroups = lines("age_allowed_groups") ?? f.AllowedGroups;
+            f.TmdbKey = str("tmdb_key") ?? "";
+            f.Allowed = lines("age_allowed") ?? f.Allowed;
+            var wo = v("age_words_on");
+            if (wo != null) f.WordsOn = (bool)wo;
+            var groups = str("age_word_groups_on");
+            if (groups != null) f.WordGroupsOn = groups.Split(',').Where(x => x.Trim().Length > 0).ToList();
+            foreach (var p in prefs.Properties().Where(p => p.Name.StartsWith("age_words_") && p.Name != "age_words_on").ToList())
+            {
+                var w = lines(p.Name);
+                if (w != null) f.Words[p.Name.Substring(10)] = w;
+            }
+            f.Set = any;
+            return f.Fix();
+        }
+
+        // ------------------------------------------------------------------ lists only (_list.bakL)
+
+        /// <summary>Only how the lists are arranged: group &amp; item order, favorites, what you hid (same file as the box).</summary>
+        public static string ExportLists(Store store)
+        {
+            var lists = new JObject
+            {
+                ["org"] = JsonConvert.SerializeObject(store.State.Org),
+                ["favorites_v2"] = JsonConvert.SerializeObject(store.Favorites, Json),
+            };
+            return new JObject
+            {
+                ["app"] = "NovaIPTV", ["kind"] = "lists", ["version"] = 1,
+                ["created"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ["lists"] = lists,
+            }.ToString(Formatting.Indented);
+        }
+
+        public static string ListsFileName()
+        {
+            return "Nova-" + DateTime.Now.ToString("yyyy-MM-dd_HHmm", CultureInfo.InvariantCulture) + "_list.bakL";
+        }
+
+        /// <summary>What a lists backup holds: "24 favorites · 6 lists in your order · 3 hidden" ("" = empty).</summary>
+        public static string ListsSummary(OrgData org, int favorites)
+        {
+            var parts = new List<string>();
+            if (favorites > 0) parts.Add(favorites + " favorites");
+            var ordered = org == null ? 0 : org.GroupOrder.Count + org.ItemOrder.Count;
+            if (ordered > 0) parts.Add(ordered + " lists in your order");
+            var hidden = org == null ? 0 : org.HiddenGroups.Count + org.HiddenItems.Count;
+            if (hidden > 0) parts.Add(hidden + " hidden");
+            return string.Join(" · ", parts);
+        }
+
+        /// <summary>Reads a lists backup: (order &amp; hidden, favorites). Throws NovaException when it isn't one.</summary>
+        public static Tuple<OrgData, List<SavedItem>> ReadLists(string text)
+        {
+            JObject root;
+            try { root = JObject.Parse(text); } catch { throw new NovaException("This file is not a Nova lists backup (.bakL)."); }
+            if ((string)root["app"] != "NovaIPTV" || (string)root["kind"] != "lists") throw new NovaException("This file is not a Nova lists backup (.bakL).");
+            var lists = root["lists"] as JObject;
+            if (lists == null) throw new NovaException("The lists backup is empty.");
+            var org = new OrgData();
+            try { var o = (string)lists["org"]; if (o != null) org = (JsonConvert.DeserializeObject<OrgData>(o) ?? new OrgData()); } catch { }
+            var favs = ReadList((string)lists["favorites_v2"]);
+            return Tuple.Create(org.Fix(), favs);
         }
 
         private static List<SavedItem> ReadList(string json)
@@ -292,9 +442,9 @@ namespace Nova.Core
             return NovaCrypto.Decrypt(text, password);
         }
 
-        public static string FileName(bool isProtected)
+        public static string FileName(bool isProtected, string kind = "all")
         {
-            return "NovaIPTV-" + DateTime.Now.ToString("yyyy-MM-dd-HHmm", CultureInfo.InvariantCulture) + (isProtected ? "-protected" : "") + ".bak";
+            return "NovaIPTV-" + (kind == "iptv" ? "iptv" : "all") + "-" + DateTime.Now.ToString("yyyy-MM-dd-HHmm", CultureInfo.InvariantCulture) + (isProtected ? "-protected" : "") + ".bak";
         }
     }
 }

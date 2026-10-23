@@ -40,18 +40,34 @@ namespace Nova.Core
         public string BufferFolder { get; set; } = "";
         /// <summary>Folder for downloads and recordings; empty = Downloads\NovaIPTV.</summary>
         public string DownloadFolder { get; set; } = "";
-        /// <summary>Disk space for a live channel's rolling buffer (pause / rewind live TV).</summary>
-        public int LiveBufferMb { get; set; } = 600;
-        /// <summary>Disk space for the films / episodes cache.</summary>
-        public int FilmBufferMb { get; set; } = 2048;
-        /// <summary>Seconds collected before a live channel starts playing (the safety cushion).</summary>
-        public int CushionSeconds { get; set; } = 6;
+        /// <summary>Live TV disk buffer length in minutes (5, 10, 15): what you can pause / rewind.</summary>
+        public int LiveDiskMinutes { get; set; } = 15;
+        /// <summary>Safety limit of a live channel's disk buffer in MB (the length above decides first).</summary>
+        public int LiveBufferMb { get; set; } = 3000;
+        /// <summary>Films &amp; series read-ahead on disk (the films / episodes cache), in MB.</summary>
+        public int FilmBufferMb { get; set; } = 1024;
+        /// <summary>Seconds of safety cushion kept behind live (built while you watch with the fast start).</summary>
+        public int CushionSeconds { get; set; } = 15;
+        /// <summary>"fast" (start near live, build the cushion while watching) or "safe" (wait for the whole cushion first).</summary>
+        public string LiveStart { get; set; } = "fast";
+        /// <summary>While watching, play 4 % slower until you are this many seconds behind live (0 = off). 120 = 2 min.</summary>
+        public int LiveGrowTarget { get; set; } = 120;
+        /// <summary>When the line stays too slow for a channel: "similar" (propose similar channels), "switch" (other server) or "stay".</summary>
+        public string LiveSlowAction { get; set; } = "similar";
+        /// <summary>Status dots (green / red / orange / grey) on channels, films and episodes.</summary>
+        public bool StatusDots { get; set; } = true;
+        /// <summary>A channel / video that can't be played here: "ask" (offer the external player, 10 s), "none", or a player program.</summary>
+        public string FailApp { get; set; } = "ask";
+        /// <summary>When to offer it: "format" (Nova's player can't decode it) or "any" (any failure).</summary>
+        public string FailAppWhen { get; set; } = "format";
+        /// <summary>Films &amp; series: press Back twice to stop the video.</summary>
+        public bool DoubleBackVod { get; set; } = true;
         /// <summary>Watchdog: seconds without data before a stream counts as frozen and is reconnected.</summary>
         public int StallSeconds { get; set; } = 10;
         /// <summary>Jump to the next channel when a channel sends nothing at all.</summary>
         public bool AutoSkip { get; set; } = true;
         /// <summary>Seconds a channel may take to send its first video before it counts as dead.</summary>
-        public int DeadSeconds { get; set; } = 15;
+        public int DeadSeconds { get; set; } = 8;
         /// <summary>"live" = a stuck picture jumps back to live; "full" = also safer settings, then the other account.</summary>
         public string WatchdogMode { get; set; } = "live";
         /// <summary>Full repair: try the same channel on your other account when it keeps failing.</summary>
@@ -61,7 +77,7 @@ namespace Nova.Core
         /// <summary>Connections for downloads from your IPTV servers (never more than the server allows, one kept free).</summary>
         public int DlConnServers { get; set; } = 1;
         /// <summary>Connections for downloads from other links.</summary>
-        public int DlConnLinks { get; set; } = 4;
+        public int DlConnLinks { get; set; } = 8;
         /// <summary>Speed limit in MB/s (0 = no limit).</summary>
         public int DlSpeedServers { get; set; }
         public int DlSpeedLinks { get; set; }
@@ -77,6 +93,14 @@ namespace Nova.Core
         public bool ExternalOnError { get; set; } = true;
         /// <summary>The external player used for "open in external player" and as fallback ("" = first one found).</summary>
         public string ExternalPlayer { get; set; } = "";
+        /// <summary>↗ "Play with…" list: your order of player programs (full paths, top first).</summary>
+        public List<string> ExtOrder { get; set; } = new List<string>();
+        /// <summary>Players switched off in the "Play with…" list.</summary>
+        public List<string> ExtHidden { get; set; } = new List<string>();
+        /// <summary>↗ External player: "ask" (Nova's "Play with…" list) or "first" (always the first one of your list).</summary>
+        public string ExtMode { get; set; } = "ask";
+        /// <summary>🔊 Volume boost for everything, in % (100 = off, up to 200).</summary>
+        public int BoostAll { get; set; } = 100;
 
         // ---- subtitles
         /// <summary>Subtitle size (Android scale, 10–48; 20 = normal).</summary>
@@ -119,9 +143,38 @@ namespace Nova.Core
         public double WindowHeight { get; set; }
         public bool WindowMaximized { get; set; } = true;
 
+        /// <summary>2 = the Android defaults of October 2026 were applied once.</summary>
+        public int SettingsVersion { get; set; } = 2;
+
         public Settings Copy()
         {
-            return (Settings)MemberwiseClone();
+            var c = (Settings)MemberwiseClone();
+            c.ExtOrder = (ExtOrder ?? new List<string>()).ToList();
+            c.ExtHidden = (ExtHidden ?? new List<string>()).ToList();
+            return c;
+        }
+
+        /// <summary>Settings saved by an earlier version get the new defaults once (same as the box).</summary>
+        public Settings Upgrade()
+        {
+            if (ExtOrder == null) ExtOrder = new List<string>();
+            if (ExtHidden == null) ExtHidden = new List<string>();
+            if (SettingsVersion >= 2) return this;
+            CushionSeconds = 15;
+            LiveStart = "fast";
+            LiveGrowTarget = 120;
+            LiveDiskMinutes = 15;
+            LiveBufferMb = 3000;
+            DeadSeconds = 8;
+            AutoSkip = true;
+            WatchdogMode = "live";
+            FilmBufferMb = 1024;
+            DlConnLinks = 8;
+            LiveSlowAction = "similar";
+            FailApp = "ask";
+            FailAppWhen = "format";
+            SettingsVersion = 2;
+            return this;
         }
 
         public string SortFor(string zone)
@@ -202,6 +255,48 @@ namespace Nova.Core
         }
     }
 
+    /// <summary>
+    /// Parental age filter (USA ratings) and word filter, with the box's setting names so backups go both ways.
+    /// Level: 0 OFF, 1 G, 2 PG, 3 PG-13, 4 R, 5 NC-17 = the highest rating allowed.
+    /// </summary>
+    public class FilterSettings
+    {
+        public int Level { get; set; } = 5;
+        /// <summary>"rules" (genre &amp; name) or "tmdb" (film database).</summary>
+        public string Source { get; set; } = "rules";
+        public bool HideUnknown { get; set; }
+        /// <summary>Live channels: "name" (hidden by name) or "allow" (only the groups you allow).</summary>
+        public string LiveMode { get; set; } = "name";
+        public List<string> AllowedGroups { get; set; } = new List<string>();
+        public string TmdbKey { get; set; } = "";
+        /// <summary>Allowed anyway (exceptions): "movie|acc|id", "series|…", "live|…".</summary>
+        public List<string> Allowed { get; set; } = new List<string>();
+        public bool WordsOn { get; set; } = true;
+        /// <summary>Word groups switched on (null = the defaults).</summary>
+        public List<string> WordGroupsOn { get; set; }
+        /// <summary>Your words per group (missing = the built-in list).</summary>
+        public Dictionary<string, List<string>> Words { get; set; } = new Dictionary<string, List<string>>();
+        /// <summary>False until the filter was ever set on this PC (new install: taken back from the Filter folder).</summary>
+        public bool Set { get; set; }
+
+        public FilterSettings Fix()
+        {
+            if (AllowedGroups == null) AllowedGroups = new List<string>();
+            if (Allowed == null) Allowed = new List<string>();
+            if (Words == null) Words = new Dictionary<string, List<string>>();
+            if (TmdbKey == null) TmdbKey = "";
+            if (string.IsNullOrEmpty(Source)) Source = "rules";
+            if (string.IsNullOrEmpty(LiveMode)) LiveMode = "name";
+            return this;
+        }
+
+        public FilterSettings Copy()
+        {
+            var json = JsonConvert.SerializeObject(this);
+            return JsonConvert.DeserializeObject<FilterSettings>(json).Fix();
+        }
+    }
+
     /// <summary>Everything else Nova remembers (saved as state.json).</summary>
     public class UserState
     {
@@ -228,9 +323,28 @@ namespace Nova.Core
         public string SearchAccount { get; set; }
         /// <summary>Android settings Windows doesn't use, kept so a backup goes back to the box unchanged.</summary>
         public Dictionary<string, JObject> AndroidExtras { get; set; } = new Dictionary<string, JObject>();
+        /// <summary>The box's web browser part of a backup (bookmarks…), kept for the way back. Windows has no web tab.</summary>
+        public JObject AndroidWeb { get; set; }
+        /// <summary>Parental age filter and word filter (same keys as the box: age_*, tmdb_key).</summary>
+        public FilterSettings Filter { get; set; } = new FilterSettings();
+        /// <summary>How long channels of each server usually take to start, in ms (learned).</summary>
+        public Dictionary<string, long> StartTimes { get; set; } = new Dictionary<string, long>();
+        /// <summary>What the last automatic index export held (servers + times), and when it was saved.</summary>
+        public string IndexExportStamp { get; set; }
+        public long IndexExportedAt { get; set; }
+        /// <summary>Save index-latest.novaindex in Downloads\NovaIPTV\Index after every update.</summary>
+        public bool AutoExportIndex { get; set; } = true;
+        /// <summary>Last watchdog events, newest first ("time|channel|problem|action"), as on the box.</summary>
+        public List<string> HealthLog { get; set; } = new List<string>();
+        /// <summary>🔊 Volume boost kept for one channel / film, in % (by item key).</summary>
+        public Dictionary<string, int> BoostFor { get; set; } = new Dictionary<string, int>();
 
         public UserState Fix()
         {
+            Filter = (Filter ?? new FilterSettings()).Fix();
+            if (StartTimes == null) StartTimes = new Dictionary<string, long>();
+            if (BoostFor == null) BoostFor = new Dictionary<string, int>();
+            if (HealthLog == null) HealthLog = new List<string>();
             if (Recent == null) Recent = new List<SavedItem>();
             Org = (Org ?? new OrgData()).Fix();
             if (Positions == null) Positions = new Dictionary<string, long>();
@@ -331,6 +445,8 @@ namespace Nova.Core
             Accounts.RemoveAll(a => a == null || string.IsNullOrEmpty(a.Id));
             Settings = Load<Settings>("settings.json") ?? new Settings();
             if (string.IsNullOrWhiteSpace(Settings.UserAgent)) Settings.UserAgent = DefaultUserAgent;
+            if (!SavedWithVersion("settings.json")) { Settings.SettingsVersion = 1; Settings.Upgrade(); Save("settings.json", Settings); }
+            else Settings.Upgrade();
             Favorites = Load<List<SavedItem>>("favorites.json") ?? new List<SavedItem>();
             Favorites.RemoveAll(f => f == null || f.Id == null);
             State = (Load<UserState>("state.json") ?? new UserState()).Fix();
@@ -642,6 +758,18 @@ namespace Nova.Core
         }
 
         // ---------------------------------------------------------------- files
+
+        /// <summary>True when the saved settings already know the settings version (made by this version or later).</summary>
+        private bool SavedWithVersion(string name)
+        {
+            try
+            {
+                var path = Path.Combine(DataFolder, name);
+                if (!File.Exists(path)) return true; // new install: the new defaults already
+                return File.ReadAllText(path, Encoding.UTF8).Contains("\"SettingsVersion\"");
+            }
+            catch { return true; }
+        }
 
         private T Load<T>(string name) where T : class
         {

@@ -46,6 +46,8 @@ namespace Nova.Core.Streaming
         private long _lastReaderPos = -1;
 
         public string Key { get; private set; }
+        /// <summary>Length of the disk buffer in seconds (5 / 10 / 15 min); the size limit stays a safety net. 0 = size only.</summary>
+        public int MaxSeconds { get; set; }
         public string Url { get { return _url; } }
         /// <summary>Extra request headers for links from websites (null for your IPTV servers).</summary>
         public Dictionary<string, string> Headers { get; set; }
@@ -251,8 +253,10 @@ namespace Nova.Core.Streaming
                     try { _recorder.Write(buf, 0, n); RecordedBytes += n; }
                     catch { StopRecordingLocked(); }
                 }
-                // Size limit: drop the oldest files (never the one being written).
-                while (_end - _start > _maxBytes && _segments.Count > 1)
+                // Length limit (minutes, by the channel's speed) and size limit: drop the oldest files (never the one being written).
+                var limit = _maxBytes;
+                if (MaxSeconds > 0 && _bps > 0) limit = Math.Min(limit, Math.Max(SegmentSize * 3, (long)(_bps * MaxSeconds)));
+                while (_end - _start > limit && _segments.Count > 1)
                 {
                     var old = _segments[0];
                     _segments.RemoveAt(0);
