@@ -85,6 +85,7 @@ namespace Nova.Core.Streaming
         private readonly string _listPath;
         private readonly List<DownloadItem> _items;
         private readonly List<Job> _jobs = new List<Job>();
+        private readonly HashSet<string> _first = new HashSet<string>();
         private readonly Timer _timer;
         private readonly Throttle _serverThrottle;
         private readonly Throttle _linkThrottle;
@@ -256,6 +257,7 @@ namespace Nova.Core.Streaming
                     if (blocking != null) StopJobLocked(blocking, DownloadStatus.Queued);
                     item.Status = DownloadStatus.Queued;
                 }
+                _first.Add(id);
                 _items.Remove(item);
                 _items.Insert(0, item);
                 _dirty = true;
@@ -454,7 +456,9 @@ namespace Nova.Core.Streaming
                     }
 
                     // Start what may start: one per IPTV server, up to 4 links.
-                    foreach (var next in _items.Where(i => i.Status == DownloadStatus.Queued || i.Status == DownloadStatus.Waiting).ToList())
+                    // In the order they were added (Download & Watch first).
+                    foreach (var next in _items.Where(i => i.Status == DownloadStatus.Queued || i.Status == DownloadStatus.Waiting)
+                                 .OrderBy(i => _first.Contains(i.Id) ? 0 : 1).ThenBy(i => i.CreatedAt).ThenByDescending(i => _items.IndexOf(i)).ToList())
                     {
                         if (JobOf(next.Id) != null) continue;
                         string why;

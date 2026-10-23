@@ -60,7 +60,7 @@ Every build has its own number: the version shows as **2.0 (build N)** in Settin
 - **Audio, subtitles & stream info** panel (T), load .srt / .vtt / .ass files, subtitle size / colour / box.
 - **Edit mode** (Ctrl+E) to hide and reorder groups, channels and posters; Enter twice on a poster asks to hide it
   (No first); **parental PIN** (5-minute unlock, Lock now) and a hidden-items list in Settings.
-- **Sorting** per zone (Ctrl+S), 🆕 Recently added group, Recently watched tab, resume where you stopped.
+- **Sorting** per zone (Ctrl+S), Recently watched tab, resume where you stopped.
 - **Catch-up** (C) for channels with an archive, groups / channels list and recent-channels bar over the video,
   watchdog "jump to live" or "full repair" (other account).
 - **Search** filters: All / Channels / Films / Series, all servers or one (remembered).
@@ -68,6 +68,27 @@ Every build has its own number: the version shows as **2.0 (build N)** in Settin
   list transparency; play the last channel at start-up.
 - **Remote control**: every button can be changed (Settings › Remote control & keyboard).
 - **VPN**: "only play when a VPN is connected".
+
+## October 2026 upgrades from the Android app
+
+- **Parental filters**: age filter with the USA ratings (OFF · G · PG · PG-13 · R · NC-17, by genre & name rules or the TMDB film
+  database), word filter (5 word groups + your own words), adult channels and groups hidden, exceptions ("allow anyway").
+  Settings and PIN are kept in `Downloads\NovaIPTV\Filter` (back after a reinstall), with `hidden-list.txt`.
+- **Status dots** on channels, film posters and episodes: green works · red not working · orange format problem · grey not checked.
+- **≈ Similar channels**: the same channel in other groups of the server (lighter versions first) or on your other server —
+  offered by itself when the line is too slow.
+- **Live buffer by time** (5 / 10 / 15 min), fast start with a 15 s cushion that grows to 2 min while you watch, channels that
+  don't work skipped after 8 s (more for servers that are learned to start slowly).
+- **Open in another player** when Nova can't play something (10 s countdown, a key stops it); every choice popup counts down.
+- **Player**: 🔊 volume boost 100–200 % (this video / always for this channel or film / everything) with a soft limiter,
+  ☀ brightness, quality badge (4K · FHD · HD · SD, HEVC, 50 fps), Back twice to stop a film, ↗ "Play with…" list in your order.
+- **Downloads**: one at a time per IPTV server + 4 links at once, in two sections, with what each one waits for and the time
+  left; "Watch now" can start inside any part already saved; HLS films read ahead on disk in pieces (1 GB by default).
+- **Backups**: everything / IPTV only, and "my lists only" (`_list.bakL`); the box's browser part is kept for the way back.
+- **Search index** export / import (`.novaindex`, same as the box) in `Downloads\NovaIPTV\Index`, picked up by a new install.
+- **Last problem**: playback report (today / 3 / 7 days, no logins) and why Nova closed, in `Downloads\NovaIPTV\Logs`.
+- **Settings in 7 groups** like the box (two columns on a wide window), and **Reset all settings to Nova defaults**.
+- Double click on a group or channel asks "Hide …?" (No first, No by itself after 10 s). The 🆕 Recently added group was removed.
 
 ## Keys
 

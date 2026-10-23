@@ -1322,7 +1322,7 @@ namespace Nova.App
                 var ordered = Organize.OrderedGroups("live", sections);
                 var multi = sections.Count > 1;
                 foreach (var s in sections)
-                    foreach (var c in Organize.Groups("live", ordered, s.Account.Id, false))
+                    foreach (var c in Organize.Groups("live", ordered, s.Account.Id, false).Where(c => !Filtering.HidesGroup("live", c)))
                         rows.Add(new GroupRow { Kind = GroupKind.Group, Category = c, Account = s.Account, ShowSections = multi });
             }
             catch { }
@@ -1364,7 +1364,9 @@ namespace Nova.App
             }
             catch { list = new List<LiveChannel>(); }
             if (!ReferenceEquals(OverlayGroups.SelectedItem, row)) return;
-            var shown = Organize.Items("live", row.Key, list, c => c.Key, false, App.Store.Settings.SortLive, Organize.Info);
+            var groupName = row.Category != null ? row.Category.Name : null;
+            var shown = Organize.Items("live", row.Key, list, c => c.Key, false, App.Store.Settings.SortLive, Organize.Info)
+                .Where(c => !Filtering.Hides(c, groupName)).ToList();
             FillOverlayChannels(shown.Select(c => new OverlayChannel { Channel = c, Number = c.Num > 0 ? c.Num.ToString() : "", Name = c.Name }).ToList());
         }
 
