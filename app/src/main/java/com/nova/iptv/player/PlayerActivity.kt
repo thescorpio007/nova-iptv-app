@@ -88,6 +88,9 @@ class PlayerActivity : ComponentActivity() {
     private var hideMuted = false
     private var pendingUnhide: Runnable? = null
     private var autoUnhide: Runnable? = null
+    /** "Show again by itself" for the current hide (ms, 0 = off); each new hide starts at 15 s. */
+    private var hideAutoMs = 15_000L
+    private val hideBadgeTask = Runnable { boostBadge?.visibility = View.GONE }
     private lateinit var hideCover: FrameLayout
     private lateinit var hideTitle: TextView
     private lateinit var hideLeft: TextView
@@ -210,6 +213,7 @@ class PlayerActivity : ComponentActivity() {
                 vod.update()
             }
             if (pictureHidden) updateHideCover()
+            badgeWithControls()
             nextEpisodeTick()
             // The channel list keeps the remote's focus while it is open.
             if (recentBarOpen && !recentBar.hasFocus()) recentRow.getChildAt(0)?.requestFocus()
@@ -378,7 +382,7 @@ class PlayerActivity : ComponentActivity() {
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, favButton, externalButton, aspectButton, downloadButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -479,9 +483,9 @@ class PlayerActivity : ComponentActivity() {
                 "🔊 Boost" to { showBoost() },
                 "⬛ Hide picture" to { hidePicture() },
                 "⬇ Download" to { downloadCurrent() },
-                "↗ External player" to { openExternal() },
-                "♡ Favorite" to { toggleFavorite() },
                 "ℹ Video info" to { showVideoInfo() },
+                "♡ Favorite" to { toggleFavorite() },
+                "↗ External player" to { openExternal() },
             ),
         )
         // Keep the controls clear of the camera cut-out.
@@ -851,6 +855,21 @@ class PlayerActivity : ComponentActivity() {
             b.text = parts.joinToString("   ")
             b.visibility = if (parts.isEmpty()) View.GONE else View.VISIBLE
         }
+        // Shown 5 s, then hidden (comes back for 5 s whenever the player buttons are opened).
+        handler.removeCallbacks(hideBadgeTask)
+        if (parts.isNotEmpty()) handler.postDelayed(hideBadgeTask, 5_000)
+    }
+
+    /** Player buttons on screen: show the 🌙 / 🔊 badge again for 5 s. */
+    private fun badgeWithControls() {
+        val b = boostBadge ?: return
+        if (b.text.isNullOrEmpty() || pictureHidden) return
+        val shown = playerView.isControllerFullyVisible || (::vod.isInitialized && vod.controlsVisible)
+        if (shown) {
+            b.visibility = View.VISIBLE
+            handler.removeCallbacks(hideBadgeTask)
+            handler.postDelayed(hideBadgeTask, 5_000)
+        }
     }
 
     // ------------------------------------------------------------------ 🌙 Night mode (sound)
@@ -985,6 +1004,12 @@ class PlayerActivity : ComponentActivity() {
         hiddenAt = android.os.SystemClock.uptimeMillis()
         playerView.hideController()
         if (::vod.isInitialized) vod.hide()
+        // Sound off too, and everything back by itself after 15 s (both can be changed in the options: OK OK).
+        player?.volume = 0f
+        hideMuted = true
+        hideAutoMs = 15_000L
+        scheduleAutoUnhide()
+        boostBadge?.visibility = View.GONE
         updateHideCover()
         hideCover.visibility = View.VISIBLE
         hideCover.bringToFront()
@@ -1001,7 +1026,12 @@ class PlayerActivity : ComponentActivity() {
         Log.i("NovaTest", "PICTURE shown")
     }
 
-    /** OK twice while hidden (double tap on a phone): show · skip · mute · show again by itself. */
+    private fun scheduleAutoUnhide() {
+        autoUnhide?.let { handler.removeCallbacks(it) }
+        autoUnhide = if (hideAutoMs <= 0) null else Runnable { autoUnhide = null; if (pictureHidden) showPicture() }.also { handler.postDelayed(it, hideAutoMs) }
+    }
+
+    /** OK twice while hidden (double tap on a phone): show · skip · sound · show again by itself (Off / 15 s / 30 s / 1 min). */
     private fun showHideOptions() {
         val item = current ?: return
         val choices = mutableListOf<Pair<String, () -> Unit>>()
@@ -1012,20 +1042,20 @@ class PlayerActivity : ComponentActivity() {
         } else if (relay != null) {
             choices += "⏩ Skip 30 s" to { timeshift(30) }
         }
-        choices += (if (hideMuted) "🔊 Sound back on" else "🔇 Mute too") to {
+        choices += (if (hideMuted) "🔊 Sound back on (muted while hidden)" else "🔇 Mute too") to {
             hideMuted = !hideMuted
             player?.volume = if (hideMuted) 0f else 1f
         }
         fun after(label: String, ms: Long) {
-            choices += label to {
-                autoUnhide?.let { handler.removeCallbacks(it) }
-                autoUnhide = if (ms <= 0) null else Runnable { autoUnhide = null; if (pictureHidden) showPicture() }.also { handler.postDelayed(it, ms) }
+            choices += ((if (hideAutoMs == ms) "✓ " else "") + label) to {
+                hideAutoMs = ms
+                scheduleAutoUnhide()
             }
         }
         after("Show again by itself: Off", 0)
+        after("Show again by itself in 15 s", 15_000)
         after("Show again by itself in 30 s", 30_000)
         after("Show again by itself in 1 min", 60_000)
-        after("Show again by itself in 2 min", 120_000)
         android.app.AlertDialog.Builder(this)
             .setTitle("Hidden picture options")
             .setItems(choices.map { it.first }.toTypedArray()) { _, i -> choices[i].second() }
