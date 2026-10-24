@@ -176,6 +176,39 @@ object RemoteKeys {
         return actions.filter { it.id != id && it.area.overlaps(a.area) && keyCode in m[it.id].orEmpty() }
     }
 
+    // ------------------------------------------------------------------ the remote picture (one tab per place)
+
+    /** Actions that can be put on a button in a tab: the "while watching" ones plus that player's, or the lists' ones. */
+    fun actionsForTab(tab: Area): List<Action> = when (tab) {
+        Area.LISTS -> actions.filter { it.area == Area.LISTS }
+        else -> actions.filter { it.area == Area.PLAYER || it.area == tab }
+    }
+
+    /** What [keyCode] does in a tab (the "while watching" action first, as in the player). */
+    fun actionInTab(storage: Storage, tab: Area, keyCode: Int): Action? {
+        val m = map(storage)
+        val order = if (tab == Area.LISTS) listOf(Area.LISTS) else listOf(Area.PLAYER, tab)
+        for (area in order) actions.firstOrNull { it.area == area && keyCode in m[it.id].orEmpty() }?.let { return it }
+        return null
+    }
+
+    /** The button does nothing in this tab. */
+    fun clearKeyInTab(storage: Storage, tab: Area, keyCode: Int) {
+        val full = map(storage).toMutableMap()
+        actionsForTab(tab).forEach { a -> full[a.id] = full[a.id].orEmpty() - keyCode }
+        save(storage, full)
+    }
+
+    /** Nova's original use of the button in this tab. */
+    fun defaultKeyInTab(storage: Storage, tab: Area, keyCode: Int) {
+        val full = map(storage).toMutableMap()
+        actionsForTab(tab).forEach { a ->
+            val keys = full[a.id].orEmpty() - keyCode
+            full[a.id] = if (keyCode in defaultsOf(storage, a)) keys + keyCode else keys
+        }
+        save(storage, full)
+    }
+
     fun remove(storage: Storage, id: String, keyCode: Int) {
         val full = map(storage).toMutableMap()
         full[id] = full[id].orEmpty() - keyCode

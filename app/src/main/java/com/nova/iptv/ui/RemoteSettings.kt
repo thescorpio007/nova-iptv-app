@@ -51,6 +51,7 @@ fun RemoteSettings(vm: MainViewModel) {
     var assigning by remember { mutableStateOf<RemoteKeys.Action?>(null) }
     var testing by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
+    var showMap by remember { mutableStateOf(false) }
     /** A button already used elsewhere: action wanted, button, actions using it now. */
     var clash by remember { mutableStateOf<Triple<RemoteKeys.Action, Int, List<RemoteKeys.Action>>?>(null) }
 
@@ -93,6 +94,7 @@ fun RemoteSettings(vm: MainViewModel) {
             if (s.numberKeys) "on" else "off",
         ) { vm.setNumberKeys(it == "on") }
 
+        androidx.compose.material3.Button(onClick = { showMap = true }) { Text("🎮 Your remote (picture with every button)") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { testing = true }) { Text("Test a button") }
             OutlinedButton(onClick = { confirmReset = true }) { Text("Reset all buttons") }
@@ -193,6 +195,8 @@ fun RemoteSettings(vm: MainViewModel) {
             },
         )
     }
+
+    if (showMap) RemoteMapDialog(storage) { showMap = false; version++ }
 
     if (testing) {
         var last by remember { mutableStateOf<Int?>(null) }
