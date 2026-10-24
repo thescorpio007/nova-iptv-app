@@ -11,17 +11,27 @@ import org.json.JSONObject
 object RemoteKeys {
 
     /** Where an action works: the live player, the film / series player, or Nova's lists and menus. */
-    enum class Area(val label: String) { LIVE("Live TV player"), VOD("Films & series player"), LISTS("Lists & menus") }
+    enum class Area(val label: String) {
+        PLAYER("While watching (films & live TV)"), LIVE("Live TV player"), VOD("Films & series player"), LISTS("Lists & menus");
+
+        /** Both areas work at the same time (the "while watching" keys apply in both players). */
+        fun overlaps(o: Area) = this == o || (this == PLAYER && (o == LIVE || o == VOD)) || (o == PLAYER && (this == LIVE || this == VOD))
+    }
 
     data class Action(val id: String, val area: Area, val label: String, val defaults: List<Int>)
 
     val actions: List<Action> = listOf(
+        // ---- while watching (both players)
+        Action("play_hide", Area.PLAYER, "⬛ Hide / show the picture (shows a fake error) · OK twice = player buttons",
+            listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)),
+        Action("play_night", Area.PLAYER, "🌙 Night mode (sound) on / off", emptyList()),
+        Action("play_boost", Area.PLAYER, "🔊 Volume boost", emptyList()),
         // ---- live TV
         Action("live_next", Area.LIVE, "Next channel", listOf(KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_MEDIA_NEXT)),
         Action("live_prev", Area.LIVE, "Previous channel", listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_MEDIA_PREVIOUS)),
         Action("live_list", Area.LIVE, "Groups & channels list (over the video)", listOf(KeyEvent.KEYCODE_DPAD_LEFT)),
         Action("live_recent", Area.LIVE, "Recently watched channels bar", listOf(KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_BOOKMARK)),
-        Action("live_info", Area.LIVE, "Show info & buttons", listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE)),
+        Action("live_info", Area.LIVE, "Show info & buttons", listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE)),
         Action("live_recall", Area.LIVE, "Last watched channel (recall)", listOf(KeyEvent.KEYCODE_LAST_CHANNEL)),
         Action("live_pause", Area.LIVE, "Pause / play", listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)),
         Action("live_rewind", Area.LIVE, "Rewind 30 s (disk buffer)", listOf(KeyEvent.KEYCODE_MEDIA_REWIND)),
@@ -38,7 +48,7 @@ object RemoteKeys {
         Action("vod_forward", Area.VOD, "Forward 10 s", listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)),
         Action("vod_back_long", Area.VOD, "Back 1 minute", emptyList()),
         Action("vod_forward_long", Area.VOD, "Forward 1 minute", emptyList()),
-        Action("vod_controls", Area.VOD, "Show controls", listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO)),
+        Action("vod_controls", Area.VOD, "Show controls", listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO)),
         Action("vod_next", Area.VOD, "Next episode", listOf(KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_PAGE_UP)),
         Action("vod_prev", Area.VOD, "Previous episode", listOf(KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_PAGE_DOWN)),
         Action("vod_download", Area.VOD, "Download", listOf(KeyEvent.KEYCODE_PROG_RED)),
@@ -59,6 +69,7 @@ object RemoteKeys {
     )
 
     private val byId = actions.associateBy { it.id }
+    private const val HIDE_OK_DONE = "keys_hide_ok_1"
 
     fun action(id: String): Action? = byId[id]
 
@@ -108,6 +119,16 @@ object RemoteKeys {
                 }
             }
         }
+        // Once: OK now hides the picture (OK twice = buttons), so a saved "OK = show buttons" from earlier gives OK back.
+        if (!storage.has(HIDE_OK_DONE)) {
+            val ok = listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)
+            listOf("live_info", "vod_controls").forEach { id -> custom[id]?.let { custom[id] = it - ok.toSet() } }
+            if (saved != null && !saved.isBlank() && custom.isNotEmpty()) {
+                val o = JSONObject(); custom.forEach { (k, v) -> o.put(k, JSONArray(v)) }
+                storage.remoteKeyMap = o.toString()
+            }
+            storage.markDone(HIDE_OK_DONE)
+        }
         val full = actions.associate { a -> a.id to (custom[a.id] ?: defaultsOf(storage, a)) }
         cache = full
         cacheSource = raw
@@ -136,7 +157,7 @@ object RemoteKeys {
         val a = byId[id] ?: return emptyList()
         val full = map(storage).toMutableMap()
         val takenFrom = mutableListOf<String>()
-        actions.filter { it.area == a.area && it.id != id }.forEach { other ->
+        actions.filter { it.area.overlaps(a.area) && it.id != id }.forEach { other ->
             val keys = full[other.id].orEmpty()
             if (keyCode in keys) {
                 full[other.id] = keys - keyCode
@@ -146,6 +167,13 @@ object RemoteKeys {
         full[id] = (full[id].orEmpty() - keyCode) + keyCode
         save(storage, full)
         return takenFrom
+    }
+
+    /** Actions that already use [keyCode] where it would clash with [id] (same player / screen). */
+    fun conflicts(storage: Storage, id: String, keyCode: Int): List<Action> {
+        val a = byId[id] ?: return emptyList()
+        val m = map(storage)
+        return actions.filter { it.id != id && it.area.overlaps(a.area) && keyCode in m[it.id].orEmpty() }
     }
 
     fun remove(storage: Storage, id: String, keyCode: Int) {

@@ -51,6 +51,8 @@ fun RemoteSettings(vm: MainViewModel) {
     var assigning by remember { mutableStateOf<RemoteKeys.Action?>(null) }
     var testing by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
+    /** A button already used elsewhere: action wanted, button, actions using it now. */
+    var clash by remember { mutableStateOf<Triple<RemoteKeys.Action, Int, List<RemoteKeys.Action>>?>(null) }
 
     SettingsCard("Remote control") {
         Text(
@@ -146,15 +148,50 @@ fun RemoteSettings(vm: MainViewModel) {
             if (RemoteKeys.isReserved(code)) {
                 Toast.makeText(context, "${RemoteKeys.keyName(code)} is kept for Android and can't be changed", Toast.LENGTH_LONG).show()
             } else {
-                val taken = RemoteKeys.assign(storage, a.id, code)
-                version++
-                Toast.makeText(
-                    context,
-                    "${RemoteKeys.keyName(code)} → ${a.label}" + if (taken.isNotEmpty()) " (removed from: ${taken.joinToString()})" else "",
-                    Toast.LENGTH_LONG,
-                ).show()
+                val others = RemoteKeys.conflicts(storage, a.id, code)
+                if (others.isNotEmpty()) {
+                    clash = Triple(a, code, others)
+                } else {
+                    RemoteKeys.assign(storage, a.id, code)
+                    version++
+                    Toast.makeText(context, "${RemoteKeys.keyName(code)} → ${a.label}", Toast.LENGTH_LONG).show()
+                }
             }
         }
+    }
+
+    clash?.let { (a, code, others) ->
+        // ⚠ Already used: replace, choose another button, or cancel (cancels by itself after 10 s).
+        var left by remember(clash) { mutableIntStateOf(10) }
+        LaunchedEffect(clash) {
+            while (left > 0) { kotlinx.coroutines.delay(1000); left-- }
+            clash = null
+        }
+        AlertDialog(
+            onDismissRequest = { clash = null },
+            title = { Text("⚠ This button is already used", color = androidx.compose.ui.graphics.Color(0xFFFFB347)) },
+            text = {
+                Text(
+                    "${RemoteKeys.keyName(code)} is already set to:\n" +
+                        others.joinToString("\n") { "• ${it.label}  (${it.area.label})" } +
+                        "\n\nUse it for “${a.label}” instead?\nCancels by itself in $left s.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    RemoteKeys.assign(storage, a.id, code)
+                    version++
+                    clash = null
+                    Toast.makeText(context, "${RemoteKeys.keyName(code)} → ${a.label} (removed from: ${others.joinToString { it.label }})", Toast.LENGTH_LONG).show()
+                }) { Text("Use it (remove the other)") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { clash = null; assigning = a }) { Text("Choose another button") }
+                    TextButton(onClick = { clash = null }) { Text("Cancel") }
+                }
+            },
+        )
     }
 
     if (testing) {

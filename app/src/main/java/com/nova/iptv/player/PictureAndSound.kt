@@ -12,8 +12,9 @@ import kotlin.math.abs
 import kotlin.math.tanh
 
 /**
- * 🔊 Boost done inside Nova: the decoded sound is multiplied before it leaves the app (so a TV box's direct HDMI
- * path can't skip it), with a soft limiter above ~70 % of full scale so loud scenes don't crackle.
+ * 🔊 Boost and 🌙 Night mode done inside Nova: the decoded sound is changed before it leaves the app (so a TV box's
+ * direct HDMI path can't skip it). Boost multiplies it; Night mode is a compressor (loud parts pulled down, quiet parts
+ * lifted); a soft limiter above ~70 % of full scale keeps loud scenes from crackling.
  * Not applied to sound sent untouched to a soundbar (Dolby / DTS passthrough).
  */
 @OptIn(UnstableApi::class)
@@ -21,11 +22,24 @@ class GainProcessor : BaseAudioProcessor() {
     companion object {
         /** 1.0 = 100 %, 2.0 = 200 %. Changes apply at once. */
         @Volatile var gain = 1f
+
+        /** 🌙 Night mode (sound): loud parts pulled down above [nightThresholdDb], quiet parts lifted a little. */
+        @Volatile var night = false
+        @Volatile var nightThresholdDb = -18f
+        @Volatile var nightRatio = 4f
+        @Volatile var nightFast = true
+        /** 5.1 sound: more weight on the centre channel (voices). */
+        @Volatile var nightDialogue = true
     }
+
+    private var envelope = 0f
+    private var currentGain = 1f
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat =
         if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT) inputAudioFormat
         else AudioProcessor.AudioFormat.NOT_SET
+
+    override fun onFlush() { envelope = 0f; currentGain = 1f }
 
     private fun limit(v: Float): Float {
         val a = abs(v)
@@ -38,17 +52,58 @@ class GainProcessor : BaseAudioProcessor() {
         val size = inputBuffer.remaining()
         if (size == 0) return
         val out = replaceOutputBuffer(size)
+        val isFloat = inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
+        val bytes = if (isFloat) 4 else 2
+        val ch = inputAudioFormat.channelCount.coerceAtLeast(1)
+        val rate = inputAudioFormat.sampleRate.coerceAtLeast(8000)
+        val inB = inputBuffer.order(ByteOrder.nativeOrder())
         val g = gain
-        if (inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT) {
-            val inF = inputBuffer.order(ByteOrder.nativeOrder())
-            while (inF.remaining() >= 4) out.putFloat(if (g == 1f) inF.float else limit(inF.float * g))
-        } else {
-            val inS = inputBuffer.order(ByteOrder.nativeOrder())
-            while (inS.remaining() >= 2) {
-                val s = inS.short
-                out.putShort(if (g == 1f) s else (limit(s / 32768f * g) * 32767f).toInt().toShort())
+        val nightOn = night
+        if (g == 1f && !nightOn) {
+            // Nothing to change: copy as it is.
+            out.put(inB)
+            out.flip()
+            return
+        }
+        val thr = Math.pow(10.0, nightThresholdDb / 20.0).toFloat()
+        val ratio = nightRatio
+        // Quiet parts are lifted by half of what loud parts lose, so the overall level stays about the same.
+        val makeup = if (nightOn) Math.pow(10.0, (-nightThresholdDb * (1f - 1f / ratio) * 0.35f) / 20.0).toFloat() else 1f
+        val attack = 1f - kotlin.math.exp(-1f / (rate * (if (nightFast) 0.003f else 0.015f)))
+        val release = 1f - kotlin.math.exp(-1f / (rate * (if (nightFast) 0.15f else 0.40f)))
+        val centre = nightOn && nightDialogue && ch == 6
+        val frame = FloatArray(ch)
+        val frameBytes = ch * bytes
+        while (inB.remaining() >= frameBytes) {
+            var peak = 0f
+            for (c in 0 until ch) {
+                var v = if (isFloat) inB.float else inB.short / 32768f
+                if (centre) v *= if (c == 2) 1.6f else if (c == 3) 0.7f else 0.85f // 5.1: FL FR FC LFE BL BR
+                v *= g
+                frame[c] = v
+                val a = abs(v)
+                if (a > peak) peak = a
+            }
+            var level = 1f
+            if (nightOn) {
+                envelope += (peak - envelope) * (if (peak > envelope) attack else release)
+                level = makeup
+                if (envelope * makeup > thr) {
+                    // Above the ceiling: reduce by the ratio (4:1 = every 4 dB above becomes 1 dB).
+                    val overDb = 20f * kotlin.math.log10(envelope * makeup / thr)
+                    level = makeup * Math.pow(10.0, (-(overDb - overDb / ratio)) / 20.0).toFloat()
+                }
+                // Glide towards the new level (no clicks).
+                currentGain += (level - currentGain) * 0.05f
+                level = currentGain
+            }
+            for (c in 0 until ch) {
+                val v = limit(frame[c] * level)
+                if (isFloat) out.putFloat(v) else out.putShort((v * 32767f).toInt().toShort())
             }
         }
+        // A partial frame (never expected): pass it on unchanged.
+        while (inB.hasRemaining()) out.put(inB.get())
         inputBuffer.position(inputBuffer.limit())
         out.flip()
     }

@@ -539,6 +539,8 @@ fun PlayerSettings(vm: MainViewModel) {
 
     ExternalPlayersCard()
 
+    NightModeCard()
+
     SettingsCard("Built-in player") {
         Text("Video decoder", fontWeight = FontWeight.Medium)
         Hint("Hardware uses the box's chip (needed for 4K, HEVC and HDR). Software can help with a few unusual SD/HD streams but is slow for 4K.")
@@ -1455,5 +1457,49 @@ private fun ExternalPlayersCard() {
         }
         Text("When I press ↗ External player", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("ask" to "Ask me (my list)", "first" to "Always the 1st one"), mode) { mode = it; st.extMode = it }
+    }
+}
+
+
+/** Settings › 🌙 Night mode (sound): the player's 🌙 button switches it on / off; these are its settings. */
+@Composable
+private fun NightModeCard() {
+    val context = LocalContext.current
+    val st = (context.applicationContext as com.nova.iptv.NovaApp).storage
+    var strength by remember { mutableStateOf(st.nightStrength) }
+    var ceiling by remember { mutableStateOf(st.nightCeiling) }
+    var dialogue by remember { mutableStateOf(st.nightDialogue) }
+    var speed by remember { mutableStateOf(st.nightSpeed) }
+    var auto by remember { mutableStateOf(st.nightAuto) }
+    var from by remember { mutableStateOf(st.nightFrom) }
+    var to by remember { mutableStateOf(st.nightTo) }
+    var scope by remember { mutableStateOf(st.nightScope) }
+    fun hm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
+    SettingsCard("🌙 Night mode (sound)", summary = "${strength} · " + when (auto) { "always" -> "always on"; "hours" -> "${hm(from)}–${hm(to)}"; else -> "player button" }) {
+        Hint("Keeps the sound at a calm, even level for watching with family: loud scenes softened, quiet voices lifted. " +
+            "Switch it on / off from the player (🌙 button) — these are its settings. The picture is not changed.")
+        Text("Strength", fontWeight = FontWeight.Medium)
+        Hint("How much loud scenes are reduced.")
+        ChoiceRow(listOf("light" to "Light", "medium" to "Medium", "strong" to "Strong"), strength) { strength = it; st.nightStrength = it }
+        Text("Maximum loudness", fontWeight = FontWeight.Medium)
+        Hint("Loud scenes never go above this ceiling.")
+        ChoiceRow(listOf("high" to "High", "medium" to "Medium", "low" to "Low"), ceiling) { ceiling = it; st.nightCeiling = it }
+        Text("Dialogue clarity", fontWeight = FontWeight.Medium)
+        Hint("More weight on voices (5.1 films played on the TV's speakers).")
+        ChoiceRow(listOf("off" to "Off", "on" to "On"), if (dialogue) "on" else "off") { dialogue = it == "on"; st.nightDialogue = dialogue }
+        Text("Reaction speed", fontWeight = FontWeight.Medium)
+        Hint("Smooth = natural · Fast = catches sudden bangs harder.")
+        ChoiceRow(listOf("smooth" to "Smooth", "fast" to "Fast"), speed) { speed = it; st.nightSpeed = it }
+        Text("Switch on automatically", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("never" to "Never", "always" to "Always", "hours" to "During hours"), auto) { auto = it; st.nightAuto = it }
+        if (auto == "hours") {
+            Hint("From")
+            ChoiceRow(listOf(19, 20, 21, 22, 23).map { (it * 60).toString() to hm(it * 60) }, from.toString()) { from = it.toInt(); st.nightFrom = from }
+            Hint("Until")
+            ChoiceRow(listOf(5, 6, 7, 8, 9).map { (it * 60).toString() to hm(it * 60) }, to.toString()) { to = it.toInt(); st.nightTo = to }
+        }
+        Text("Applies to", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("all" to "Everything", "vod" to "Films & series", "live" to "Live TV"), scope) { scope = it; st.nightScope = it }
+        Hint("Works with Nova's own sound decoding (the default). Not applied to Dolby / DTS sent untouched to a soundbar. The player's 🌙 button always wins for the video you are watching.")
     }
 }

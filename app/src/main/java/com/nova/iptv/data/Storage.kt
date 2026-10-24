@@ -555,6 +555,37 @@ class Storage(context: Context) {
 
     fun setPlayerFor(kind: String, value: String) = prefs.edit().putString("player_$kind", value).apply()
 
+    // ---- 🌙 Night mode (sound)
+    /** "light", "medium" or "strong": how much loud parts are reduced. */
+    var nightStrength: String
+        get() = prefs.getString("night_strength", "medium") ?: "medium"
+        set(value) = prefs.edit().putString("night_strength", value).apply()
+    /** "high", "medium" or "low": the ceiling loud parts never go above. */
+    var nightCeiling: String
+        get() = prefs.getString("night_ceiling", "medium") ?: "medium"
+        set(value) = prefs.edit().putString("night_ceiling", value).apply()
+    var nightDialogue: Boolean
+        get() = prefs.getBoolean("night_dialogue", true)
+        set(value) = prefs.edit().putBoolean("night_dialogue", value).apply()
+    /** "smooth" or "fast". */
+    var nightSpeed: String
+        get() = prefs.getString("night_speed", "fast") ?: "fast"
+        set(value) = prefs.edit().putString("night_speed", value).apply()
+    /** "never", "always" or "hours" (between [nightFrom] and [nightTo], minutes after midnight). */
+    var nightAuto: String
+        get() = prefs.getString("night_auto", "never") ?: "never"
+        set(value) = prefs.edit().putString("night_auto", value).apply()
+    var nightFrom: Int
+        get() = prefs.getInt("night_from", 21 * 60)
+        set(value) = prefs.edit().putInt("night_from", value).apply()
+    var nightTo: Int
+        get() = prefs.getInt("night_to", 7 * 60)
+        set(value) = prefs.edit().putInt("night_to", value).apply()
+    /** "all", "vod" (films & series) or "live". */
+    var nightScope: String
+        get() = prefs.getString("night_scope", "all") ?: "all"
+        set(value) = prefs.edit().putString("night_scope", value).apply()
+
     /** 🔊 Volume boost for everything, in % (100 = off, up to 200). */
     var boostAll: Int
         get() = prefs.getInt("boost_all", 100)

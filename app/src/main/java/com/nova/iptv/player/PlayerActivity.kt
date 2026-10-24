@@ -76,6 +76,24 @@ class PlayerActivity : ComponentActivity() {
     private var boostSession: Int? = null
     private var boostKeyOf: String? = null
     private var boostBadge: TextView? = null
+
+    // 🌙 Night mode (sound): the player button switches it for what is playing (else the automatic setting decides).
+    private var nightSession: Boolean? = null
+    private var nightKeyOf: String? = null
+    private var nightPill: TextView? = null
+
+    // ⬛ Hidden picture: a black cover with a fake "signal error"; the video keeps playing with its sound.
+    private var pictureHidden = false
+    private var hiddenAt = 0L
+    private var hideMuted = false
+    private var pendingUnhide: Runnable? = null
+    private var autoUnhide: Runnable? = null
+    private lateinit var hideCover: FrameLayout
+    private lateinit var hideTitle: TextView
+    private lateinit var hideLeft: TextView
+    private lateinit var hideRight: TextView
+    private lateinit var hideProgress: View
+    private lateinit var hideTrack: FrameLayout
     private var spaceWarned = false
 
     private lateinit var playerView: PlayerView
@@ -191,6 +209,7 @@ class PlayerActivity : ComponentActivity() {
                 updateDiskStatus()
                 vod.update()
             }
+            if (pictureHidden) updateHideCover()
             nextEpisodeTick()
             // The channel list keeps the remote's focus while it is open.
             if (recentBarOpen && !recentBar.hasFocus()) recentRow.getChildAt(0)?.requestFocus()
@@ -298,12 +317,13 @@ class PlayerActivity : ComponentActivity() {
             addState(intArrayOf(android.R.attr.state_pressed), shape(0xFF59606A.toInt(), 0))
             addState(intArrayOf(), shape(0x33FFFFFF, 0))
         }
-        return TextView(this).apply {
+        val small = PlayerUi.compact(this)
+        return PillText(this, small).apply {
             text = label
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, if (small) 12f else 14f)
             background = states
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+            if (small) setPadding(dp(9), dp(6), dp(9), dp(6)) else setPadding(dp(14), dp(8), dp(14), dp(8))
             isFocusable = true
             isClickable = true
             setOnClickListener {
@@ -313,7 +333,7 @@ class PlayerActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { marginEnd = dp(8) }
+            ).apply { marginEnd = dp(if (small) 5 else 8) }
         }
     }
 
@@ -352,11 +372,13 @@ class PlayerActivity : ComponentActivity() {
         val infoButton = pill("ℹ Video info") { showVideoInfo() }
         similarButton = pill("≈ Similar") { showSimilar(auto = false) }
         val boostButton = pill("🔊 Boost") { showBoost() }
+        val nightButton = pill("🌙 Night mode: Off") { toggleNight() }.also { nightPill = it }
+        val hideButton = pill("⬛ Hide picture") { hidePicture() }
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, boostButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, downloadButton, externalButton, aspectButton, favButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -453,7 +475,9 @@ class PlayerActivity : ComponentActivity() {
             onLoadSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
             onBrightness = { v -> setPictureBrightness(v) },
             extraButtons = listOf(
+                "🌙 Night mode: Off" to { toggleNight() },
                 "🔊 Boost" to { showBoost() },
+                "⬛ Hide picture" to { hidePicture() },
                 "⬇ Download" to { downloadCurrent() },
                 "↗ External player" to { openExternal() },
                 "♡ Favorite" to { toggleFavorite() },
@@ -480,6 +504,7 @@ class PlayerActivity : ComponentActivity() {
         root.addView(boostBadge, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
             topMargin = dp(18); rightMargin = dp(24)
         })
+        root.addView(buildHideCover(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         root.addView(infoBar)
         root.addView(statusView)
         root.addView(clockView)
@@ -732,6 +757,7 @@ class PlayerActivity : ComponentActivity() {
         p.prepare()
         p.playWhenReady = true
         applyBoost()
+        applyNight()
 
         if (item.isLive) {
             // Never give up before the safety cushion has had time to fill.
@@ -813,10 +839,202 @@ class PlayerActivity : ComponentActivity() {
     private fun applyBoost() {
         val level = boostLevel()
         GainProcessor.gain = level / 100f
+        updateSoundBadge()
+    }
+
+    private fun updateSoundBadge() {
+        val level = boostLevel()
+        val parts = mutableListOf<String>()
+        if (GainProcessor.night) parts += "🌙 Night mode · " + app.storage.nightStrength.replaceFirstChar { it.uppercase() }
+        if (level > 100) parts += "🔊 $level %"
         boostBadge?.let { b ->
-            b.text = "🔊 $level %"
-            b.visibility = if (level > 100) View.VISIBLE else View.GONE
+            b.text = parts.joinToString("   ")
+            b.visibility = if (parts.isEmpty()) View.GONE else View.VISIBLE
         }
+    }
+
+    // ------------------------------------------------------------------ 🌙 Night mode (sound)
+
+    /** Settings › Night mode › Switch on automatically / Applies to. */
+    private fun nightAutoOn(item: PlayItem): Boolean {
+        val st = app.storage
+        val scopeOk = when (st.nightScope) { "vod" -> !item.isLive; "live" -> item.isLive; else -> true }
+        if (!scopeOk) return false
+        return when (st.nightAuto) {
+            "always" -> true
+            "hours" -> {
+                val c = java.util.Calendar.getInstance()
+                val now = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE)
+                val from = st.nightFrom; val to = st.nightTo
+                if (from <= to) now in from until to else now >= from || now < to
+            }
+            else -> false
+        }
+    }
+
+    private fun nightOn(): Boolean {
+        val item = current ?: return false
+        if (item.key != nightKeyOf) { nightKeyOf = item.key; nightSession = null }
+        return nightSession ?: nightAutoOn(item)
+    }
+
+    private fun applyNight() {
+        val st = app.storage
+        val on = nightOn()
+        GainProcessor.nightThresholdDb = when (st.nightCeiling) { "high" -> -12f; "low" -> -24f; else -> -18f }
+        GainProcessor.nightRatio = when (st.nightStrength) { "light" -> 2f; "strong" -> 8f; else -> 4f }
+        GainProcessor.nightFast = st.nightSpeed != "smooth"
+        GainProcessor.nightDialogue = st.nightDialogue
+        GainProcessor.night = on
+        val label = "🌙 Night mode: " + if (on) "On" else "Off"
+        nightPill?.text = label
+        if (::vod.isInitialized) vod.extraViews["🌙 Night mode: Off"]?.text = label
+        updateSoundBadge()
+    }
+
+    private fun toggleNight() {
+        nightSession = !nightOn()
+        applyNight()
+        Toast.makeText(
+            this,
+            if (GainProcessor.night) "🌙 Night mode on · loud scenes softened, voices kept clear" else "🌙 Night mode off",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    // ------------------------------------------------------------------ ⬛ Hidden picture
+
+    private fun buildHideCover(): View {
+        hideCover = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            visibility = View.GONE
+            isClickable = true // touches never reach the controls under it
+        }
+        hideTitle = TextView(this).apply { setTextColor(0xFF444444.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+        hideCover.addView(hideTitle, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply {
+            leftMargin = dp(32); topMargin = dp(24)
+        })
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply { cornerRadius = dp(10).toFloat(); setColor(0xFF1A1A1A.toInt()); setStroke(dp(1), 0xFF333333.toInt()) }
+            setPadding(dp(18), dp(12), dp(20), dp(12))
+        }
+        box.addView(TextView(this).apply {
+            text = "!"
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFC0392B.toInt()) }
+        }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(12) })
+        box.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@PlayerActivity).apply {
+                text = "Video signal error"; setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f); setTypeface(typeface, Typeface.BOLD)
+            })
+            addView(TextView(this@PlayerActivity).apply {
+                text = "The picture could not be displayed · code E-204"; setTextColor(0xFF999999.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            })
+        })
+        hideCover.addView(box, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        val bottom = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val times = FrameLayout(this)
+        hideLeft = TextView(this).apply { setTextColor(0xFF555555.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f) }
+        hideRight = TextView(this).apply { setTextColor(0xFF555555.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f) }
+        times.addView(hideLeft, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.START))
+        times.addView(hideRight, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END))
+        bottom.addView(times)
+        hideTrack = FrameLayout(this).apply { setBackgroundColor(0xFF1C1C1C.toInt()) }
+        hideProgress = View(this).apply { setBackgroundColor(0xFF3A4A63.toInt()) }
+        hideTrack.addView(hideProgress, FrameLayout.LayoutParams(0, FrameLayout.LayoutParams.MATCH_PARENT))
+        bottom.addView(hideTrack, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(2)).apply { topMargin = dp(4) })
+        hideCover.addView(bottom, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).apply {
+            leftMargin = dp(32); rightMargin = dp(32); bottomMargin = dp(22)
+        })
+        // Phone: a double tap on the cover opens its options (a single tap never shows the picture).
+        val taps = android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: android.view.MotionEvent) = true
+            override fun onDoubleTap(e: android.view.MotionEvent): Boolean { showHideOptions(); return true }
+        })
+        hideCover.setOnTouchListener { _, e -> taps.onTouchEvent(e); true }
+        return hideCover
+    }
+
+    private fun updateHideCover() {
+        val item = current ?: return
+        val p = player
+        hideTitle.text = item.title.substringBefore("   ·   ")
+        if (item.isLive) {
+            hideLeft.text = "Live"
+            hideRight.text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            hideTrack.visibility = View.GONE
+        } else {
+            val pos = p?.currentPosition ?: 0L
+            val dur = p?.duration?.takeIf { it > 0 } ?: 0L
+            hideLeft.text = formatDuration(pos)
+            hideRight.text = if (dur > 0) formatDuration(dur) else ""
+            hideTrack.visibility = View.VISIBLE
+            val w = hideTrack.width
+            if (w > 0 && dur > 0) hideProgress.layoutParams = hideProgress.layoutParams.apply { width = (w * pos / dur).toInt() }
+        }
+    }
+
+    private fun hidePicture() {
+        if (pictureHidden) return
+        pictureHidden = true
+        hiddenAt = android.os.SystemClock.uptimeMillis()
+        playerView.hideController()
+        if (::vod.isInitialized) vod.hide()
+        updateHideCover()
+        hideCover.visibility = View.VISIBLE
+        hideCover.bringToFront()
+        if (::keySink.isInitialized) keySink.requestFocus()
+        Log.i("NovaTest", "PICTURE hidden")
+    }
+
+    private fun showPicture() {
+        pendingUnhide?.let { handler.removeCallbacks(it) }; pendingUnhide = null
+        autoUnhide?.let { handler.removeCallbacks(it) }; autoUnhide = null
+        if (hideMuted) { player?.volume = 1f; hideMuted = false }
+        pictureHidden = false
+        hideCover.visibility = View.GONE
+        Log.i("NovaTest", "PICTURE shown")
+    }
+
+    /** OK twice while hidden (double tap on a phone): show · skip · mute · show again by itself. */
+    private fun showHideOptions() {
+        val item = current ?: return
+        val choices = mutableListOf<Pair<String, () -> Unit>>()
+        choices += "👁 Show picture" to { showPicture() }
+        if (!item.isLive) {
+            choices += "⏩ Skip 30 s" to { vod.seekBy(30_000) }
+            choices += "⏩ Skip 1 min" to { vod.seekBy(60_000) }
+        } else if (relay != null) {
+            choices += "⏩ Skip 30 s" to { timeshift(30) }
+        }
+        choices += (if (hideMuted) "🔊 Sound back on" else "🔇 Mute too") to {
+            hideMuted = !hideMuted
+            player?.volume = if (hideMuted) 0f else 1f
+        }
+        fun after(label: String, ms: Long) {
+            choices += label to {
+                autoUnhide?.let { handler.removeCallbacks(it) }
+                autoUnhide = if (ms <= 0) null else Runnable { autoUnhide = null; if (pictureHidden) showPicture() }.also { handler.postDelayed(it, ms) }
+            }
+        }
+        after("Show again by itself: Off", 0)
+        after("Show again by itself in 30 s", 30_000)
+        after("Show again by itself in 1 min", 60_000)
+        after("Show again by itself in 2 min", 120_000)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Hidden picture options")
+            .setItems(choices.map { it.first }.toTypedArray()) { _, i -> choices[i].second() }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showControlsNow(item: PlayItem) {
+        if (item.isLive) playerView.showController() else vod.showAndFocus()
     }
 
     /** 🔊 Boost panel: 100–200 %, then where it applies (this video only / always for this channel or film / everything). */
@@ -2405,6 +2623,9 @@ class PlayerActivity : ComponentActivity() {
                 else Toast.makeText(this, if (action == "vod_next") "This is the last episode" else "This is the first episode", Toast.LENGTH_SHORT).show()
             }
             "vod_download" -> if (!item.isLocal && item.downloadExt != null) downloadCurrent() else return false
+            "play_hide" -> if (pictureHidden) showPicture() else hidePicture()
+            "play_night" -> toggleNight()
+            "play_boost" -> showBoost()
             else -> return false
         }
         return true
@@ -3157,6 +3378,8 @@ class PlayerActivity : ComponentActivity() {
             if (!longPressHandled && event.isLongPress) {
                 longPressHandled = true
                 swallowUp += code
+                // Holding OK: the first press had hidden the picture — it was a long press (Rec / Download), not a hide.
+                if (pictureHidden && android.os.SystemClock.uptimeMillis() - hiddenAt < 2500) showPicture()
                 when {
                     item.isLive -> toggleRecording()
                     !item.isLocal && item.downloadExt != null -> downloadCurrent()
@@ -3182,6 +3405,52 @@ class PlayerActivity : ComponentActivity() {
             return true
         }
 
+        // ⬛ Hide picture (OK by default): one press hides at once; OK twice = the player buttons.
+        val hideKey = item != null && RemoteKeys.actionFor(app.storage, RemoteKeys.Area.PLAYER, code) == "play_hide"
+        if (pictureHidden && item != null) {
+            if (hideKey) {
+                if (down && event.repeatCount == 0) {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    val waiting = pendingUnhide
+                    when {
+                        now - hiddenAt < 400 -> { showPicture(); showControlsNow(item) }
+                        waiting != null -> { handler.removeCallbacks(waiting); pendingUnhide = null; showHideOptions() }
+                        // Wait a moment: a second press opens the options instead (the picture never flashes).
+                        else -> Runnable { pendingUnhide = null; showPicture() }.also { pendingUnhide = it; handler.postDelayed(it, 400) }
+                    }
+                }
+                if (down) swallowUp += code
+                return true
+            }
+            if (!item.isLive && (code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)) {
+                if (down && event.repeatCount == 0) vod.seekBy(30_000)
+                if (down) swallowUp += code
+                return true
+            }
+            // Other buttons work as usual (channel ▲▼, volume…) but never open the menus over the cover.
+            val a = RemoteKeys.actionFor(app.storage, if (item.isLive) RemoteKeys.Area.LIVE else RemoteKeys.Area.VOD, code)
+            if (a == "live_info" || a == "vod_controls" || a == "live_list" || a == "live_recent" || a == "vod_back" || a == "vod_forward") {
+                if (down) swallowUp += code
+                return true
+            }
+        } else if (hideKey && item != null) {
+            val controlsShown = if (item.isLive) playerView.isControllerFullyVisible else vod.controlsVisible
+            val menusOpen = vod.isPanelOpen || channelPanelOpen || recentBarOpen
+            if (!controlsShown && !menusOpen) {
+                if (down && event.repeatCount == 0) hidePicture()
+                if (down) swallowUp += code
+                return true
+            }
+            if (item.isLive && controlsShown && !infoBar.hasFocus() && isOk) {
+                // Info on screen (not in the buttons): OK hides it, as before.
+                if (down && event.repeatCount == 0) playerView.hideController()
+                if (down) swallowUp += code
+                return true
+            }
+            // Buttons on screen: OK presses the highlighted one.
+            if (isOk) return super.dispatchKeyEvent(event)
+        }
+
         if (item != null && !RemoteKeys.isReserved(code)) {
             // Number buttons: type a channel number (live TV).
             if (item.isLive && app.storage.numberKeys && RemoteKeys.isDigit(code) && PlaybackQueue.items.size > 1) {
@@ -3190,7 +3459,7 @@ class PlayerActivity : ComponentActivity() {
                 return true
             }
             val area = if (item.isLive) RemoteKeys.Area.LIVE else RemoteKeys.Area.VOD
-            val action = RemoteKeys.actionFor(app.storage, area, code)
+            val action = RemoteKeys.actionFor(app.storage, area, code) ?: RemoteKeys.actionFor(app.storage, RemoteKeys.Area.PLAYER, code)
             if (action != null) {
                 val controlsShown = if (item.isLive) playerView.isControllerFullyVisible else vod.controlsVisible
                 val isShowAction = action == "live_info" || action == "vod_controls"
@@ -3266,6 +3535,7 @@ class PlayerActivity : ComponentActivity() {
         hlsAhead?.close()
         hlsAhead = null
         GainProcessor.gain = 1f
+        GainProcessor.night = false
         PictureBrightness.gain = 1f
         networkCallback?.let { cb -> runCatching { (getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)?.unregisterNetworkCallback(cb) } }
         super.onDestroy()

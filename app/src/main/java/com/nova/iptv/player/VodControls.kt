@@ -115,6 +115,8 @@ class VodControls(
     private val extraButtons: List<Pair<String, () -> Unit>>,
 ) {
     private val ctx: Context = activity
+    /** Phone: smaller buttons with short labels so the whole row fits (see [PlayerUi]). */
+    private val small = PlayerUi.compact(activity)
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics).toInt()
 
     /** Touch layer + controls; add to the player screen above the video. */
@@ -212,14 +214,17 @@ class VodControls(
         if (bold) setTypeface(typeface, Typeface.BOLD)
     }
 
-    private fun button(label: String, onClick: () -> Unit) = text(label, 15f).apply {
+    private fun button(label: String, onClick: () -> Unit) = PillText(ctx, small).apply {
+        text = label
+        setTextColor(Color.WHITE)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, if (small) 12f else 15f)
         background = pillBackground(20)
-        setPadding(dp(16), dp(9), dp(16), dp(9))
+        if (small) setPadding(dp(9), dp(6), dp(9), dp(6)) else setPadding(dp(16), dp(9), dp(16), dp(9))
         isFocusable = true
         isClickable = true
         setOnClickListener { onClick(); touched() }
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            .apply { marginEnd = dp(10) }
+            .apply { marginEnd = dp(if (small) 5 else 10) }
     }
 
     private fun circle(label: String, sizeSp: Float, onClick: () -> Unit) = text(label, sizeSp, bold = true).apply {
@@ -342,7 +347,7 @@ class VodControls(
         buttons.addView(aspectButton)
         buttons.addView(speedButton)
         buttons.addView(button("CC Audio & subtitles") { openPanel() })
-        extraButtons.forEach { (label, action) -> buttons.addView(button(label, action)) }
+        extraButtons.forEach { (label, action) -> buttons.addView(button(label, action).also { extraViews[label] = it }) }
         col.addView(HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             setPadding(0, dp(6), 0, 0)
@@ -497,6 +502,9 @@ class VodControls(
     private var buttonRow: LinearLayout? = null
 
     /** The controls are on screen. */
+    /** The extra buttons by their first label (to change a label later, e.g. "🌙 Night mode: On"). */
+    val extraViews = HashMap<String, TextView>()
+
     val controlsVisible: Boolean get() = enabled && controls.visibility == View.VISIBLE
 
     /** The remote's focus is in the bottom row of buttons (Left / Right then move between them). */
