@@ -58,6 +58,9 @@ object CrashLog {
         runCatching {
             val dir = File(Folders.keepDir(context, "Logs").path).also { it.mkdirs() }
             File(dir, "problem-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(at) + ".txt").writeText(full)
+            // Keep the last 10 problem files.
+            dir.listFiles { f -> f.name.startsWith("problem-") && f.name.endsWith(".txt") }
+                ?.sortedByDescending { it.name }?.drop(10)?.forEach { it.delete() }
         }
     }
 

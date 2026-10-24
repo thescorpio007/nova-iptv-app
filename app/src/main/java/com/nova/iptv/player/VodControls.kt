@@ -117,6 +117,8 @@ class VodControls(
     private val ctx: Context = activity
     /** Phone: smaller buttons with short labels so the whole row fits (see [PlayerUi]). */
     private val small = PlayerUi.compact(activity)
+    /** The extra buttons by their first label (to change a label later, e.g. "🌙 Night mode: On"). Declared before the views are built. */
+    val extraViews = HashMap<String, TextView>()
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics).toInt()
 
     /** Touch layer + controls; add to the player screen above the video. */
@@ -502,9 +504,6 @@ class VodControls(
     private var buttonRow: LinearLayout? = null
 
     /** The controls are on screen. */
-    /** The extra buttons by their first label (to change a label later, e.g. "🌙 Night mode: On"). */
-    val extraViews = HashMap<String, TextView>()
-
     val controlsVisible: Boolean get() = enabled && controls.visibility == View.VISIBLE
 
     /** The remote's focus is in the bottom row of buttons (Left / Right then move between them). */

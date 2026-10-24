@@ -1148,10 +1148,22 @@ fun LastProblemSettings() {
             Text(text!!.take(1500), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
+                    // A .txt file (nova-problem-build86-2026-10-24-1156.txt) + the same text in the message.
+                    val body = text.orEmpty()
+                    val build = Regex("""build (\d+)""").find(body.lineSequence().firstOrNull().orEmpty())?.groupValues?.get(1) ?: "x"
+                    val name = "nova-problem-build$build-" + java.text.SimpleDateFormat("yyyy-MM-dd-HHmm", java.util.Locale.US).format(java.util.Date()) + ".txt"
                     val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        .putExtra(android.content.Intent.EXTRA_TEXT, body)
+                        .putExtra(android.content.Intent.EXTRA_SUBJECT, name)
+                    runCatching {
+                        val dir = java.io.File(context.filesDir, "reports").apply { mkdirs() }
+                        dir.listFiles { f -> f.name.startsWith("nova-problem-") }?.forEach { it.delete() }
+                        val f = java.io.File(dir, name).apply { writeText(body) }
+                        val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", f)
+                        send.putExtra(android.content.Intent.EXTRA_STREAM, uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
                     runCatching { context.startActivity(android.content.Intent.createChooser(send, "Share the problem").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                }) { Text("Share") }
+                }) { Text("Share (.txt file)") }
                 OutlinedButton(onClick = { com.nova.iptv.data.CrashLog.clear(context); text = null }) { Text("Clear") }
             }
         }
