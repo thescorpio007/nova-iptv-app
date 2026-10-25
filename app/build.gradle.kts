@@ -17,10 +17,12 @@ android {
         applicationId = "com.nova.iptv"
         minSdk = if (legacy) 21 else 24
         targetSdk = 35
-        // The build number from GitHub is part of the version: "2.0 (build 25)".
-        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
-        versionCode = build ?: 1
-        versionName = if (build != null) "2.0 (build $build)" else "2.0"
+        // Version 3.0: build numbers start again at 1 (GitHub's run number − 94). Android only installs a higher
+        // internal number, so versionCode = 300000 + build (above every 2.0 build) — updates install over 2.0.
+        val build = System.getenv("NOVA_BUILD")?.toIntOrNull()
+            ?: System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.let { it - 94 }
+        versionCode = 300000 + (build ?: 0)
+        versionName = if (build != null) "3.0 (build $build)" else "3.0"
         // Default TMDB key for the age filter: added at build time from the TMDB_KEY secret (never in the code).
         val tmdb = (System.getenv("TMDB_KEY") ?: "").trim().filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }
         buildConfigField("String", "TMDB_KEY", "\"$tmdb\"")

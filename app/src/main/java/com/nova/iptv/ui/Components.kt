@@ -797,11 +797,11 @@ fun ConfirmOverlay(title: String, text: String, yesLabel: String, onYes: () -> U
 }
 
 
-/** "2.0 (build 25)": the version with the GitHub build number. */
+/** "3.0 (build 1)": the version with the GitHub build number. */
 @Composable
 fun appVersion(): String {
     val context = androidx.compose.ui.platform.LocalContext.current
     return remember {
-        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "2.0"
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "3.0"
     }
 }

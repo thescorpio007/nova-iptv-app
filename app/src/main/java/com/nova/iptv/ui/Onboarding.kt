@@ -456,9 +456,10 @@ fun RestoreDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     plain?.let { text ->
         val noFocus = remember { FocusRequester() }
         val kind = remember(text) { vm.backupKind(text) }
+        var replaceBm by remember(text) { mutableStateOf(false) }
         fun doRestore(part: String) {
             plain = null
-            val result = runCatching { vm.restoreBackup(text, part) }
+            val result = runCatching { vm.restoreBackup(text, part, replaceBm) }
             if (result.isSuccess) fromLink?.let { vm.rememberBackupLink(it) }
             Toast.makeText(context, result.fold({
                 when (if (kind == "all") part else kind) { "web" -> "Web browser restored"; "iptv" -> "IPTV part restored"; else -> "Backup restored" }
@@ -477,6 +478,13 @@ fun RestoreDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                             else -> "📺 All current accounts, favourites, hidden items and settings will be replaced by this backup. The web browser is not touched."
                         },
                     )
+                    if (kind != "iptv") {
+                        Text("🌐 Bookmarks:", fontWeight = FontWeight.Bold)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Chip("＋ Add to mine", !replaceBm, { replaceBm = false })
+                            Chip("⇄ Replace mine", replaceBm, { replaceBm = true })
+                        }
+                    }
                     if (kind == "all") {
                         TextButton(onClick = { doRestore("iptv") }) { Text("📺 IPTV part only") }
                         TextButton(onClick = { doRestore("web") }) { Text("🌐 Web browser part only") }

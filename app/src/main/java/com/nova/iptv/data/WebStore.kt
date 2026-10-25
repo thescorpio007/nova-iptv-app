@@ -34,7 +34,7 @@ object WebStore {
 
     const val FOLDER = "Browser"
     const val LATEST = "browser-latest.novaweb"
-    private const val KEEP = 5
+    private const val KEEP = 20
 
     private lateinit var app: Context
     private val prefs by lazy { app.getSharedPreferences("web", Context.MODE_PRIVATE) }
@@ -250,15 +250,96 @@ object WebStore {
                 where = "Download/NovaIPTV/$FOLDER/$LATEST"
             }
             runCatching {
-                File(dir, "browser-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".novaweb").writeText(text)
-                dir.listFiles { f -> f.name.startsWith("browser-2") && f.name.endsWith(".novaweb") }
-                    ?.sortedByDescending { it.name }?.drop(KEEP)?.forEach { it.delete() }
+                val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                val dated = dir.listFiles { f -> f.name.startsWith("browser-2") && f.name.endsWith(".novaweb") }?.sortedByDescending { it.name }.orEmpty()
+                val count = bookmarks.value.size
+                val prevCount = dated.firstOrNull()?.let { countIn(it.readText()) } ?: -1
+                // The list just became empty: keep the last copy with bookmarks aside ("before emptying"), never pruned.
+                if (count == 0 && prevCount > 0) runCatching { dated.first().copyTo(File(dir, "browser-kept-$stamp-before-emptying.novaweb"), overwrite = true) }
+                // No new dated copy for "still empty".
+                if (!(count == 0 && prevCount == 0)) File(dir, "browser-$stamp.novaweb").writeText(text)
+                // Keep 20: empty copies go first, then the oldest ones.
+                val all = dir.listFiles { f -> f.name.startsWith("browser-2") && f.name.endsWith(".novaweb") }?.sortedByDescending { it.name }.orEmpty()
+                val extra = all.size - KEEP
+                if (extra > 0) {
+                    val order = all.reversed().sortedBy { if (countIn(runCatching { it.readText() }.getOrDefault("")) == 0) 0 else 1 }
+                    order.take(extra).forEach { it.delete() }
+                }
             }
         }
         // A file left by an earlier installation can't be overwritten directly: write it through the chosen folder.
         if (where.isEmpty() || treeUri != null) runCatching { if (writeTree(text)) where = "Download/NovaIPTV/$FOLDER/$LATEST" }
         if (where.isNotEmpty()) lastExport.value = System.currentTimeMillis()
         return where
+    }
+
+    // ------------------------------------------------------------ restoring one chosen copy
+
+    data class Copy(val name: String, val at: Long, val count: Int, val text: String)
+
+    private fun countIn(text: String): Int = runCatching { JSONObject(text).optJSONArray("bookmarks")?.length() ?: 0 }.getOrDefault(0)
+
+    private val NAME_TIME = Regex("""(\d{8})-(\d{6})""")
+
+    private fun timeOf(name: String, fallback: Long): Long =
+        NAME_TIME.find(name)?.let { m -> runCatching { SimpleDateFormat("yyyyMMddHHmmss", Locale.US).parse(m.groupValues[1] + m.groupValues[2])?.time }.getOrNull() }
+            ?: fallback
+
+    /** Every saved copy (this folder, and the folder chosen once with Android's picker), newest first. */
+    fun copies(): List<Copy> {
+        val out = LinkedHashMap<String, Copy>()
+        runCatching {
+            folder().listFiles { f -> f.name.endsWith(".novaweb") }?.forEach { f ->
+                runCatching { f.readText() }.getOrNull()?.let { t ->
+                    out[f.name] = Copy(f.name, if (f.name == LATEST) f.lastModified() else timeOf(f.name, f.lastModified()), countIn(t), t)
+                }
+            }
+        }
+        runCatching {
+            val tree = treeUri ?: return@runCatching
+            val dirId = browserDirId(tree, create = false) ?: return@runCatching
+            children(tree, dirId).filter { !it.dir && it.name.endsWith(".novaweb") && it.name !in out.keys }.forEach { d ->
+                val uri = DocumentsContract.buildDocumentUriUsingTree(tree, d.id)
+                app.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }?.let { t ->
+                    out[d.name] = Copy(d.name, timeOf(d.name, 0L), countIn(t), t)
+                }
+            }
+        }
+        return out.values.sortedByDescending { it.at }
+    }
+
+    fun bookmarksIn(text: String): List<Bookmark> = runCatching {
+        val a = JSONObject(text).optJSONArray("bookmarks") ?: JSONArray()
+        (0 until a.length()).map { bmOf(a.getJSONObject(it)) }.filter { it.url.isNotBlank() }
+    }.getOrDefault(emptyList())
+
+    /**
+     * Puts back a chosen copy. [replace] = the list becomes exactly that copy, else its missing bookmarks are added.
+     * [settingsToo] = also the browser settings, filter lists and rules of that copy. Returns the number of bookmarks now.
+     */
+    fun restoreCopy(text: String, replace: Boolean, settingsToo: Boolean): Int {
+        val mine = bookmarks.value
+        if (settingsToo) {
+            apply(text)
+            if (!replace) mergeBookmarks(mine)
+        } else if (replace) {
+            bookmarks.value = sorted(bookmarksIn(text))
+            save()
+        } else {
+            mergeBookmarks(bookmarksIn(text))
+        }
+        return bookmarks.value.size
+    }
+
+    /** Only remembers the folder chosen with Android's picker (its copies then appear in the list). */
+    fun setTreeOnly(uri: Uri) {
+        runCatching {
+            app.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        prefs.edit().putString("tree", uri.toString()).putBoolean("offer_done", true).apply()
+        restoreOffer.value = false
     }
 
     /** The exported file, read directly or through the folder chosen once with Android's folder picker. */

@@ -1718,10 +1718,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .orEmpty()
 
     /** Restores [part] ("all", "iptv" or "web") of a backup: only that part is replaced. */
-    fun restoreBackup(text: String, part: String = "all") {
+    fun restoreBackup(text: String, part: String = "all", replaceBookmarks: Boolean = false) {
         val kind = backupKind(text)
         if (part != "iptv" && kind != "iptv") {
-            BackupJson(text).optJSONObject("web")?.let { w -> com.nova.iptv.data.WebStore.apply(w.toString()) }
+            BackupJson(text).optJSONObject("web")?.let { w ->
+                // Bookmarks: added to yours unless "Replace my bookmarks" was chosen.
+                val mine = com.nova.iptv.data.WebStore.bookmarks.value
+                com.nova.iptv.data.WebStore.apply(w.toString())
+                if (!replaceBookmarks) com.nova.iptv.data.WebStore.mergeBookmarks(mine)
+            }
         }
         if (part == "web" || kind == "web") { android.util.Log.i("NovaTest", "BACKUP restored (web browser)"); return }
         storage.importBackup(text)
@@ -1992,7 +1997,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val indexExportTick = MutableStateFlow(0)
 
     private fun appVersion(): String =
-        runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "2.0"
+        runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "3.0"
 
     /**
      * Writes index-latest.novaindex (all accounts) — only when something changed since the last export.

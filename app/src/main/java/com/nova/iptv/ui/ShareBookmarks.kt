@@ -198,3 +198,80 @@ class SendBookmarksActivity : ComponentActivity() {
         }
     }
 }
+
+/**
+ * Web ⚙ › ↥ Import: every saved copy (date, time, how many bookmarks), a preview, then
+ * ＋ Add to my bookmarks (keeps yours) or ⇄ Replace my bookmarks; browser settings only when ticked.
+ */
+@Composable
+fun RestoreBookmarksDialog(onOtherFolder: () -> Unit, onClose: () -> Unit) {
+    val context = LocalContext.current
+    var copies by remember { mutableStateOf<List<WebStore.Copy>?>(null) }
+    var chosen by remember { mutableStateOf<WebStore.Copy?>(null) }
+    var settingsToo by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { copies = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { WebStore.copies() } }
+    val fmt = remember { java.text.SimpleDateFormat("d MMM yyyy · HH:mm", java.util.Locale.ENGLISH) }
+    Dialog(onDismissRequest = onClose) {
+        Panel {
+            val c = chosen
+            if (c == null) {
+                Text("↥ Restore bookmarks", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
+                Text("Saved copies (newest first) — choose one:", fontSize = 13.sp, color = Color(0xFF9FB3E0))
+                val list = copies
+                when {
+                    list == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                    list.isEmpty() -> Text("No saved copy found here. Choose another folder (e.g. Download/NovaIPTV).", fontSize = 14.sp)
+                    else -> LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(list) { cp ->
+                            FocusBox(onClick = { chosen = cp }, modifier = Modifier.fillMaxWidth()) { f ->
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .background(if (f) Color.White else Color(0xFF1F3159), RoundedCornerShape(10.dp))
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    val tag = when {
+                                        cp.name == "browser-latest.novaweb" -> " · latest"
+                                        cp.name.contains("before-emptying") -> " · before emptying"
+                                        else -> ""
+                                    }
+                                    Text(if (cp.at > 0) fmt.format(java.util.Date(cp.at)) else cp.name, modifier = Modifier.weight(1f),
+                                        color = if (f) Color(0xFF0D2236) else Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("${cp.count} bookmarks$tag", fontSize = 13.sp,
+                                        color = if (f) Color(0xFF0D2236) else if (cp.count == 0) Color(0xFFFF8A80) else Color(0xFF9FB3E0))
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SmallButton("📁 Other folder…", { onClose(); onOtherFolder() })
+                    SmallButton("Cancel", onClose)
+                }
+            } else {
+                val inCopy = remember(c) { WebStore.bookmarksIn(c.text) }
+                val missing = remember(c) { inCopy.count { WebStore.isNew(it.url) } }
+                Text(if (c.at > 0) fmt.format(java.util.Date(c.at)) else c.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
+                Text("${inCopy.size} bookmarks · $missing not in your list now", fontSize = 13.sp, color = Color(0xFF9FB3E0))
+                LazyColumn(Modifier.heightIn(max = 200.dp)) {
+                    items(inCopy) { b -> Text("★ " + b.title.ifBlank { b.url }, fontSize = 13.sp, maxLines = 1) }
+                }
+                fun done(replace: Boolean) {
+                    val n = WebStore.restoreCopy(c.text, replace, settingsToo)
+                    Toast.makeText(context, "Bookmarks restored: you now have $n", Toast.LENGTH_LONG).show()
+                    onClose()
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SmallButton("＋ Add to my bookmarks", { done(false) })
+                    SmallButton("⇄ Replace my bookmarks", { done(true) })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SmallButton((if (settingsToo) "☑" else "☐") + " Also browser settings", { settingsToo = !settingsToo })
+                    SmallButton("‹ Back", { chosen = null })
+                }
+                Text("Add = keeps yours and adds the missing ones (recommended). Replace = your list becomes exactly this copy.",
+                    fontSize = 12.sp, color = Color(0xFF9FB3E0))
+            }
+        }
+    }
+}

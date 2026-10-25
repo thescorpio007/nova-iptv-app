@@ -58,6 +58,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Version 3.0: build numbers start again at 1 (GitHub's run number − 94).
+      - name: Build number
+        run: echo "NOVA_BUILD=$(( ${{ github.run_number }} - 94 ))" >> "$GITHUB_ENV"
+
       - name: Build the APK
         id: build
         env:
@@ -68,7 +72,7 @@ jobs:
           set -o pipefail
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
           mkdir -p out
-          cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk"
+          cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-3.0-WEB-build-${NOVA_BUILD}.apk"
 
       # The special build for Android 5.0 and 6 (same app, lower minimum): ONLY when asked (manual run with android5 = true).
       # It never blocks the normal APK:
@@ -83,7 +87,7 @@ jobs:
           set -o pipefail
           rm -rf app/build/outputs/apk/release
           ./gradlew lintRelease assembleRelease -Plegacy=true --no-daemon 2>&1 | tee legacy.log
-          cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-2.0-WEB-Android5.0-build-${{ github.run_number }}.apk"
+          cp app/build/outputs/apk/release/*.apk "out/NovaIPTV-3.0-WEB-Android5.0-build-${NOVA_BUILD}.apk"
 
       - name: Keep the Android 5.0 build log
         if: steps.legacy.outcome == 'failure'
@@ -137,8 +141,8 @@ jobs:
       - name: Publish the APK on the Releases page (direct download link)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Nova IPTV build ${{ github.run_number }}
-          body: Install NovaIPTV-2.0-WEB-build-${{ github.run_number }}.apk on your phone or Android TV (Android 7.0 and newer).${{ steps.legacy.outcome == 'success' && format(' For Android 5.0 / 6 (older tablets) use NovaIPTV-2.0-WEB-Android5.0-build-{0}.apk.', github.run_number) || '' }}
+          tag_name: v3-build-${{ env.NOVA_BUILD }}
+          name: Nova IPTV 3.0 build ${{ env.NOVA_BUILD }}
+          body: Install NovaIPTV-3.0-WEB-build-${{ env.NOVA_BUILD }}.apk on your phone or Android TV (Android 7.0 and newer).${{ steps.legacy.outcome == 'success' && format(' For Android 5.0 / 6 (older tablets) use NovaIPTV-3.0-WEB-Android5.0-build-{0}.apk.', env.NOVA_BUILD) || '' }}
           files: out/NovaIPTV-*.apk
           make_latest: true

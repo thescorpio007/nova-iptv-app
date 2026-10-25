@@ -360,14 +360,15 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     LaunchedEffect(Unit) { if (!unlocked) PinGate.require(true) { unlocked = true } }
     LaunchedEffect(adLevel, kids) { AdBlock.ensure(adLevel, kids) }
 
+    var restoreListOpen by remember { mutableStateOf(false) }
     val pickTree = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
-        if (uri != null) CoroutineScope(Dispatchers.IO).launch {
-            val n = WebStore.setTree(uri)
-            main.post { Toast.makeText(context, if (n != null) "Browser restored: $n bookmarks" else "No browser file found in that folder", Toast.LENGTH_LONG).show() }
-        }
+        // The folder is only remembered; its copies then appear in the list to choose from.
+        if (uri != null) { WebStore.setTreeOnly(uri); restoreListOpen = true }
     }
+
+    if (restoreListOpen) RestoreBookmarksDialog(onOtherFolder = { pickTree.launch(Uri.parse(NOVA_FOLDER)) }) { restoreListOpen = false }
 
     fun site(): String = AdBlock.siteOf(WebState.pageSite)
     fun level(): String = pageLevel()
@@ -1142,7 +1143,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     }
                     WebScrollBar(webView)
                 }
-                if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { pickTree.launch(Uri.parse(NOVA_FOLDER)) },
+                if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { restoreListOpen = true },
                     canEdit = { f -> if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f() })
             }
         }
@@ -1467,7 +1468,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                                 SmallButton("✕", { settingsOpen = false })
                             }
                         }
-                        item { WebSettingsContent(page = WebState.pageUrl.takeIf { showPage }, onPick = { settingsOpen = false; pickTree.launch(Uri.parse(NOVA_FOLDER)) }) }
+                        item { WebSettingsContent(page = WebState.pageUrl.takeIf { showPage }, onPick = { settingsOpen = false; restoreListOpen = true }) }
                     }
                 }
             }
