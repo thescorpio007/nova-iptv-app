@@ -568,7 +568,7 @@ class Storage(context: Context) {
     // ---- 🌙 Night mode (sound)
     /** "light", "medium" or "strong": how much loud parts are reduced. */
     var nightStrength: String
-        get() = prefs.getString("night_strength", "medium") ?: "medium"
+        get() = prefs.getString("night_strength", "strong") ?: "strong"
         set(value) = prefs.edit().putString("night_strength", value).apply()
     /** "high", "medium" or "low": the ceiling loud parts never go above. */
     var nightCeiling: String

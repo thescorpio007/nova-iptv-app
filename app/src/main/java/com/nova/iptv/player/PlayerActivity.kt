@@ -480,6 +480,13 @@ class PlayerActivity : ComponentActivity() {
             onAspect = { cycleAspect(); resizeNames[resizeIndex] },
             onLoadSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
             onBrightness = { v -> setPictureBrightness(v) },
+            sound = object : VodControls.SoundHooks {
+                override fun nightOn() = this@PlayerActivity.nightOn()
+                override fun setNightOn(on: Boolean) { nightSession = on; applyNight() }
+                override fun nightChanged() = applyNight()
+                override fun boost() = boostLevel()
+                override fun setBoost(percent: Int) { boostSession = percent; applyBoost() }
+            },
             extraButtons = listOf(
                 "🌙 Night mode: Off" to { toggleNight() },
                 "🔊 Boost" to { showBoost() },
@@ -499,6 +506,10 @@ class PlayerActivity : ComponentActivity() {
 
         root.addView(playerView)
         root.addView(vod.view)
+        // Live TV: the ⚙ and CC at the bottom right open Nova's settings panel (audio, subtitles, night mode…).
+        listOf(androidx.media3.ui.R.id.exo_settings, androidx.media3.ui.R.id.exo_subtitle).forEach { id ->
+            playerView.findViewById<View>(id)?.setOnClickListener { playerView.hideController(); vod.openPanel() }
+        }
         boostBadge = TextView(this).apply {
             setTextColor(0xFF003311.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)

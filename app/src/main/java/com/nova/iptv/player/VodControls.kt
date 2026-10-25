@@ -113,7 +113,19 @@ class VodControls(
     /** ☀ bar moved: 0 darker … 0.5 normal … 1 brighter (done on the picture, also on a TV box). */
     private val onBrightness: (Float) -> Unit,
     private val extraButtons: List<Pair<String, () -> Unit>>,
+    /** Sound settings shown in the ⚙ panel (Night mode / Boost live in the player screen). */
+    private val sound: SoundHooks? = null,
 ) {
+    /** What the ⚙ panel needs from the player for Night mode and Boost. */
+    interface SoundHooks {
+        fun nightOn(): Boolean
+        fun setNightOn(on: Boolean)
+        /** Night mode settings changed in the panel: apply them now. */
+        fun nightChanged()
+        fun boost(): Int
+        fun setBoost(percent: Int)
+    }
+
     private val ctx: Context = activity
     /** Phone: smaller buttons with short labels so the whole row fits (see [PlayerUi]). */
     private val small = PlayerUi.compact(activity)
@@ -591,11 +603,14 @@ class VodControls(
         header.addView(circle("←", 20f) { hidePanel() }.apply { layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)) })
         header.addView(text("Settings", 22f, bold = true).apply { setPadding(dp(16), 0, 0, 0) })
         panelContent.addView(header)
-        trackSection("🎞  Video tracks", C.TRACK_TYPE_VIDEO, "No video track")
-        trackSection("♫  Audio tracks", C.TRACK_TYPE_AUDIO, "No audio track found")
-        trackSection("CC  Subtitle tracks", C.TRACK_TYPE_TEXT, "No subtitle found for this video")
+        // Order: voice first, then subtitles, night mode, boost, hide picture, subtitle look, video quality.
+        trackSection("♫  Audio (voice / language)", C.TRACK_TYPE_AUDIO, "No audio track found")
+        trackSection("CC  Subtitles", C.TRACK_TYPE_TEXT, "No subtitle found for this video")
         panelContent.addView(option("＋ Load subtitle file (.srt, .vtt, .ass)", false) { hidePanel(); onLoadSubtitle() })
+        soundSettings()
+        hideSettings()
         subtitleSettings()
+        trackSection("🎞  Video quality", C.TRACK_TYPE_VIDEO, "No video track")
     }
 
     private fun sectionTitle(t: String) {
@@ -662,8 +677,56 @@ class VodControls(
         }
     }
 
+    private fun label(t: String) {
+        panelContent.addView(text(t, 13f).apply { setTextColor(0xFF9FB3E0.toInt()); setPadding(0, dp(10), 0, 0) })
+    }
+
+    private fun soundSettings() {
+        val s = sound ?: return
+        sectionTitle("🌙  Night mode (sound)")
+        val on = s.nightOn()
+        panelContent.addView(option("On", on) { s.setNightOn(true) })
+        panelContent.addView(option("Off", !on) { s.setNightOn(false) })
+        label("Strength")
+        listOf("light" to "Light", "medium" to "Medium", "strong" to "Strong").forEach { (v, l) ->
+            panelContent.addView(option(l, storage.nightStrength == v) { storage.nightStrength = v; s.nightChanged() })
+        }
+        label("Maximum loudness")
+        listOf("high" to "High", "medium" to "Medium", "low" to "Low").forEach { (v, l) ->
+            panelContent.addView(option(l, storage.nightCeiling == v) { storage.nightCeiling = v; s.nightChanged() })
+        }
+        label("Dialogue clarity")
+        panelContent.addView(option("On", storage.nightDialogue) { storage.nightDialogue = true; s.nightChanged() })
+        panelContent.addView(option("Off", !storage.nightDialogue) { storage.nightDialogue = false; s.nightChanged() })
+        label("Reaction speed")
+        listOf("smooth" to "Smooth", "fast" to "Fast").forEach { (v, l) ->
+            panelContent.addView(option(l, storage.nightSpeed == v) { storage.nightSpeed = v; s.nightChanged() })
+        }
+        label("Automatic hours · applies to: Settings › Players")
+
+        sectionTitle("🔊  Volume boost")
+        val level = s.boost()
+        listOf(100, 125, 150, 175, 200).forEach { l ->
+            panelContent.addView(option(if (l == 100) "100 % (off)" else "$l %", level == l) { s.setBoost(l) })
+        }
+        label("Keep it for this film / channel / everything: 🔊 Boost button")
+    }
+
+    private fun hideSettings() {
+        sectionTitle("⬛  Hide picture (one OK)")
+        listOf("skip" to "Skip ahead (black 2 s, then jump)", "wait" to "Wait (black until the time is over)", "stay" to "Until I press OK").forEach { (v, l) ->
+            panelContent.addView(option(l, storage.hideMode == v) { storage.hideMode = v })
+        }
+        if (storage.hideMode != "stay") {
+            label("Hide time")
+            listOf(15 to "15 s", 30 to "30 s", 60 to "1 min").forEach { (v, l) ->
+                panelContent.addView(option(l, storage.hideSeconds == v) { storage.hideSeconds = v })
+            }
+        }
+    }
+
     private fun subtitleSettings() {
-        sectionTitle("⚙  Subtitle settings")
+        sectionTitle("⚙  Subtitle look")
         val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         row.addView(text("Font size  ${storage.subtitleSize}", 15f).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
