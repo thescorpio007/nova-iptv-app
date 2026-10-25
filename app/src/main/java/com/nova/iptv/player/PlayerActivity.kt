@@ -90,6 +90,8 @@ class PlayerActivity : ComponentActivity() {
     private var autoUnhide: Runnable? = null
     /** "Show again by itself" for the current hide (ms, 0 = off); each new hide starts at 15 s. */
     private var hideAutoMs = 15_000L
+    private var hideSkipTask: Runnable? = null
+    private var hideWaitReady: Runnable? = null
     private val hideBadgeTask = Runnable { boostBadge?.visibility = View.GONE }
     private lateinit var hideCover: FrameLayout
     private lateinit var hideTitle: TextView
@@ -1004,11 +1006,16 @@ class PlayerActivity : ComponentActivity() {
         hiddenAt = android.os.SystemClock.uptimeMillis()
         playerView.hideController()
         if (::vod.isInitialized) vod.hide()
-        // Sound off too, and everything back by itself after 15 s (both can be changed in the options: OK OK).
+        // Sound off too. Then, by the setting (Settings › Players › Hide picture, or OK OK):
+        //  skip = black 2 s, then jump ahead by the rest of the hide time; wait = black until it is over; stay = until OK.
         player?.volume = 0f
         hideMuted = true
-        hideAutoMs = 15_000L
-        scheduleAutoUnhide()
+        hideAutoMs = app.storage.hideSeconds.coerceIn(5, 120) * 1000L
+        when (app.storage.hideMode) {
+            "stay" -> { hideAutoMs = 0L; scheduleAutoUnhide() }
+            "wait" -> scheduleAutoUnhide()
+            else -> Runnable { hideSkipTask = null; skipHiddenPart() }.also { hideSkipTask = it; handler.postDelayed(it, 2_000) }
+        }
         boostBadge?.visibility = View.GONE
         updateHideCover()
         hideCover.visibility = View.VISIBLE
@@ -1017,7 +1024,52 @@ class PlayerActivity : ComponentActivity() {
         Log.i("NovaTest", "PICTURE hidden")
     }
 
+    /** Skip mode, 2 s after hiding: jump ahead by the rest of the hide time (live TV: only inside what is stored ahead). */
+    private fun skipHiddenPart() {
+        if (!pictureHidden) return
+        val item = current ?: return
+        val p = player ?: return
+        val want = ((hideAutoMs - 2_000L) / 1000L).toInt().coerceAtLeast(1)
+        var jumped: Int
+        if (!item.isLive) {
+            vod.seekBy(want * 1000L)
+            jumped = want
+        } else {
+            // Keep at least 5 s ahead so the picture doesn't stall right after the jump.
+            val ahead = (behindLiveSeconds() ?: 0) - 5
+            jumped = minOf(want, ahead).coerceAtLeast(0)
+            if (jumped > 0) {
+                if (relay != null) timeshift(jumped)
+                else p.seekTo(minOf(p.currentPosition + jumped * 1000L, p.bufferedPosition - 2_000L))
+            }
+        }
+        Log.i("NovaTest", "PICTURE hidden: skipped $jumped of $want s")
+        // Not enough stored ahead (live): stay black until the rest of the time has really passed.
+        val rest = (want - jumped) * 1000L
+        showWhenPlaying(rest)
+    }
+
+    /** Shows the picture once the player plays again after the jump (never the old frame), after [extraMs]. */
+    private fun showWhenPlaying(extraMs: Long) {
+        hideWaitReady?.let { handler.removeCallbacks(it) }
+        val start = android.os.SystemClock.uptimeMillis()
+        val check = object : Runnable {
+            override fun run() {
+                if (!pictureHidden) return
+                val p = player
+                val elapsed = android.os.SystemClock.uptimeMillis() - start
+                val ready = p != null && p.playbackState == Player.STATE_READY && p.isPlaying
+                if ((ready && elapsed >= extraMs + 500) || elapsed > extraMs + 8_000) { hideWaitReady = null; showPicture() }
+                else handler.postDelayed(this, 200)
+            }
+        }
+        hideWaitReady = check
+        handler.postDelayed(check, 300)
+    }
+
     private fun showPicture() {
+        hideSkipTask?.let { handler.removeCallbacks(it) }; hideSkipTask = null
+        hideWaitReady?.let { handler.removeCallbacks(it) }; hideWaitReady = null
         pendingUnhide?.let { handler.removeCallbacks(it) }; pendingUnhide = null
         autoUnhide?.let { handler.removeCallbacks(it) }; autoUnhide = null
         if (hideMuted) { player?.volume = 1f; hideMuted = false }
@@ -1046,16 +1098,24 @@ class PlayerActivity : ComponentActivity() {
             hideMuted = !hideMuted
             player?.volume = if (hideMuted) 0f else 1f
         }
-        fun after(label: String, ms: Long) {
-            choices += ((if (hideAutoMs == ms) "✓ " else "") + label) to {
-                hideAutoMs = ms
-                scheduleAutoUnhide()
+        // When I hide the picture (saved for the next times too).
+        val st = app.storage
+        fun mode(label: String, m: String) {
+            choices += ((if (st.hideMode == m) "✓ " else "") + label) to { st.hideMode = m }
+        }
+        mode("Skip ahead (black 2 s, then jump)", "skip")
+        mode("Wait (black until the time is over)", "wait")
+        mode("Stay hidden until I press OK", "stay")
+        fun time(label: String, sec: Int) {
+            choices += ((if (st.hideSeconds == sec) "✓ " else "") + label) to {
+                st.hideSeconds = sec
+                // Waiting now: the new time applies to this hide too.
+                if (st.hideMode == "wait" && hideSkipTask == null && hideWaitReady == null) { hideAutoMs = sec * 1000L; scheduleAutoUnhide() }
             }
         }
-        after("Show again by itself: Off", 0)
-        after("Show again by itself in 15 s", 15_000)
-        after("Show again by itself in 30 s", 30_000)
-        after("Show again by itself in 1 min", 60_000)
+        time("Hide time: 15 s", 15)
+        time("Hide time: 30 s", 30)
+        time("Hide time: 1 min", 60)
         android.app.AlertDialog.Builder(this)
             .setTitle("Hidden picture options")
             .setItems(choices.map { it.first }.toTypedArray()) { _, i -> choices[i].second() }

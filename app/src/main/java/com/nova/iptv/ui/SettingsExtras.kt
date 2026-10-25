@@ -541,6 +541,8 @@ fun PlayerSettings(vm: MainViewModel) {
 
     NightModeCard()
 
+    HidePictureCard()
+
     SettingsCard("Built-in player") {
         Text("Video decoder", fontWeight = FontWeight.Medium)
         Hint("Hardware uses the box's chip (needed for 4K, HEVC and HDR). Software can help with a few unusual SD/HD streams but is slow for 4K.")
@@ -1513,5 +1515,29 @@ private fun NightModeCard() {
         Text("Applies to", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("all" to "Everything", "vod" to "Films & series", "live" to "Live TV"), scope) { scope = it; st.nightScope = it }
         Hint("Works with Nova's own sound decoding (the default). Not applied to Dolby / DTS sent untouched to a soundbar. The player's 🌙 button always wins for the video you are watching.")
+    }
+}
+
+
+/** Settings › Players › ⬛ Hide picture: what one OK does while watching (fake "signal error" over the picture). */
+@Composable
+private fun HidePictureCard() {
+    val context = LocalContext.current
+    val st = (context.applicationContext as com.nova.iptv.NovaApp).storage
+    var mode by remember { mutableStateOf(st.hideMode) }
+    var secs by remember { mutableStateOf(st.hideSeconds) }
+    SettingsCard("⬛ Hide picture", summary = when (mode) { "skip" -> "skip ahead"; "wait" -> "wait"; else -> "until OK" } + " · ${if (secs >= 60) "1 min" else "$secs s"}") {
+        Hint("One OK while watching covers the picture with a fake “Video signal error” and turns the sound off. OK again shows it; OK twice opens its options.")
+        Text("When I hide the picture", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("skip" to "Skip ahead", "wait" to "Wait", "stay" to "Until I press OK"), mode) { mode = it; st.hideMode = it }
+        Hint(when (mode) {
+            "skip" -> "Black for 2 s, then Nova jumps ahead by the rest of the hide time, so the scene passes quickly. Live TV: only inside what is stored ahead (a jump uses up part of your safety margin); with less stored, the black stays until the time has passed."
+            "wait" -> "Black (sound off) until the hide time is over, then the picture and sound come back."
+            else -> "Black (sound off) until you press OK."
+        })
+        if (mode != "stay") {
+            Text("Hide time", fontWeight = FontWeight.Medium)
+            ChoiceRow(listOf("15" to "15 s", "30" to "30 s", "60" to "1 min"), secs.toString()) { secs = it.toInt(); st.hideSeconds = secs }
+        }
     }
 }

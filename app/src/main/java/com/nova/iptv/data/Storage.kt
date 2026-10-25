@@ -555,6 +555,16 @@ class Storage(context: Context) {
 
     fun setPlayerFor(kind: String, value: String) = prefs.edit().putString("player_$kind", value).apply()
 
+    // ---- ⬛ Hide picture
+    /** "skip" (black 2 s, then jump ahead by the rest of the hide time), "wait" (black until the time is over) or "stay" (until OK). */
+    var hideMode: String
+        get() = prefs.getString("hide_mode", "skip") ?: "skip"
+        set(value) = prefs.edit().putString("hide_mode", value).apply()
+    /** How much of the video is hidden: 15, 30 or 60 s. */
+    var hideSeconds: Int
+        get() = prefs.getInt("hide_seconds", 15)
+        set(value) = prefs.edit().putInt("hide_seconds", value).apply()
+
     // ---- 🌙 Night mode (sound)
     /** "light", "medium" or "strong": how much loud parts are reduced. */
     var nightStrength: String
