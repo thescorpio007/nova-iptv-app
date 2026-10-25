@@ -62,6 +62,18 @@
         </activity>
 
         <!-- "Open with Nova IPTV": videos (files and links) and M3U playlists from other apps. -->
+        <!-- QR page on the TV › "Send my Nova bookmarks": opens Nova here and sends them to the TV. -->
+        <activity
+            android:name=".ui.SendBookmarksActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="novaiptv" android:host="send" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".ui.OpenWithActivity"
             android:exported="true"

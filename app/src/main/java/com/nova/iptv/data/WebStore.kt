@@ -162,6 +162,17 @@ object WebStore {
         else sorted(listOf(Bookmark(title.ifBlank { Uri.parse(url).host ?: url }, url, System.currentTimeMillis())) + bookmarks.value)
         save()
     }
+    /** Bookmarks from another device: added to these (same address = skipped), dates kept, nothing removed. Returns how many were added. */
+    fun mergeBookmarks(list: List<Bookmark>): Int {
+        val have = bookmarks.value.map { it.url }.toHashSet()
+        val now = System.currentTimeMillis()
+        val add = list.filter { it.url.isNotBlank() && have.add(it.url) }.map { if (it.at > 0) it else it.copy(at = now) }
+        if (add.isEmpty()) return 0
+        bookmarks.value = sorted(add + bookmarks.value)
+        save()
+        return add.size
+    }
+    fun isNew(url: String) = bookmarks.value.none { it.url == url }
     fun removeBookmark(b: Bookmark) { bookmarks.value = bookmarks.value - b; save() }
     fun moveBookmark(b: Bookmark, delta: Int) {
         val l = bookmarks.value.toMutableList(); val i = l.indexOf(b); val j = i + delta

@@ -1645,8 +1645,19 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
     val context = LocalContext.current
     var resetOpen by remember { mutableStateOf(false) }
     if (resetOpen) ResetBrowserDialog { resetOpen = false }
+    var sendOpen by remember { mutableStateOf(false) }
+    var qrOpen by remember { mutableStateOf(false) }
+    if (sendOpen) SendBookmarksDialog { sendOpen = false }
+    if (qrOpen) ReceiveBookmarksQrDialog { qrOpen = false }
     val nf = remember { java.text.NumberFormat.getIntegerInstance() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SectionTitleWeb("📲 SHARE BOOKMARKS (HOME WI-FI)")
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SmallButton("📲 Send bookmarks to another Nova", { sendOpen = true })
+            SmallButton("📷 Receive bookmarks (QR)", { qrOpen = true })
+        }
+        Text("Between your devices on the same Wi-Fi. The receiving device asks before adding; nothing is removed.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SectionTitleWeb("ADS & POP-UPS")
         androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("off" to "Off", "normal" to "Normal", "strong" to "Strong", "maximum" to "Maximum").forEach { (k, l) ->

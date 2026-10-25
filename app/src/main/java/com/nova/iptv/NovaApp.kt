@@ -88,5 +88,7 @@ class NovaApp : Application() {
         com.nova.iptv.data.FilterLists.init(this, http)
         com.nova.iptv.data.WebStore.init(this)
         com.nova.iptv.data.AdBlock.init(this, http)
+        // Bookmarks between Nova devices on the home Wi-Fi (Web ⚙ › Send / Receive bookmarks).
+        runCatching { com.nova.iptv.data.LocalShare.start(this, http) }
     }
 }

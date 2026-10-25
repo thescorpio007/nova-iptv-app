@@ -104,6 +104,8 @@ class MainActivity : ComponentActivity() {
                         FooterStrip(settings.clockPosition, showClock = !onLogin)
                         PinGateHost(vm)
                     }
+                    // Bookmarks sent from another Nova on the Wi-Fi: "Add them?" over any screen.
+                    IncomingBookmarksHost()
                 }
             }
         }
