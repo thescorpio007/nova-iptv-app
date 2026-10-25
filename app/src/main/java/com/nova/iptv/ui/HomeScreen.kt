@@ -3,6 +3,8 @@ package com.nova.iptv.ui
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -182,9 +184,21 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (!tab.zone) SmallTab("←", false) { vm.setTab(Tab.LIVE) }
-                    Tab.entries.filter { !it.top }.forEach { t -> SmallTab(if (t == Tab.LINK) "🔗 Link" else t.label, t == tab) { vm.setTab(t) } }
-                    Spacer(Modifier.weight(1f))
+                    // Phones: icons (hold one for its name); they scroll if needed, so ✎ Edit and ⟳ always stay on screen.
+                    val ctx = androidx.compose.ui.platform.LocalContext.current
+                    Row(
+                        Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (!tab.zone) SmallTab("←", false) { vm.setTab(Tab.LIVE) }
+                        Tab.entries.filter { !it.top }.forEach { t ->
+                            val icon = when (t) { Tab.SEARCH -> "🔍"; Tab.RECENT -> "🕘"; Tab.DOWNLOADS -> "⬇"; Tab.LINK -> "🔗"; Tab.SETTINGS -> "⚙"; else -> t.label }
+                            IconTab(icon, t == tab, onLong = {
+                                android.widget.Toast.makeText(ctx, t.label.removePrefix("🔗 "), android.widget.Toast.LENGTH_SHORT).show()
+                            }) { vm.setTab(t) }
+                        }
+                    }
                     if (tab.zone) {
                         EditButton(edit, big = false) { if (edit) vm.setEditMode(false) else PinGate.require(vm.appStorage.hasPin) { vm.setEditMode(true) } }
                         FocusBox(onClick = vm::reloadCurrent, shape = RoundedCornerShape(20.dp)) {
@@ -248,6 +262,20 @@ private fun ZoneButton(t: Tab, selected: Boolean, onClick: () -> Unit, modifier:
             fontSize = 14.sp,
             maxLines = 1,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun IconTab(icon: String, selected: Boolean, onLong: () -> Unit, onClick: () -> Unit) {
+    FocusBox(onClick = onClick, onLongClick = onLong, shape = RoundedCornerShape(16.dp), selected = selected) {
+        Text(
+            icon,
+            modifier = Modifier
+                .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color(0x14FFFFFF), RoundedCornerShape(16.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            fontSize = 17.sp,
+            maxLines = 1,
         )
     }
 }
