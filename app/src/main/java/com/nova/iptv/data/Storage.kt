@@ -742,8 +742,12 @@ class Storage(context: Context) {
     fun exportLists(): String {
         val values = JSONObject()
         prefs.all.filterKeys { isListKey(it) }.forEach { (k, v) -> if (v is String) values.put(k, v) }
-        return JSONObject().put("app", "NovaIPTV").put("kind", "lists").put("version", 1)
-            .put("created", System.currentTimeMillis()).put("lists", values).toString(2)
+        // Which server each saved list belongs to (address + username, never the password), so the lists find their
+        // server again even after it was added by hand on another device (it then has a new internal ID).
+        val servers = JSONObject()
+        accounts.forEach { a -> servers.put(a.id, JSONObject().put("server", serverOf(a.server)).put("user", a.username)) }
+        return JSONObject().put("app", "NovaIPTV").put("kind", "lists").put("version", 2)
+            .put("created", System.currentTimeMillis()).put("servers", servers).put("lists", values).toString(2)
     }
 
     /** What a lists backup holds: "24 favorites · 6 groups in your order · 3 hidden" ("" = empty). */
@@ -776,11 +780,33 @@ class Storage(context: Context) {
         val root = try { JSONObject(text) } catch (e: Exception) { throw IllegalArgumentException("This file is not a Nova lists backup") }
         if (root.optString("app") != "NovaIPTV" || root.optString("kind") != "lists") throw IllegalArgumentException("This file is not a Nova lists backup (.bakL)")
         val values = root.optJSONObject("lists") ?: throw IllegalArgumentException("The lists backup is empty")
+        // Old server ID → the ID the same server (same address + username) has here.
+        val moves = HashMap<String, String>()
+        root.optJSONObject("servers")?.let { saved ->
+            val here = accounts
+            saved.keys().forEach { oldId ->
+                if (here.any { it.id == oldId }) return@forEach
+                val o = saved.optJSONObject(oldId) ?: return@forEach
+                val srv = o.optString("server"); val user = o.optString("user")
+                val match = here.firstOrNull { serverOf(it.server) == srv && it.username == user }
+                    ?: here.filter { it.username == user && hostOf(it.server) == hostOf(srv) }.singleOrNull()
+                if (match != null) moves[oldId] = match.id
+            }
+        }
+        lastListsMatched = moves.size
+        fun moved(v: String): String { var t = v; moves.forEach { (o, n) -> t = t.replace(o, n) }; return t }
         val e = prefs.edit()
         prefs.all.keys.filter { isListKey(it) }.forEach { e.remove(it) }
-        values.keys().forEach { k -> if (isListKey(k)) e.putString(k, values.optString(k)) }
+        values.keys().forEach { k -> if (isListKey(k)) e.putString(moved(k), moved(values.optString(k))) }
         e.apply()
     }
+
+    /** Servers matched by address + username in the last lists restore (shown in the message). */
+    var lastListsMatched = 0
+        private set
+
+    private fun serverOf(url: String) = url.trim().lowercase().removePrefix("http://").removePrefix("https://").trimEnd('/')
+    private fun hostOf(url: String) = serverOf(url).substringBefore('/').substringBefore(':')
 
     /** Replaces all saved data with the backup. Throws IllegalArgumentException if the file is not a Nova backup. */
     fun importBackup(text: String) {

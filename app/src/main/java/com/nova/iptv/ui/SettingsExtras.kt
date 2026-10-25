@@ -1333,7 +1333,10 @@ private fun ListsBackup(vm: MainViewModel) {
             yes = "Yes, restore",
             onYes = {
                 runCatching { vm.restoreLists(text) }
-                    .onSuccess { Toast.makeText(context, "Lists restored", Toast.LENGTH_SHORT).show() }
+                    .onSuccess {
+                        val n = vm.appStorage.lastListsMatched
+                        Toast.makeText(context, "Lists restored" + if (n > 0) " ($n server${if (n > 1) "s" else ""} found by address & username)" else "", Toast.LENGTH_LONG).show()
+                    }
                     .onFailure { Toast.makeText(context, it.message ?: "Could not restore", Toast.LENGTH_LONG).show() }
                 ask = null
             },
