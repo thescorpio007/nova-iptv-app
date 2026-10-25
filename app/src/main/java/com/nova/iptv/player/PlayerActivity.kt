@@ -391,6 +391,8 @@ class PlayerActivity : ComponentActivity() {
             isHorizontalScrollBarEnabled = false
             addView(buttons)
         }
+        // Option A: the row always fits the screen width (smaller text → short labels → icons).
+        RowFit.attach(buttonScroller, buttons, 14f, 12f)
 
         infoBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

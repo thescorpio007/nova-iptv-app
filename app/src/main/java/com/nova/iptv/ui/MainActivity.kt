@@ -106,6 +106,8 @@ class MainActivity : ComponentActivity() {
                     }
                     // Bookmarks sent from another Nova on the Wi-Fi: "Add them?" over any screen.
                     IncomingBookmarksHost()
+                    // A whole Nova configuration sent from another device (phone → box…): code, then restore.
+                    IncomingTransferHost(vm)
                 }
             }
         }
@@ -127,12 +129,16 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_OPEN_WEB = "com.nova.iptv.OPEN_WEB"
+        const val EXTRA_FROM_BOOT = "from_boot"
     }
 
     private var autoPlayed = false
 
     override fun onPostCreate(savedInstanceState: Bundle?) {
         super.onPostCreate(savedInstanceState)
+        if (savedInstanceState == null && intent?.getBooleanExtra(EXTRA_FROM_BOOT, false) == true) {
+            android.widget.Toast.makeText(this, "Nova started with the box", android.widget.Toast.LENGTH_SHORT).show()
+        }
         if (savedInstanceState == null && intent?.action == ACTION_OPEN_WEB) { handleWebIntent(intent); autoPlayed = true }
         // Start the last watched channel / video when the app opens (Settings → Start-up).
         if (savedInstanceState == null && !autoPlayed) {

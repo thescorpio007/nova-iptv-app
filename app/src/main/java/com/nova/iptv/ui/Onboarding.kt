@@ -215,13 +215,13 @@ fun WelcomeScreen(vm: MainViewModel, isTv: Boolean) {
                             Text("  · IPTV player", color = Color(0xFF9FB2D8), fontSize = 14.sp) }
                         iptvTile(Modifier.height(200.dp)); smallTiles()
                     }
-                    Column(Modifier.weight(1f).padding(top = 52.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { about(); webTile(); DownloadsTile(vm) }
+                    Column(Modifier.weight(1f).padding(top = 52.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { ReceiveNovaQr(inline = true); webTile(); about(); DownloadsTile(vm) }
                 }
             } else {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) { NovaMark(34); Spacer(Modifier.width(8.dp)); NovaName(26)
                         Text("  · IPTV player", color = Color(0xFF9FB2D8), fontSize = 13.sp) }
-                    iptvTile(Modifier.height(190.dp)); smallTiles(); about(); webTile(); DownloadsTile(vm)
+                    iptvTile(Modifier.height(190.dp)); ReceiveNovaQr(inline = true); smallTiles(); about(); webTile(); DownloadsTile(vm)
                     Text("Nova IPTV · version " + appVersion() + "   ·   Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.45f), fontSize = 11.sp)
                 }
             }

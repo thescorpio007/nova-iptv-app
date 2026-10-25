@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Saving to Download/NovaIPTV: needed only on Android 10 and older -->
@@ -62,6 +64,26 @@
         </activity>
 
         <!-- "Open with Nova IPTV": videos (files and links) and M3U playlists from other apps. -->
+        <receiver android:name=".ui.BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- QR page on the TV › "Send from Nova on this phone": choose what to send (Everything, IPTV, Web, lists). -->
+        <activity
+            android:name=".ui.TransferActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="novaiptv" android:host="transfer" />
+            </intent-filter>
+        </activity>
+
         <!-- QR page on the TV › "Send my Nova bookmarks": opens Nova here and sends them to the TV. -->
         <activity
             android:name=".ui.SendBookmarksActivity"

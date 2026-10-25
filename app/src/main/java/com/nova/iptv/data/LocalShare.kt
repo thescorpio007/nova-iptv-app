@@ -46,6 +46,12 @@ object LocalShare {
 
     /** The QR page answers until this time (0 = closed). */
     @Volatile var pageOpenUntil = 0L
+    /** What the QR page offers: "bookmarks" or "transfer" (all of Nova). */
+    @Volatile var pageMode = "bookmarks"
+
+    /** A whole Nova configuration sent by another device (box asks, then restores). [locked] = encrypted with a 4-digit code. */
+    data class Transfer(val from: String, val kind: String, val summary: String, val locked: Boolean, val text: String)
+    val incomingTransfer = MutableStateFlow<Transfer?>(null)
 
     private lateinit var app: Context
     private lateinit var http: OkHttpClient
@@ -175,7 +181,7 @@ object LocalShare {
             if (h.isEmpty()) break
             if (h.startsWith("Content-Length:", true)) length = h.substringAfter(':').trim().toIntOrNull() ?: 0
         }
-        val bytes = ByteArray(length.coerceIn(0, 2_000_000))
+        val bytes = ByteArray(length.coerceIn(0, 30_000_000))
         var read = 0
         while (read < bytes.size) { val n = ins.read(bytes, read, bytes.size - read); if (n < 0) break; read += n }
         val body = String(bytes, 0, read, Charsets.UTF_8)
@@ -191,7 +197,16 @@ object LocalShare {
                 incoming.value = Offer(o.optString("from").ifBlank { "another device" }, list)
                 respond(c, 200, "text/plain", "offered")
             }
-            method == "GET" && path.substringBefore('?') == "/" && pageOpen -> respond(c, 200, "text/html; charset=utf-8", page())
+            method == "POST" && path == "/transfer" -> {
+                val o = runCatching { JSONObject(body) }.getOrNull() ?: return respond(c, 400, "text/plain", "bad request")
+                incomingTransfer.value = Transfer(
+                    o.optString("from").ifBlank { "another device" }, o.optString("kind", "all"),
+                    o.optString("summary"), o.optBoolean("locked"), o.optString("data"),
+                )
+                respond(c, 200, "text/plain", "offered")
+            }
+            method == "GET" && path.substringBefore('?') == "/" && pageOpen ->
+                respond(c, 200, "text/html; charset=utf-8", if (pageMode == "transfer") transferPage() else page())
             method == "POST" && path == "/links" && pageOpen -> {
                 val text = URLDecoder.decode(body.substringAfter("links=", ""), "UTF-8")
                 val urls = Regex("""https?://\S+""").findAll(text).map { it.value.trimEnd(',', ';') }.distinct().toList()
@@ -218,6 +233,28 @@ p{color:#9fb3e0}.n{color:#5ff2d6;font-weight:700}</style></head><body>
 <p>From Nova on this phone:</p><a class=b href="$intent">📲 Send my Nova bookmarks</a>
 <p>Or paste one or more web addresses:</p><form method="post" action="/links"><textarea name="links" placeholder="https://…"></textarea><br><button>Add to the TV</button></form>
 </body></html>"""
+    }
+
+    private fun transferPage(): String {
+        val me = deviceName(app)
+        val addr = "${localAddress()}:${port()}"
+        val intent = "intent://transfer?to=$addr#Intent;scheme=novaiptv;package=${app.packageName};end"
+        return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Send Nova</title><style>body{font-family:sans-serif;background:#0f1d3a;color:#fff;margin:0;padding:18px}
+a.b{display:inline-block;background:#39d98a;color:#062;border-radius:18px;padding:14px 20px;font-weight:700;font-size:17px;text-decoration:none;margin:10px 0}
+p{color:#9fb3e0}</style></head><body>
+<h2>📺 Send Nova to “$me”</h2><p>Opens Nova on this phone: choose Everything, IPTV only, Web only or My lists. The TV asks before anything is restored.</p>
+<a class=b href="$intent">📲 Send from Nova on this phone</a><p>Nova must be installed on this phone.</p></body></html>"""
+    }
+
+    /** Sends a whole Nova configuration (or a part) to another Nova; null when done, or what went wrong. */
+    suspend fun sendTransfer(host: String, port: Int, kind: String, data: String, summary: String, locked: Boolean): String? = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("from", deviceName(app)).put("kind", kind).put("summary", summary).put("locked", locked).put("data", data)
+        runCatching {
+            http.newBuilder().readTimeout(60, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS).build()
+                .newCall(Request.Builder().url("http://$host:$port/transfer").post(body.toString().toRequestBody("application/json".toMediaType())).build())
+                .execute().use { r -> if (r.isSuccessful) null else "The other device answered ${r.code}" }
+        }.getOrElse { "Could not reach it (${it.message ?: "no answer"}). Is Nova open on it, on the same Wi-Fi?" }
     }
 
     private fun respond(c: Socket, code: Int, type: String, text: String) {

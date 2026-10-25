@@ -555,6 +555,11 @@ class Storage(context: Context) {
 
     fun setPlayerFor(kind: String, value: String) = prefs.edit().putString("player_$kind", value).apply()
 
+    /** Open Nova when the box (phone) finishes starting. Needs "Display over other apps" (Android 10+). */
+    var startOnBoot: Boolean
+        get() = prefs.getBoolean("start_on_boot", false)
+        set(value) = prefs.edit().putBoolean("start_on_boot", value).apply()
+
     // ---- ⬛ Hide picture
     /** "skip" (black 2 s, then jump ahead by the rest of the hide time), "wait" (black until the time is over) or "stay" (until OK). */
     var hideMode: String

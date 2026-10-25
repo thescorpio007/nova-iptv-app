@@ -208,11 +208,55 @@ fun DisplaySettings(vm: MainViewModel) {
     }
 
     SettingsCard("Start-up") {
+        val ctx = LocalContext.current
+        val st = vm.appStorage
+        var boot by remember { mutableStateOf(st.startOnBoot) }
+        var askPermission by remember { mutableStateOf(false) }
+        // Re-read the permission when coming back from Android's screen.
+        var allowed by remember { mutableStateOf(true) }
+        val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+        androidx.compose.runtime.DisposableEffect(lifecycle) {
+            fun check() { allowed = android.os.Build.VERSION.SDK_INT < 23 || android.provider.Settings.canDrawOverlays(ctx) }
+            check()
+            val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) check() }
+            lifecycle.lifecycle.addObserver(obs)
+            onDispose { lifecycle.lifecycle.removeObserver(obs) }
+        }
+        fun openPermission() {
+            val pkg = android.net.Uri.parse("package:" + ctx.packageName)
+            val ok = runCatching {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); true
+            }.getOrDefault(false) || runCatching {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); true
+            }.getOrDefault(false)
+            if (!ok) Toast.makeText(ctx, "Open Android Settings › Apps › Nova IPTV › Display over other apps", Toast.LENGTH_LONG).show()
+        }
+        Text("Open Nova when the box starts", fontWeight = FontWeight.Medium)
+        Hint("The box goes straight into Nova after switching on (about 10–30 s after Android's home screen).")
+        ChoiceRow(listOf("off" to "Off", "on" to "On"), if (boot) "on" else "off") {
+            boot = it == "on"; st.startOnBoot = boot
+            if (boot && !allowed) askPermission = true
+        }
+        if (boot) {
+            Text(
+                if (allowed) "✓ “Display over other apps” allowed" else "⚠ “Display over other apps” is needed so Android lets Nova open by itself",
+                fontSize = 13.sp, color = if (allowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            )
+            if (!allowed) OutlinedButton(onClick = { openPermission() }) { Text("Open the Android screen") }
+        }
+        Text("When Nova opens", fontWeight = FontWeight.Medium)
         Hint("Start the last channel or video you watched automatically when the app opens.")
         ChoiceRow(
             listOf("on" to "Play last watched", "off" to "Open the menu"),
             if (s.autoPlayLast) "on" else "off",
         ) { vm.setAutoPlayLast(it == "on") }
+        if (askPermission) androidx.compose.material3.AlertDialog(
+            onDismissRequest = { askPermission = false },
+            title = { Text("One permission needed") },
+            text = { Text("Android lets an app open by itself at start only with “Display over other apps”. On the next screen, select Nova IPTV and switch it on, then press Back.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { askPermission = false; openPermission() }) { Text("Open the Android screen") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { askPermission = false }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -428,6 +472,7 @@ private fun HiddenItemsDialog(vm: MainViewModel, entries: List<HiddenEntry>, onD
 
 // =============================================================================== BACKUP
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun BackupSettings(vm: MainViewModel) {
     val context = LocalContext.current
@@ -452,6 +497,16 @@ fun BackupSettings(vm: MainViewModel) {
             Button(onClick = { showSave = true }) { Text("Save backup") }
             RestoreBackupButton(vm, "Restore a backup")
         }
+        Text("📲 Between your devices (home Wi-Fi)", fontWeight = FontWeight.Medium)
+        Hint("Phone → TV box (or any Nova): no file to copy. Show the QR on the device that receives, scan it with the phone; or send from here to a Nova found on the Wi-Fi. It always asks before restoring.")
+        var sendNova by remember { mutableStateOf(false) }
+        var receiveNova by remember { mutableStateOf(false) }
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = { receiveNova = true }) { Text("📷 Receive from another device") }
+            OutlinedButton(onClick = { sendNova = true }) { Text("📲 Send to another Nova") }
+        }
+        if (sendNova) SendNovaDialog { sendNova = false }
+        if (receiveNova) ReceiveNovaQr(inline = false) { receiveNova = false }
         ListsBackup(vm)
     }
     if (showSave) SaveBackupDialog(

@@ -366,6 +366,8 @@ class VodControls(
             isHorizontalScrollBarEnabled = false
             setPadding(0, dp(6), 0, 0)
             addView(buttons)
+            // Option A: the row always fits the screen width (smaller text → short labels → icons).
+            RowFit.attach(this, buttons, 15f, 12f)
         })
         col.addView(text(com.nova.iptv.ui.SIGNATURE, 10f).apply {
             alpha = 0.55f

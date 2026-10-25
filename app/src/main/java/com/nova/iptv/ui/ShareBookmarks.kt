@@ -44,18 +44,18 @@ import com.nova.iptv.data.LocalShare
 import com.nova.iptv.data.WebStore
 import kotlinx.coroutines.launch
 
-private val GREEN = Color(0xFF5FF2D6)
+internal val GREEN = Color(0xFF5FF2D6)
 
 /** Landscape / TV: content side by side; portrait: stacked (nothing squeezed into a narrow column). */
 @Composable
-private fun wide(): Boolean {
+internal fun wide(): Boolean {
     val c = androidx.compose.ui.platform.LocalConfiguration.current
     return c.screenWidthDp > c.screenHeightDp && c.screenWidthDp >= 600
 }
 
 /** A full-width button with its label on one line (never broken inside a word). */
 @Composable
-private fun WideButton(label: String, primary: Boolean = false, onClick: () -> Unit) {
+internal fun WideButton(label: String, primary: Boolean = false, onClick: () -> Unit) {
     FocusBox(onClick = onClick, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) { f ->
         Text(
             label,
@@ -74,7 +74,7 @@ private fun WideButton(label: String, primary: Boolean = false, onClick: () -> U
 }
 
 @Composable
-private fun Panel(content: @Composable () -> Unit) {
+internal fun Panel(content: @Composable () -> Unit) {
     Column(
         Modifier.padding(horizontal = 14.dp).widthIn(max = if (wide()) 760.dp else 560.dp).fillMaxWidth()
             .background(Color(0xFF16264A), RoundedCornerShape(16.dp))
@@ -134,7 +134,7 @@ fun SendBookmarksDialog(onClose: () -> Unit) {
     }
 }
 
-private fun qrBitmap(text: String, size: Int = 512): Bitmap? = runCatching {
+internal fun qrBitmap(text: String, size: Int = 512): Bitmap? = runCatching {
     val m = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size)
     val px = IntArray(size * size) { i -> if (m.get(i % size, i / size)) android.graphics.Color.BLACK else android.graphics.Color.WHITE }
     Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
