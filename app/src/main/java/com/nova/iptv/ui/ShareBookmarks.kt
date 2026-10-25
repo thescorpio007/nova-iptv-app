@@ -46,10 +46,37 @@ import kotlinx.coroutines.launch
 
 private val GREEN = Color(0xFF5FF2D6)
 
+/** Landscape / TV: content side by side; portrait: stacked (nothing squeezed into a narrow column). */
+@Composable
+private fun wide(): Boolean {
+    val c = androidx.compose.ui.platform.LocalConfiguration.current
+    return c.screenWidthDp > c.screenHeightDp && c.screenWidthDp >= 600
+}
+
+/** A full-width button with its label on one line (never broken inside a word). */
+@Composable
+private fun WideButton(label: String, primary: Boolean = false, onClick: () -> Unit) {
+    FocusBox(onClick = onClick, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) { f ->
+        Text(
+            label,
+            modifier = Modifier.fillMaxWidth()
+                .background(
+                    when { f -> Color.White; primary -> Color(0xFF39D98A); else -> Color(0xFF2A3A5A) },
+                    RoundedCornerShape(18.dp),
+                )
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            color = if (f || primary) Color(0xFF062A14) else Color.White,
+            fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+    }
+}
+
 @Composable
 private fun Panel(content: @Composable () -> Unit) {
     Column(
-        Modifier.widthIn(max = 560.dp).fillMaxWidth()
+        Modifier.padding(horizontal = 14.dp).widthIn(max = if (wide()) 760.dp else 560.dp).fillMaxWidth()
             .background(Color(0xFF16264A), RoundedCornerShape(16.dp))
             .border(2.dp, GREEN, RoundedCornerShape(16.dp))
             .padding(18.dp),
@@ -67,7 +94,7 @@ fun SendBookmarksDialog(onClose: () -> Unit) {
     var round by remember { mutableIntStateOf(0) }
     val count = WebStore.bookmarks.collectAsStateWithLifecycle().value.size
     LaunchedEffect(round) { devices = null; devices = LocalShare.discover(context) }
-    Dialog(onDismissRequest = onClose) {
+    Dialog(onDismissRequest = onClose, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
         Panel {
             Text("📲 Send bookmarks", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
             Text("Nova devices on your Wi-Fi (Nova must be open on them):", fontSize = 13.sp, color = Color(0xFF9FB3E0))
@@ -100,8 +127,8 @@ fun SendBookmarksDialog(onClose: () -> Unit) {
             }
             Text("$count bookmarks will be offered · the other device decides (nothing is removed there)", fontSize = 12.sp, color = Color(0xFF9FB3E0))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmallButton("⟳ Search again", { round++ })
-                SmallButton("Close", onClose)
+                Column(Modifier.weight(1f)) { WideButton("⟳ Search again") { round++ } }
+                Column(Modifier.weight(1f)) { WideButton("Close", onClick = onClose) }
             }
         }
     }
@@ -124,23 +151,35 @@ fun ReceiveBookmarksQrDialog(onClose: () -> Unit) {
     }
     LaunchedEffect(Unit) { kotlinx.coroutines.delay(5 * 60_000L); onClose() }
     val bmp = remember(url) { qrBitmap(url) }
-    Dialog(onDismissRequest = onClose) {
+    Dialog(onDismissRequest = onClose, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
         Panel {
             Text("📷 Receive bookmarks", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
             if (addr == null) {
                 Text("This device is not on a Wi-Fi / home network.", fontSize = 14.sp)
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    bmp?.let { Image(it.asImageBitmap(), "QR code", Modifier.size(200.dp).background(Color.White).padding(8.dp)) }
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Scan with your phone's camera (same Wi-Fi). It opens:", fontSize = 14.sp)
-                        Text(url, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        Text("Then tap “Send my Nova bookmarks”, or paste web addresses. You'll be asked here before anything is added. The page closes after 5 min.",
-                            fontSize = 12.sp, color = Color(0xFF9FB3E0))
+                val qr = @Composable { bmp?.let { Image(it.asImageBitmap(), "QR code", Modifier.size(200.dp).background(Color.White).padding(8.dp)) } }
+                val info = @Composable { center: Boolean ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = if (center) Alignment.CenterHorizontally else Alignment.Start) {
+                        Text(url.removeSuffix("/"), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Text("1 · Phone on the same Wi-Fi\n2 · Scan with the camera\n3 · Tap “Send my Nova bookmarks” or paste addresses",
+                            fontSize = 13.sp, modifier = Modifier.fillMaxWidth())
+                        Text("You'll be asked here first · closes after 5 min", fontSize = 12.sp, color = Color(0xFF9FB3E0), modifier = Modifier.fillMaxWidth())
                     }
                 }
+                if (wide()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        qr()
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            info(false)
+                            Column(Modifier.widthIn(max = 180.dp)) { WideButton("Close", onClick = onClose) }
+                        }
+                    }
+                } else {
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { qr() }
+                    info(true)
+                }
             }
-            SmallButton("Close", onClose)
+            if (addr == null || !wide()) WideButton("Close", onClick = onClose)
         }
     }
 }
@@ -159,7 +198,7 @@ fun IncomingBookmarksHost() {
         while (left > 0) { kotlinx.coroutines.delay(1000); left-- }
         LocalShare.incoming.value = null
     }
-    Dialog(onDismissRequest = { LocalShare.incoming.value = null }) {
+    Dialog(onDismissRequest = { LocalShare.incoming.value = null }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
         Panel {
             Text("📲 Bookmarks from “${o.from}”", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
             Text("${o.bookmarks.size} bookmarks · ${fresh.size} new, ${o.bookmarks.size - fresh.size} already here (skipped)", fontSize = 15.sp)
@@ -169,14 +208,14 @@ fun IncomingBookmarksHost() {
                     items(fresh) { b -> Text("• " + b.title.ifBlank { b.url }, fontSize = 13.sp, maxLines = 1) }
                 }
             }
+            WideButton("✓ Add them", primary = true) {
+                val n = WebStore.mergeBookmarks(o.bookmarks)
+                LocalShare.incoming.value = null
+                Toast.makeText(context, "$n bookmarks added", Toast.LENGTH_LONG).show()
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmallButton("✓ Add them", {
-                    val n = WebStore.mergeBookmarks(o.bookmarks)
-                    LocalShare.incoming.value = null
-                    Toast.makeText(context, "$n bookmarks added", Toast.LENGTH_LONG).show()
-                })
-                if (!showList) SmallButton("Show the list", { showList = true })
-                SmallButton("Cancel", { LocalShare.incoming.value = null })
+                if (!showList) Column(Modifier.weight(1f)) { WideButton("Show the list") { showList = true } }
+                Column(Modifier.weight(1f)) { WideButton("Cancel") { LocalShare.incoming.value = null } }
             }
             if (!showList) Text("Cancels by itself in $left s", fontSize = 12.sp, color = Color(0xFF9FB3E0))
         }
@@ -211,7 +250,7 @@ fun RestoreBookmarksDialog(onOtherFolder: () -> Unit, onClose: () -> Unit) {
     var settingsToo by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { copies = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { WebStore.copies() } }
     val fmt = remember { java.text.SimpleDateFormat("d MMM yyyy · HH:mm", java.util.Locale.ENGLISH) }
-    Dialog(onDismissRequest = onClose) {
+    Dialog(onDismissRequest = onClose, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
         Panel {
             val c = chosen
             if (c == null) {
@@ -245,32 +284,51 @@ fun RestoreBookmarksDialog(onOtherFolder: () -> Unit, onClose: () -> Unit) {
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SmallButton("📁 Other folder…", { onClose(); onOtherFolder() })
-                    SmallButton("Cancel", onClose)
+                    Column(Modifier.weight(1f)) { WideButton("📁 Other folder…") { onClose(); onOtherFolder() } }
+                    Column(Modifier.weight(1f)) { WideButton("Cancel", onClick = onClose) }
                 }
             } else {
                 val inCopy = remember(c) { WebStore.bookmarksIn(c.text) }
                 val missing = remember(c) { inCopy.count { WebStore.isNew(it.url) } }
-                Text(if (c.at > 0) fmt.format(java.util.Date(c.at)) else c.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
-                Text("${inCopy.size} bookmarks · $missing not in your list now", fontSize = 13.sp, color = Color(0xFF9FB3E0))
-                LazyColumn(Modifier.heightIn(max = 200.dp)) {
-                    items(inCopy) { b -> Text("★ " + b.title.ifBlank { b.url }, fontSize = 13.sp, maxLines = 1) }
-                }
                 fun done(replace: Boolean) {
                     val n = WebStore.restoreCopy(c.text, replace, settingsToo)
                     Toast.makeText(context, "Bookmarks restored: you now have $n", Toast.LENGTH_LONG).show()
                     onClose()
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SmallButton("＋ Add to my bookmarks", { done(false) })
-                    SmallButton("⇄ Replace my bookmarks", { done(true) })
+                val list = @Composable { maxH: Int ->
+                    Column {
+                        Text(if (c.at > 0) fmt.format(java.util.Date(c.at)) else c.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
+                        Text("${inCopy.size} bookmarks · $missing not in your list now", fontSize = 13.sp, color = Color(0xFF9FB3E0))
+                        LazyColumn(Modifier.heightIn(max = maxH.dp).padding(top = 4.dp)) {
+                            items(inCopy) { b ->
+                                Text("★ " + b.title.ifBlank { b.url }, fontSize = 13.sp, maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SmallButton((if (settingsToo) "☑" else "☐") + " Also browser settings", { settingsToo = !settingsToo })
-                    SmallButton("‹ Back", { chosen = null })
+                val note = "Add keeps yours (recommended) · Replace = exactly this copy"
+                if (wide()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                        Column(Modifier.weight(1f)) { list(260) }
+                        Column(Modifier.widthIn(min = 220.dp, max = 260.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            WideButton("＋ Add to my bookmarks", primary = true) { done(false) }
+                            WideButton("⇄ Replace my bookmarks") { done(true) }
+                            WideButton((if (settingsToo) "☑" else "☐") + " Also browser settings") { settingsToo = !settingsToo }
+                            WideButton("‹ Back") { chosen = null }
+                            Text(note, fontSize = 12.sp, color = Color(0xFF9FB3E0))
+                        }
+                    }
+                } else {
+                    list(200)
+                    WideButton("＋ Add to my bookmarks", primary = true) { done(false) }
+                    WideButton("⇄ Replace my bookmarks") { done(true) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) { WideButton((if (settingsToo) "☑" else "☐") + " Browser settings") { settingsToo = !settingsToo } }
+                        Column(Modifier.weight(1f)) { WideButton("‹ Back") { chosen = null } }
+                    }
+                    Text(note, fontSize = 12.sp, color = Color(0xFF9FB3E0))
                 }
-                Text("Add = keeps yours and adds the missing ones (recommended). Replace = your list becomes exactly this copy.",
-                    fontSize = 12.sp, color = Color(0xFF9FB3E0))
             }
         }
     }
