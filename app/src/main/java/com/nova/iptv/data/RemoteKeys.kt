@@ -22,7 +22,7 @@ object RemoteKeys {
 
     val actions: List<Action> = listOf(
         // ---- while watching (both players)
-        Action("play_hide", Area.PLAYER, "⬛ Hide / show the picture (shows a fake error) · OK twice = player buttons",
+        Action("play_hide", Area.PLAYER, "⬛ Hide / show the picture (shows a fake error) · press twice to hide; once = channel list (live) / player buttons (films)",
             listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)),
         Action("play_night", Area.PLAYER, "🌙 Night mode (sound) on / off", emptyList()),
         Action("play_boost", Area.PLAYER, "🔊 Volume boost", emptyList()),

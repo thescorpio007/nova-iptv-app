@@ -115,7 +115,7 @@ fun RemoteMapDialog(storage: Storage, onClose: () -> Unit) {
     fun labelFor(b: RemoteButton): Pair<String, String?> {
         b.fixed?.let { return it to null }
         val a = RemoteKeys.actionInTab(storage, tab, b.code) ?: return "Not used" to null
-        val extra = if (a.id == "play_hide") "OK twice = player buttons · hold = Rec / Download" else null
+        val extra = if (a.id == "play_hide") "OK twice = hide · OK once = channel list (live) / buttons (films) · hold = Rec / Download" else null
         return shortName(a.label) to extra
     }
 

@@ -563,7 +563,7 @@ class Storage(context: Context) {
     // ---- ⬛ Hide picture
     /** "skip" (black 2 s, then jump ahead by the rest of the hide time), "wait" (black until the time is over) or "stay" (until OK). */
     var hideMode: String
-        get() = prefs.getString("hide_mode", "skip") ?: "skip"
+        get() = prefs.getString("hide_mode", "wait") ?: "wait"
         set(value) = prefs.edit().putString("hide_mode", value).apply()
     /** How much of the video is hidden: 15, 30 or 60 s. */
     var hideSeconds: Int

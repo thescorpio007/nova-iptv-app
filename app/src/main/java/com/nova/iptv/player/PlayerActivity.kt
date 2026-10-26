@@ -85,6 +85,7 @@ class PlayerActivity : ComponentActivity() {
     // ⬛ Hidden picture: a black cover with a fake "signal error"; the video keeps playing with its sound.
     private var pictureHidden = false
     private var hiddenAt = 0L
+    private var okSinglePending: Runnable? = null
     private var hideMuted = false
     private var pendingUnhide: Runnable? = null
     private var autoUnhide: Runnable? = null
@@ -3386,6 +3387,7 @@ class PlayerActivity : ComponentActivity() {
         val down = event.action == KeyEvent.ACTION_DOWN
 
         // A key whose press Nova used: its release must not click the button under the focus.
+        if (event.action == KeyEvent.ACTION_UP && (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER)) longPressHandled = false
         if (event.action == KeyEvent.ACTION_UP && swallowUp.remove(code)) return true
 
         // "≈ Similar" list: arrows / OK on its rows, Back closes it.
@@ -3481,8 +3483,7 @@ class PlayerActivity : ComponentActivity() {
             if (!longPressHandled && event.isLongPress) {
                 longPressHandled = true
                 swallowUp += code
-                // Holding OK: the first press had hidden the picture — it was a long press (Rec / Download), not a hide.
-                if (pictureHidden && android.os.SystemClock.uptimeMillis() - hiddenAt < 2500) showPicture()
+                okSinglePending?.let { handler.removeCallbacks(it) }; okSinglePending = null
                 when {
                     item.isLive -> toggleRecording()
                     !item.isLocal && item.downloadExt != null -> downloadCurrent()
@@ -3508,7 +3509,7 @@ class PlayerActivity : ComponentActivity() {
             return true
         }
 
-        // ⬛ Hide picture (OK by default): one press hides at once; OK twice = the player buttons.
+        // ⬛ Hide picture (OK by default): OK twice hides; one OK = channel list (live) / player buttons (films).
         val hideKey = item != null && RemoteKeys.actionFor(app.storage, RemoteKeys.Area.PLAYER, code) == "play_hide"
         if (pictureHidden && item != null) {
             if (hideKey) {
@@ -3516,7 +3517,7 @@ class PlayerActivity : ComponentActivity() {
                     val now = android.os.SystemClock.uptimeMillis()
                     val waiting = pendingUnhide
                     when {
-                        now - hiddenAt < 400 -> { showPicture(); showControlsNow(item) }
+                        now - hiddenAt < 400 -> {}  // the end of the double press that hid it
                         waiting != null -> { handler.removeCallbacks(waiting); pendingUnhide = null; showHideOptions() }
                         // Wait a moment: a second press opens the options instead (the picture never flashes).
                         else -> Runnable { pendingUnhide = null; showPicture() }.also { pendingUnhide = it; handler.postDelayed(it, 400) }
@@ -3540,8 +3541,22 @@ class PlayerActivity : ComponentActivity() {
             val controlsShown = if (item.isLive) playerView.isControllerFullyVisible else vod.controlsVisible
             val menusOpen = vod.isPanelOpen || channelPanelOpen || recentBarOpen
             if (!controlsShown && !menusOpen) {
-                if (down && event.repeatCount == 0) hidePicture()
-                if (down) swallowUp += code
+                // OK twice = hide. One OK (after a short wait to rule out a second press) = channel list (live TV)
+                // or the player buttons (films). Holding OK = Rec / Download (handled above).
+                if (down && event.repeatCount == 0) {
+                    val waiting = okSinglePending
+                    if (waiting != null) {
+                        handler.removeCallbacks(waiting); okSinglePending = null
+                        swallowUp += code
+                        hidePicture()
+                    }
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    okSinglePending = Runnable {
+                        okSinglePending = null
+                        if (pictureHidden) return@Runnable
+                        if (item.isLive && PlaybackQueue.items.size > 1) showChannelPanel() else showControlsNow(item)
+                    }.also { handler.postDelayed(it, 350) }
+                }
                 return true
             }
             if (item.isLive && controlsShown && !infoBar.hasFocus() && isOk) {
