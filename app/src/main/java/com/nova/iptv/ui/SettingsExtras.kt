@@ -147,6 +147,12 @@ fun DisplaySettings(vm: MainViewModel) {
             listOf("off" to "Off", "tl" to "Top left", "tr" to "Top right", "bl" to "Bottom left", "br" to "Bottom right"),
             s.clockPosition, vm::setClockPosition,
         )
+        Text("📂 Open each section on", fontWeight = FontWeight.Medium)
+        Hint("Which group Live TV, Films and Series show when you open them. First group = the top group of your ✎ Edit order (hidden groups skipped). If Favorites is empty, the first group opens instead.")
+        ChoiceRow(
+            listOf("first" to "First group", "fav" to "★ Favorites", "last" to "🕘 Last group I opened"),
+            s.startGroup, vm::setStartGroup,
+        )
         Text("Group list", fontWeight = FontWeight.Medium)
         Hint("On TV the full group list is always on the left. On phones you can keep it on the left too, instead of behind the ☰ button.")
         ChoiceRow(

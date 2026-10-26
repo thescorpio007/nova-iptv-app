@@ -159,6 +159,14 @@ class Storage(context: Context) {
         get() = prefs.getBoolean("groups_always_left", false)
         set(value) = prefs.edit().putBoolean("groups_always_left", value).apply()
 
+    /** Which group Live TV, Films and Series open on: "first" (top group of my order), "fav" (★ Favorites) or "last" (last group opened). */
+    var startGroup: String
+        get() = prefs.getString("start_group", "first") ?: "first"
+        set(value) = prefs.edit().putString("start_group", value).apply()
+
+    fun lastGroupFor(zone: String): String? = prefs.getString("last_group_$zone", null)
+    fun setLastGroupFor(zone: String, key: String) = prefs.edit().putString("last_group_$zone", key).apply()
+
     /** Open a group's channels as soon as it is highlighted with the remote (no OK needed). */
     var openGroupOnFocus: Boolean
         get() = prefs.getBoolean("open_group_on_focus", true)

@@ -110,6 +110,7 @@ data class SettingsState(
     val tunneling: Boolean,
     val clockPosition: String,
     val groupsAlwaysLeft: Boolean,
+    val startGroup: String = "first",
     val openGroupOnFocus: Boolean,
     val autoPlayLast: Boolean,
     val hasPin: Boolean,
@@ -661,9 +662,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 error = if (cats.isEmpty() && errors.isNotEmpty()) errors.values.joinToString("\n") else null,
             )
             if (z.selected.value == null) {
-                val favs = favorites.value.any { it.type == z.savedType }
-                val first = if (favs) FAV
-                else sections(z, org.value, false).filter { !it.closed }.flatMap { it.groups }.firstOrNull()?.key
+                // Open on the chosen group: the first group of my order (default), ★ Favorites or the last one opened.
+                val groups = sections(z, org.value, false).filter { !it.closed }.flatMap { it.groups }
+                val topGroup = groups.firstOrNull()?.key
+                val first = when (storage.startGroup) {
+                    "fav" -> if (favoritesOf(z).isNotEmpty()) FAV else topGroup
+                    "last" -> storage.lastGroupFor(z.code)?.takeIf { k ->
+                        (k == FAV && favoritesOf(z).isNotEmpty()) || k == NEW || groups.any { it.key == k }
+                    } ?: topGroup
+                    else -> topGroup
+                } ?: if (favoritesOf(z).isNotEmpty()) FAV else null
                 if (first != null) selectGroup(z, first)
             }
         }
@@ -768,6 +776,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun <T> selectGroup(z: Zone<T>, key: String) {
         z.selected.value = key
+        storage.setLastGroupFor(z.code, key)
         z.job?.cancel()
         if (key == FAV) {
             z.items.value = ListState(items = favoritesOf(z))
@@ -1482,6 +1491,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         tunneling = storage.tunneling,
         clockPosition = storage.clockPosition,
         groupsAlwaysLeft = storage.groupsAlwaysLeft,
+        startGroup = storage.startGroup,
         openGroupOnFocus = storage.openGroupOnFocus,
         autoPlayLast = storage.autoPlayLast,
         hasPin = storage.hasPin,
@@ -1552,6 +1562,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setSkipTimeout(v: Int) { storage.skipTimeoutSec = v.coerceIn(8, 60); settings.value = readSettings() }
     fun setTunneling(v: Boolean) { storage.tunneling = v; settings.value = readSettings() }
     fun setClockPosition(v: String) { storage.clockPosition = v; settings.value = readSettings() }
+    fun setStartGroup(v: String) { storage.startGroup = v; settings.value = readSettings() }
     fun setGroupsAlwaysLeft(v: Boolean) { storage.groupsAlwaysLeft = v; settings.value = readSettings() }
     fun setOpenGroupOnFocus(v: Boolean) { storage.openGroupOnFocus = v; settings.value = readSettings() }
     fun setAutoPlayLast(v: Boolean) { storage.autoPlayLast = v; settings.value = readSettings() }
