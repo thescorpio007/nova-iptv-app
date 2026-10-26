@@ -298,6 +298,7 @@ class PlayerActivity : ComponentActivity() {
         })
         startPlayback(PlaybackQueue.index)
         handler.post(tickTask)
+        startCastReceiver()
     }
 
     // ================================================================== views
@@ -373,6 +374,7 @@ class PlayerActivity : ComponentActivity() {
         recButton = pill("● Rec") { toggleRecording() }
         downloadButton = pill("⬇ Download") { downloadCurrent() }
         externalButton = pill("↗ External player") { openExternal() }
+        val castButton = pill("📺 Play on TV") { sendToTv() }.also { if (com.nova.iptv.data.Cast.isTv(this)) it.visibility = View.GONE }
         aspectButton = pill("Aspect: Fit") { cycleAspect() }
         favButton = pill("♡ Favorite") { toggleFavorite() }
         val tracksButton = pill("CC Audio & subtitles") { vod.openPanel() }
@@ -385,7 +387,7 @@ class PlayerActivity : ComponentActivity() {
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, favButton, externalButton, aspectButton, downloadButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, favButton, externalButton, castButton, aspectButton, downloadButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -498,8 +500,10 @@ class PlayerActivity : ComponentActivity() {
                 "ℹ Video info" to { showVideoInfo() },
                 "♡ Favorite" to { toggleFavorite() },
                 "↗ External player" to { openExternal() },
+                "📺 Play on TV" to { sendToTv() },
             ),
         )
+        if (com.nova.iptv.data.Cast.isTv(this)) vod.extraViews["📺 Play on TV"]?.visibility = View.GONE
         // Keep the controls clear of the camera cut-out.
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(vod.view) { v, insets ->
             val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
@@ -2172,6 +2176,46 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /** Plays the current channel / video in the external player app and closes this one. */
+    /** 📺 Play on TV (phones): sends this video to Nova on the TV box; the phone pauses when asked. */
+    private fun sendToTv() {
+        val item = current ?: return
+        val pos = player?.currentPosition ?: 0L
+        com.nova.iptv.data.Cast.open(this, item, if (item.isLive) 0 else pos) { stop ->
+            runOnUiThread { if (stop) { saveResumePosition(); player?.pause() } }
+        }
+    }
+
+    /** Sent by a phone (📺 Play on TV): who sent it; the phone's remote reads the position and sends ⏸ / ±30 s / ■. */
+    private var castFrom: String? = null
+
+    private fun startCastReceiver() {
+        val from = intent?.getStringExtra(com.nova.iptv.data.Cast.EXTRA_FROM) ?: return
+        castFrom = from
+        val at = PlaybackQueue.items.getOrNull(PlaybackQueue.index)?.let { if (it.isLive) 0L else app.storage.getPosition(it.key) } ?: 0L
+        Toast.makeText(this, "📲 From $from" + (if (at > 0) " · continuing at ${formatDuration(at)}" else "") + "\nBack = return to what you were watching", Toast.LENGTH_LONG).show()
+        val publish = object : Runnable {
+            override fun run() {
+                val p = player
+                val item = current
+                if (p != null && item != null) {
+                    com.nova.iptv.data.Cast.now = com.nova.iptv.data.Cast.Now(item.title, p.currentPosition, if (item.isLive) 0 else p.duration.coerceAtLeast(0), p.playWhenReady)
+                }
+                handler.postDelayed(this, 1000)
+            }
+        }
+        handler.postDelayed(publish, 1000)
+        lifecycleScope.launch {
+            com.nova.iptv.data.Cast.commands.collect { c ->
+                val p = player ?: return@collect
+                when {
+                    c == "toggle" -> p.playWhenReady = !p.playWhenReady
+                    c == "stop" -> finish()
+                    c.startsWith("seek:") -> if (current?.isLive != true) vod.seekBy(c.removePrefix("seek:").toLongOrNull() ?: 0L)
+                }
+            }
+        }
+    }
+
     private fun openExternal() {
         val item = current ?: return
         saveResumePosition()
@@ -3638,6 +3682,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (castFrom != null) com.nova.iptv.data.Cast.restoreQueue()
         StreamCheck.playing(null)
         StreamCheck.playerClosed()
         endSession()

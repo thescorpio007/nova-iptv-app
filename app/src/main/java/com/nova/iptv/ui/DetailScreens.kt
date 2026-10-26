@@ -304,6 +304,11 @@ private fun MovieButtons(
                 com.nova.iptv.player.ExternalPlayer.open(context, it, vm.externalPlayerPackage())
             }
         })
+        if (!com.nova.iptv.data.Cast.isTv(context)) {
+            ActionButton("📺 Play on TV", {
+                vm.movieItem(movie)?.let { com.nova.iptv.data.Cast.open(context, it, vm.resumePosition(it.saved)) }
+            })
+        }
     }
 }
 
@@ -437,6 +442,15 @@ fun SeriesDetailScreen(vm: MainViewModel, d: SeriesDetailState, onPlay: PlayFn) 
                             onClick = { vm.allEpisodeItems(info, season, index).let { (l, i) -> onPlay(l, i) } },
                             active = e.id == lastId,
                             trailing = {
+                                if (!com.nova.iptv.data.Cast.isTv(context)) {
+                                    FocusBox(onClick = {
+                                        vm.allEpisodeItems(info, season, index).let { (l, i) ->
+                                            l.getOrNull(i)?.let { com.nova.iptv.data.Cast.open(context, it, vm.resumePosition(it.saved)) }
+                                        }
+                                    }, shape = RoundedCornerShape(20.dp)) {
+                                        Text("📺", fontSize = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+                                    }
+                                }
                                 FocusBox(onClick = {
                                     vm.downloadAndWatchEpisode(info, e)?.let { onPlay(listOf(it), 0) }
                                 }, shape = RoundedCornerShape(20.dp)) {

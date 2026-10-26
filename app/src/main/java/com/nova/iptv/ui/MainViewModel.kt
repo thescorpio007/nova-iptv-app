@@ -1944,6 +1944,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteDownload(d: DownloadItem) = DownloadCenter.remove(d.id, deleteFile = true)
 
+    /** Where this film / episode was stopped (0 = from the start). */
+    fun resumePosition(s: SavedItem): Long = storage.getPosition(s.resumeKey)
+
     fun localPlayItem(d: DownloadItem): PlayItem? {
         val f = File(d.path)
         if (!f.exists()) return null
@@ -2008,7 +2011,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val indexExportTick = MutableStateFlow(0)
 
     private fun appVersion(): String =
-        runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "3.0"
+        runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "4.0"
 
     /**
      * Writes index-latest.novaindex (all accounts) — only when something changed since the last export.

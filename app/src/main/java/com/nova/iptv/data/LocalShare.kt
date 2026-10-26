@@ -66,6 +66,7 @@ object LocalShare {
     fun start(context: Context, client: OkHttpClient) {
         if (server != null) return
         app = context.applicationContext
+        Cast.init(app)
         http = client.newBuilder().connectTimeout(4, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS).build()
         scope.launch {
             val s = runCatching { ServerSocket(PORT) }.getOrElse { runCatching { ServerSocket(0) }.getOrNull() } ?: return@launch
@@ -176,18 +177,27 @@ object LocalShare {
         val first = line() ?: return
         val (method, path) = first.split(' ').let { (it.getOrNull(0) ?: "") to (it.getOrNull(1) ?: "/") }
         var length = 0
+        val headers = HashMap<String, String>()
         while (true) {
             val h = line() ?: break
             if (h.isEmpty()) break
+            headers[h.substringBefore(':').trim().lowercase()] = h.substringAfter(':', "").trim()
             if (h.startsWith("Content-Length:", true)) length = h.substringAfter(':').trim().toIntOrNull() ?: 0
+        }
+        // 📺 A video of this phone, read by the TV (with jumps).
+        if ((method == "GET" || method == "HEAD") && path.startsWith("/media/")) {
+            c.soTimeout = 0
+            Cast.serveMedia(method, path, headers, c.getOutputStream())
+            return
         }
         val bytes = ByteArray(length.coerceIn(0, 30_000_000))
         var read = 0
         while (read < bytes.size) { val n = ins.read(bytes, read, bytes.size - read); if (n < 0) break; read += n }
         val body = String(bytes, 0, read, Charsets.UTF_8)
         val pageOpen = System.currentTimeMillis() < pageOpenUntil
+        Cast.handle(method, path, body)?.let { (code, text) -> return respond(c, code, "application/json", text) }
         when {
-            method == "GET" && path == "/nova" -> respond(c, 200, "application/json", JSONObject().put("name", deviceName(app)).toString())
+            method == "GET" && path == "/nova" -> respond(c, 200, "application/json", Cast.describe(app).toString())
             method == "POST" && path == "/bookmarks" -> {
                 val o = runCatching { JSONObject(body) }.getOrNull() ?: return respond(c, 400, "text/plain", "bad request")
                 val a = o.optJSONArray("bookmarks") ?: JSONArray()
@@ -259,7 +269,7 @@ p{color:#9fb3e0}</style></head><body>
 
     private fun respond(c: Socket, code: Int, type: String, text: String) {
         val bytes = text.toByteArray(Charsets.UTF_8)
-        val status = when (code) { 200 -> "OK"; 400 -> "Bad Request"; 403 -> "Forbidden"; else -> "Not Found" }
+        val status = when (code) { 200 -> "OK"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 403 -> "Forbidden"; 410 -> "Gone"; else -> "Not Found" }
         val out = c.getOutputStream()
         out.write("HTTP/1.1 $code $status\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
         out.write(bytes)

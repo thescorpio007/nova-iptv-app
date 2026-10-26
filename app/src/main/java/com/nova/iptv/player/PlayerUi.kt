@@ -25,6 +25,7 @@ object PlayerUi {
         Regex("^ℹ Video info$") to "ℹ Info",
         Regex("^↗ External player$") to "↗ External",
         Regex("^⬛ Hide picture$") to "⬛ Hide",
+        Regex("^📺 Play on TV$") to "📺 TV",
     )
 
     fun short(text: CharSequence): CharSequence {

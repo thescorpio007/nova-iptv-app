@@ -213,6 +213,8 @@ fun DisplaySettings(vm: MainViewModel) {
         ChoiceRow(listOf("1" to "1 column", "2" to "2 columns"), s.liveColumns.toString()) { vm.setLiveColumns(it.toInt()) }
     }
 
+    ReceiveFromPhonesCard()
+
     SettingsCard("Start-up") {
         val ctx = LocalContext.current
         val st = vm.appStorage
@@ -1603,5 +1605,22 @@ private fun HidePictureCard() {
             Text("Hide time", fontWeight = FontWeight.Medium)
             ChoiceRow(listOf("15" to "15 s", "30" to "30 s", "60" to "1 min"), secs.toString()) { secs = it.toInt(); st.hideSeconds = secs }
         }
+    }
+}
+
+
+/** 📡 Receive from phones: 📺 Play on TV from Nova on a phone (paired once with a code). */
+@Composable
+private fun ReceiveFromPhonesCard() {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(com.nova.iptv.data.Cast.receiving) }
+    var phones by remember { mutableStateOf(com.nova.iptv.data.Cast.pairedPhones()) }
+    SettingsCard("📡 Receive from phones", summary = (if (on) "On" else "Off") + " · name “Nova · ${com.nova.iptv.data.LocalShare.deviceName(ctx)}”") {
+        Hint("Nova on a phone can send what it plays to this device (📺 Play on TV): films, episodes, live channels, links and videos stored on the phone. The first time, this screen shows a 4-digit code to type on the phone.")
+        Text("Nova phones (📺 Play on TV)", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("on" to "On", "off" to "Off"), if (on) "on" else "off") { on = it == "on"; com.nova.iptv.data.Cast.receiving = on }
+        Text(if (phones.isEmpty()) "No phone paired yet" else "Paired: " + phones.joinToString(", "), fontSize = 13.sp)
+        if (phones.isNotEmpty()) OutlinedButton(onClick = { com.nova.iptv.data.Cast.forgetPhones(); phones = emptyList() }) { Text("Remove paired phones") }
+        Hint("Works while Nova is open, or always if “Open Nova when the box starts” is on with “Display over other apps” allowed.")
     }
 }

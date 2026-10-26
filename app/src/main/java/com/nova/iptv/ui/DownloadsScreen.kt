@@ -50,6 +50,11 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
                 modifier = Modifier.padding(bottom = 4.dp),
             )
         }
+        if (!com.nova.iptv.data.Cast.isTv(context)) item {
+            androidx.compose.material3.OutlinedButton(onClick = { CastSendActivity.pickVideo(context) }) {
+                Text("📺 Play a video from this phone on the TV…")
+            }
+        }
         if (items.isEmpty()) {
             item { EmptyText("No downloads or recordings yet.\nOpen a movie or a series episode and choose Download.") }
         }
@@ -74,6 +79,11 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
                     val item = vm.watchDownload(d)
                     if (item != null) onPlay(listOf(item), 0)
                 },
+                onTv = if (com.nova.iptv.data.Cast.isTv(context)) null else ({
+                    val item = vm.localPlayItem(d)
+                    if (item != null) com.nova.iptv.data.Cast.open(context, item, vm.resumePosition(item.saved))
+                    else Toast.makeText(context, "The file is no longer on the device.", Toast.LENGTH_LONG).show()
+                }),
                 onPause = { vm.pauseDownload(d) },
                 onResume = { vm.resumeDownload(d) },
                 onDelete = { vm.deleteDownload(d) },
@@ -88,6 +98,7 @@ private fun DownloadRow(
     d: DownloadItem,
     onPlay: () -> Unit,
     onWatch: () -> Unit,
+    onTv: (() -> Unit)?,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onDelete: () -> Unit,
@@ -164,7 +175,10 @@ private fun DownloadRow(
                 TextButton(onClick = onWatch) { Text("▶ Watch now") }
             }
             when (d.status) {
-                DownloadStatus.DONE -> TextButton(onClick = onPlay) { Text("▶ Play") }
+                DownloadStatus.DONE -> {
+                    if (onTv != null) TextButton(onClick = onTv) { Text("📺 TV") }
+                    TextButton(onClick = onPlay) { Text("▶ Play") }
+                }
                 DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED -> TextButton(onClick = onPause) { Text("Pause") }
                 DownloadStatus.PAUSED, DownloadStatus.FAILED -> TextButton(onClick = onResume) { Text("Resume") }
                 else -> Unit

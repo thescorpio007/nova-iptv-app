@@ -21,6 +21,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Runs on phones, tablets and Android TV boxes -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -72,6 +73,17 @@
         </receiver>
 
         <!-- QR page on the TV › "Send from Nova on this phone": choose what to send (Everything, IPTV, Web, lists). -->
+        <!-- 📺 Play on TV (phone) and the pairing code (TV). -->
+        <activity
+            android:name=".ui.CastSendActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
+            android:name=".ui.CastPairActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <activity
             android:name=".ui.TransferActivity"
             android:exported="true"
@@ -234,6 +246,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <service
+            android:name=".ui.CastService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".download.DownloadService"
