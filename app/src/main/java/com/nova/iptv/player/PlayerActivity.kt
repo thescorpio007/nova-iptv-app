@@ -2187,17 +2187,21 @@ class PlayerActivity : ComponentActivity() {
 
     /** Sent by a phone (📺 Play on TV): who sent it; the phone's remote reads the position and sends ⏸ / ±30 s / ■. */
     private var castFrom: String? = null
+    private var castGen = -1
 
     private fun startCastReceiver() {
         val from = intent?.getStringExtra(com.nova.iptv.data.Cast.EXTRA_FROM) ?: return
         castFrom = from
+        castGen = com.nova.iptv.data.Cast.generation.value
+        // A newer video sent to this TV: this one closes.
+        lifecycleScope.launch { com.nova.iptv.data.Cast.generation.collect { g -> if (g != castGen) finish() } }
         val at = PlaybackQueue.items.getOrNull(PlaybackQueue.index)?.let { if (it.isLive) 0L else app.storage.getPosition(it.key) } ?: 0L
         Toast.makeText(this, "📲 From $from" + (if (at > 0) " · continuing at ${formatDuration(at)}" else "") + "\nBack = return to what you were watching", Toast.LENGTH_LONG).show()
         val publish = object : Runnable {
             override fun run() {
                 val p = player
                 val item = current
-                if (p != null && item != null) {
+                if (p != null && item != null && com.nova.iptv.data.Cast.generation.value == castGen) {
                     com.nova.iptv.data.Cast.now = com.nova.iptv.data.Cast.Now(item.title, p.currentPosition, if (item.isLive) 0 else p.duration.coerceAtLeast(0), p.playWhenReady)
                 }
                 handler.postDelayed(this, 1000)
@@ -2207,8 +2211,12 @@ class PlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             com.nova.iptv.data.Cast.commands.collect { c ->
                 val p = player ?: return@collect
+                if (com.nova.iptv.data.Cast.generation.value != castGen) return@collect
                 when {
                     c == "toggle" -> p.playWhenReady = !p.playWhenReady
+                    c == "play" -> p.playWhenReady = true
+                    c == "pause" -> p.playWhenReady = false
+                    c.startsWith("seekto:") -> if (current?.isLive != true) p.seekTo((c.removePrefix("seekto:").toLongOrNull() ?: 0L).coerceAtLeast(0))
                     c == "stop" -> finish()
                     c.startsWith("seek:") -> if (current?.isLive != true) vod.seekBy(c.removePrefix("seek:").toLongOrNull() ?: 0L)
                 }
@@ -3682,7 +3690,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (castFrom != null) com.nova.iptv.data.Cast.restoreQueue()
+        if (castFrom != null && com.nova.iptv.data.Cast.generation.value == castGen) com.nova.iptv.data.Cast.restoreQueue()
         StreamCheck.playing(null)
         StreamCheck.playerClosed()
         endSession()

@@ -67,11 +67,14 @@ object LocalShare {
         if (server != null) return
         app = context.applicationContext
         Cast.init(app)
+        Dlna.init(app)
         http = client.newBuilder().connectTimeout(4, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS).build()
         scope.launch {
             val s = runCatching { ServerSocket(PORT) }.getOrElse { runCatching { ServerSocket(0) }.getOrNull() } ?: return@launch
             server = s
             register(s.localPort)
+            // 📡 DLNA apps find this TV too (same port).
+            runCatching { Dlna.start(app) }
             while (!s.isClosed) {
                 val c = runCatching { s.accept() }.getOrNull() ?: break
                 scope.launch { runCatching { handle(c) }; runCatching { c.close() } }
@@ -195,6 +198,7 @@ object LocalShare {
         while (read < bytes.size) { val n = ins.read(bytes, read, bytes.size - read); if (n < 0) break; read += n }
         val body = String(bytes, 0, read, Charsets.UTF_8)
         val pageOpen = System.currentTimeMillis() < pageOpenUntil
+        if (Dlna.handle(method, path, headers, body, c.inetAddress.hostAddress ?: "", c.getOutputStream())) return
         Cast.handle(method, path, body)?.let { (code, text) -> return respond(c, code, "application/json", text) }
         when {
             method == "GET" && path == "/nova" -> respond(c, 200, "application/json", Cast.describe(app).toString())

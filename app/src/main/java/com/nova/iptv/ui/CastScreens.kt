@@ -379,3 +379,34 @@ class CastService : Service() {
         fun stop(context: Context) = runCatching { context.stopService(Intent(context, CastService::class.java)) }
     }
 }
+
+
+/** TV: a DLNA app wants to play something ("Ask me first"): plays after 10 s unless refused. */
+class DlnaAskActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            NovaTheme {
+                val ask by com.nova.iptv.data.Dlna.asking.collectAsStateWithLifecycle()
+                var left by remember { mutableIntStateOf(10) }
+                LaunchedEffect(ask) { if (ask == null) finish() else left = 10 }
+                LaunchedEffect(ask, left) {
+                    val a = ask ?: return@LaunchedEffect
+                    if (left > 0) { delay(1000); left-- } else com.nova.iptv.data.Dlna.accept(a)
+                }
+                Box(Modifier.fillMaxSize().background(Color(0xAA000000)), contentAlignment = Alignment.Center) {
+                    val a = ask ?: return@Box
+                    Panel {
+                        Text("📡 ${a.from} wants to play on this TV", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GREEN)
+                        Text(a.title, fontSize = 16.sp, maxLines = 2)
+                        Text("From ${a.host} · after you accept, this app plays directly for 3 hours.", fontSize = 13.sp, color = Color(0xFF9FB3E0))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(Modifier.weight(1f)) { WideButton("▶ Play ($left s)", primary = true) { com.nova.iptv.data.Dlna.accept(a) } }
+                            Column(Modifier.weight(1f)) { WideButton("Refuse") { com.nova.iptv.data.Dlna.refuse() } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -103,9 +103,14 @@ object Cast {
     val commands = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
     private var savedQueue: Array<Any?>? = null
+    /** Each video received gets a number; an older received video still open closes itself (one at a time). */
+    val generation = MutableStateFlow(0)
+    /** The link playing for a phone / DLNA app (DLNA reports it). */
+    @Volatile var nowUrl: String? = null
 
     /** Called by the player when a video sent by a phone closes: the list watched before comes back. */
     fun restoreQueue() {
+        nowUrl = null
         val q = savedQueue ?: return
         savedQueue = null
         @Suppress("UNCHECKED_CAST")
@@ -189,7 +194,7 @@ object Cast {
 
     private fun err(message: String) = JSONObject().put("error", message).toString()
 
-    private fun playHere(o: JSONObject, from: String) {
+    fun playHere(o: JSONObject, from: String) {
         val url = o.optString("url")
         if (url.isBlank()) return
         val live = o.optBoolean("live")
@@ -212,6 +217,8 @@ object Cast {
             PlaybackQueue.groupKey = null
             PlaybackQueue.playlist = null
             now = Now(title, pos, 0, true)
+            nowUrl = url
+            generation.value = generation.value + 1
             runCatching {
                 app.startActivity(
                     Intent(app, com.nova.iptv.player.PlayerActivity::class.java)
@@ -429,6 +436,8 @@ object Cast {
     }
 
     /** /nova answer: who this device is. */
+    fun canShowNow(): Boolean = canStartFromBackground()
+
     fun describe(context: Context): JSONObject =
         JSONObject().put("name", LocalShare.deviceName(context)).put("id", myId).put("tv", isTv(context)).put("cast", receiving)
 }

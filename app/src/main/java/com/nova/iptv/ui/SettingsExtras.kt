@@ -1621,6 +1621,10 @@ private fun ReceiveFromPhonesCard() {
         ChoiceRow(listOf("on" to "On", "off" to "Off"), if (on) "on" else "off") { on = it == "on"; com.nova.iptv.data.Cast.receiving = on }
         Text(if (phones.isEmpty()) "No phone paired yet" else "Paired: " + phones.joinToString(", "), fontSize = 13.sp)
         if (phones.isNotEmpty()) OutlinedButton(onClick = { com.nova.iptv.data.Cast.forgetPhones(); phones = emptyList() }) { Text("Remove paired phones") }
+        var dlna by remember { mutableStateOf(com.nova.iptv.data.Dlna.mode) }
+        Text("DLNA apps (BubbleUPnP, Web Video Caster, gallery “cast”…)", fontWeight = FontWeight.Medium)
+        Hint("This device appears as “${com.nova.iptv.data.Dlna.friendlyName()}” in DLNA cast apps on any phone of this Wi-Fi. “Ask me first” shows a popup that plays after 10 s unless you refuse.")
+        ChoiceRow(listOf("ask" to "Ask me first (10 s)", "direct" to "Play directly", "off" to "Off"), dlna) { dlna = it; com.nova.iptv.data.Dlna.mode = it }
         Hint("Works while Nova is open, or always if “Open Nova when the box starts” is on with “Display over other apps” allowed.")
     }
 }
