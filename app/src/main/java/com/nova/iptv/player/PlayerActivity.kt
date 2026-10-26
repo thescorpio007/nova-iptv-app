@@ -289,7 +289,7 @@ class PlayerActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
-                    channelPanelOpen -> hideChannelPanel()
+                    channelPanelOpen -> closeChannelPanelToInfo()
                     recentBarOpen -> hideRecentBar()
                     vod.isPanelOpen -> { vod.hidePanel(); keySink.requestFocus() }
                     else -> handleBack(current)
@@ -447,6 +447,7 @@ class PlayerActivity : ComponentActivity() {
             setControllerVisibilityListener(
                 PlayerView.ControllerVisibilityListener { visibility ->
                     infoBar.visibility = visibility
+                    updateClock()
                     if (visibility != View.VISIBLE && ::keySink.isInitialized && ::vod.isInitialized && !channelPanelOpen && !vod.isPanelOpen) keySink.requestFocus()
                 }
             )
@@ -2127,7 +2128,15 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun updateClock() {
-        if (clockView.visibility != View.VISIBLE) return
+        if (!::clockView.isInitialized || clockView.visibility != View.VISIBLE) return
+        // Clock at the bottom: moves to the top right while the player buttons show (never over the time counter).
+        val pos = app.storage.clockPosition
+        if (pos == "bl" || pos == "br") {
+            val shown = playerView.isControllerFullyVisible || (::vod.isInitialized && vod.controlsVisible)
+            val want = if (shown) Gravity.TOP or Gravity.END else if (pos == "bl") Gravity.BOTTOM or Gravity.START else Gravity.BOTTOM or Gravity.END
+            val lp = clockView.layoutParams as? FrameLayout.LayoutParams
+            if (lp != null && lp.gravity != want) { lp.gravity = want; clockView.layoutParams = lp }
+        }
         clockView.text = android.text.format.DateFormat.getTimeFormat(this).format(java.util.Date())
     }
 
@@ -2372,7 +2381,7 @@ class PlayerActivity : ComponentActivity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(pill("←") { hideChannelPanel() })
+            addView(pill("←") { closeChannelPanelToInfo() })
             addView(TextView(this@PlayerActivity).apply {
                 overlayTitle = this
                 text = "Groups  ·  Channels"
@@ -2579,6 +2588,14 @@ class PlayerActivity : ComponentActivity() {
             previousIndex = -1
         }
         if (list[position].saved.key != current?.saved?.key || key != LiveCatalog.QUEUE) startPlayback(position)
+    }
+
+    /** Back from the channel list (live TV): the channel info and buttons show, Next highlighted; they hide after 5 s or with Back. */
+    private fun closeChannelPanelToInfo() {
+        hideChannelPanel()
+        if (current?.isLive != true || pictureHidden) return
+        playerView.showController()
+        handler.post { if (nextButton.visibility == View.VISIBLE) nextButton.requestFocus() }
     }
 
     private fun hideChannelPanel() {
@@ -3471,7 +3488,7 @@ class PlayerActivity : ComponentActivity() {
         // Menus opened on purpose keep the arrows and OK for moving inside them.
         if (channelPanelOpen) {
             if (code == KeyEvent.KEYCODE_BACK) {
-                if (down) { hideChannelPanel(); swallowUp += code }
+                if (down) { closeChannelPanelToInfo(); swallowUp += code }
                 return true
             }
             // OK on a channel: short press plays it, holding OK adds it to (or removes it from) Favorites.

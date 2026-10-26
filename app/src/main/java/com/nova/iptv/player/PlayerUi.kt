@@ -61,42 +61,72 @@ class PillText(context: Context, shorten: Boolean) : TextView(context) {
 }
 
 /**
- * Option A: a row of player buttons that always fits the screen. Measures the row and steps down until it fits:
- * full labels → smaller text → short labels → icons only.
+ * Smart fill: a row of player buttons that always fits the screen width and uses the space it has.
+ * Full labels if they fit (big, then smaller text); otherwise every button starts as an icon and the most used
+ * buttons get their short label first (Next, Live, Rec, Hide, Night, Boost, TV, Fav…) while the row still fits.
  */
 object RowFit {
+    /** Lower = keeps its label longer. */
+    private fun priority(t: String): Int = when {
+        t.startsWith("Next") -> 1
+        t.startsWith("Live") -> 2
+        t.contains("Rec") -> 3
+        t.startsWith("⬛") -> 4
+        t.startsWith("🌙") || t.startsWith("🔊") -> 5
+        t.startsWith("📺") || t.startsWith("♡") || t.startsWith("♥") -> 6
+        t.startsWith("◀") || t.startsWith("⏪") -> 7
+        t.startsWith("CC") || t.startsWith("◔") -> 8
+        t.startsWith("⬇") -> 9
+        t.startsWith("←") || t.startsWith("≈") -> 10
+        t.startsWith("ℹ") || t.contains("Aspect") -> 11
+        else -> 12
+    }
+
     fun fit(row: android.widget.LinearLayout, available: Int, density: Float, bigSp: Float, smallSp: Float) {
         if (available <= 0) return
         val pills = (0 until row.childCount).map { row.getChildAt(it) }.filterIsInstance<PillText>()
         fun dp(v: Int) = (v * density).toInt()
-        fun apply(step: Int) {
-            pills.forEach { p ->
-                val small = step >= 1
-                p.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, if (small) smallSp else bigSp)
-                if (small) p.setPadding(dp(8), dp(6), dp(8), dp(6)) else p.setPadding(dp(14), dp(8), dp(14), dp(8))
-                (p.layoutParams as? android.widget.LinearLayout.LayoutParams)?.marginEnd = dp(if (small) 5 else 8)
-                p.level = when (step) { 0, 1 -> 0; 2 -> 1; else -> 2 }
-            }
+        fun size(small: Boolean) = pills.forEach { p ->
+            p.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, if (small) smallSp else bigSp)
+            if (small) p.setPadding(dp(8), dp(6), dp(8), dp(6)) else p.setPadding(dp(14), dp(8), dp(14), dp(8))
+            (p.layoutParams as? android.widget.LinearLayout.LayoutParams)?.marginEnd = dp(if (small) 5 else 8)
         }
-        for (step in 0..3) {
-            apply(step)
+        fun width(): Int {
             row.measure(android.view.View.MeasureSpec.UNSPECIFIED, android.view.View.MeasureSpec.UNSPECIFIED)
-            if (row.measuredWidth <= available) return
+            return row.measuredWidth
+        }
+        size(false); pills.forEach { it.level = 0 }
+        if (width() <= available) return
+        size(true)
+        if (width() <= available) return
+        pills.forEach { it.level = 2 }
+        if (width() > available) return
+        for (p in pills.filter { it.visibility == android.view.View.VISIBLE }.sortedBy { priority(it.fullText.toString()) }) {
+            p.level = 1
+            if (width() > available) p.level = 2
         }
     }
 
     /** Refits [row] whenever the screen width or a button's label changes (the space = the scroller's parent width). */
     fun attach(scroller: android.view.View, row: android.widget.LinearLayout, bigSp: Float, smallSp: Float) {
-        scroller.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            val parent = v.parent as? android.view.View ?: return@addOnLayoutChangeListener
-            val avail = parent.width - parent.paddingLeft - parent.paddingRight - v.paddingLeft - v.paddingRight
+        fun refit() {
+            val parent = scroller.parent as? android.view.View ?: return
+            val avail = parent.width - parent.paddingLeft - parent.paddingRight - scroller.paddingLeft - scroller.paddingRight
             val labels = (0 until row.childCount).map { row.getChildAt(it) }
                 .joinToString("|") { (it as? PillText)?.fullText?.toString().orEmpty() + (if (it.visibility == android.view.View.VISIBLE) "" else "-") }
             val sig = "$avail#$labels"
             if (row.tag != sig) {
                 row.tag = sig
-                v.post { fit(row, avail, v.resources.displayMetrics.density, bigSp, smallSp) }
+                scroller.post { fit(row, avail, scroller.resources.displayMetrics.density, bigSp, smallSp) }
             }
         }
+        scroller.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> refit() }
+        // The screen width changes the parent (the row itself may keep its size): listen to it too.
+        scroller.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: android.view.View) {
+                (v.parent as? android.view.View)?.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> refit() }
+            }
+            override fun onViewDetachedFromWindow(v: android.view.View) {}
+        })
     }
 }
