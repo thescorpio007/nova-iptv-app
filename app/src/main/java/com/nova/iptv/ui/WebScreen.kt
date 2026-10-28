@@ -469,6 +469,8 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     val tabsVersion by WebState.tabsVersion.collectAsStateWithLifecycle()
     var tabsOpen by remember { mutableStateOf(false) }
     var askTab by remember { mutableStateOf<String?>(null) }
+    /** Just blocked with ⛔: a short bar with Undo. */
+    var undoBlock by remember { mutableStateOf<String?>(null) }
     var shieldOpen by remember { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
     // Phone turned sideways: one thin row instead of Nova's three rows; it slides away while scrolling down.
@@ -818,10 +820,17 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     main.post { runCatching { temp.stopLoading(); temp.destroy() } }
                     val same = AdBlock.siteOf(u.host) == site()
                     // Every link is filtered first: ad / malicious / adult / gambling addresses never open, in any mode.
-                    val refused = kidsRefuse(u) != null ||
+                    val refused = kidsRefuse(u) != null || AdBlock.isMine(u.host) ||
                         (level() != "off" && (AdBlock.isAd(u.host, level()) || com.nova.iptv.data.FilterLists.blocks(u.host)))
+                    // 🧠 The same ad back under a new random name.
+                    val learned = !refused && !same && AdBlock.learn == "on" && AdBlock.looksLikeBlocked(site(), u)
                     when {
                         refused -> { main.post { blocked++ }; showNote("🚫 Blocked: ${u.host}") }
+                        learned -> {
+                            AdBlock.block(u.host, site(), auto = true)
+                            main.post { blocked++ }
+                            showNote("🧠 Blocked like before: ${u.host}")
+                        }
                         WebStore.newTab.value == "tab" -> main.post { openTab(u.toString()) }
                         WebStore.newTab.value == "ask" -> main.post { askTab = u.toString() }
                         !blockPopups || same -> main.post { go(u.toString()) }
@@ -1380,8 +1389,35 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     FocusBox(onClick = { askTab = null; go(link) }, modifier = Modifier.fillMaxWidth()) {
                         Text("↳  Open here", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                     }
+                    if (!same) FocusBox(onClick = {
+                        askTab = null
+                        AdBlock.block(lu.host, site())?.let { undoBlock = it }
+                        blocked++
+                    }, modifier = Modifier.fillMaxWidth().background(Color(0xFF5A2230), RoundedCornerShape(10.dp)).border(1.dp, Color(0xFFFF8A80), RoundedCornerShape(10.dp))) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text("⛔  Block this address (ad / scam)", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            Text("${AdBlock.siteOf(lu.host)} and its sub-addresses never open again (Web ⚙ › My blocked addresses to restore)",
+                                fontSize = 11.sp, color = Color(0xFFFFC9C2))
+                        }
+                    }
                     FocusBox(onClick = { askTab = null }, modifier = Modifier.fillMaxWidth()) {
                         Text("✕  Cancel", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                    }
+                }
+            }
+        }
+
+        // ---- ⛔ just blocked: note with Undo (6 s)
+        undoBlock?.let { h ->
+            LaunchedEffect(h) { kotlinx.coroutines.delay(6000); if (undoBlock == h) undoBlock = null }
+            androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter, offset = androidx.compose.ui.unit.IntOffset(0, -60)) {
+                Row(
+                    Modifier.background(Color(0xEE222222), RoundedCornerShape(20.dp)).padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("⛔ $h blocked — it won't open again", fontSize = 13.sp, color = Color.White)
+                    FocusBox(onClick = { AdBlock.restore(h); undoBlock = null }) {
+                        Text("Undo", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF5FF2D6), modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
                     }
                 }
             }
@@ -1528,6 +1564,57 @@ private fun StartPage(
 }
 
 private val BM_DATE = java.text.SimpleDateFormat("d MMM yyyy · HH:mm:ss", java.util.Locale.ENGLISH)
+
+/** Web ⚙ › 🛡 My blocked addresses: what I blocked with ⛔ (or Nova learned) — restore one or all, add one, 🧠 learning. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun MyBlockedContent() {
+    val mine by AdBlock.mine.collectAsStateWithLifecycle()
+    var open by remember { mutableStateOf(false) }
+    var learn by remember { mutableStateOf(AdBlock.learn) }
+    var adding by remember { mutableStateOf(false) }
+    var newHost by remember { mutableStateOf("") }
+    val df = remember { java.text.SimpleDateFormat("d MMM · HH:mm", java.util.Locale.ENGLISH) }
+    FocusBox(onClick = { open = !open }, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("⛔ My blocked addresses", fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("${mine.size} · ${mine.sumOf { it.count }} stopped  " + if (open) "▲" else "▼", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    if (!open) return
+    Column(Modifier.fillMaxWidth().background(Color(0x14FFFFFF), RoundedCornerShape(12.dp)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Addresses you blocked with ⛔ in the “Open this link?” popup. They are blocked everywhere, with Nova's lists. Restore one if a site you need stops working.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (mine.isEmpty()) Text("None yet.", fontSize = 13.sp)
+        mine.forEach { m ->
+            Row(Modifier.fillMaxWidth().background(Color(0x22FFFFFF), RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text((if (m.auto) "🧠 " else "⛔ ") + m.host, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    Text("blocked " + df.format(java.util.Date(m.at)) + (if (m.from.isNotBlank()) " · from ${m.from}" else "") + " · stopped ${m.count}×" + (if (m.auto) " · learned" else ""),
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                SmallButton("↺ Restore", { AdBlock.restore(m.host) })
+            }
+        }
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (mine.isNotEmpty()) SmallButton("↺ Restore all", { AdBlock.restoreAll() })
+            SmallButton("＋ Add an address…", { adding = !adding })
+        }
+        if (adding) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.material3.OutlinedTextField(newHost, { newHost = it.trim() }, singleLine = true, label = { Text("example.com") }, modifier = Modifier.weight(1f))
+            SmallButton("⛔ Block", {
+                val h = newHost.removePrefix("https://").removePrefix("http://").substringBefore('/').trim()
+                if (h.contains('.')) { AdBlock.block(h, ""); newHost = ""; adding = false }
+            })
+        }
+        Text("🧠 Learn from what I block", fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+        Text("When the same ad comes back with a new random address (opened by the same site, same ending like .cfd), block it by itself and add it here. “Ask me” shows the popup with ⛔ instead.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("on" to "On", "ask" to "Ask me", "off" to "Off").forEach { (k, l) -> Chip(l, learn == k, { learn = k; AdBlock.learn = k }) }
+        }
+    }
+}
 
 /** Web ⚙ › Ads › 🛡 Filter lists: lists on / off, own lists and rules, automatic update. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -1684,6 +1771,7 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
             }
         }
         if (listsOpen) FilterListsContent()
+        MyBlockedContent()
         SwitchRow("Block pop-ups, new tabs & overlays", "popups", flags)
         SwitchRow("Block redirects to other sites", "redirects", flags)
         SwitchRow("Block “open another app” (intent, Telegram, Play Store…)", "appJumps", flags)

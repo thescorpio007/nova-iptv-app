@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -64,9 +65,82 @@ object AdBlock {
             """brazzers|erotic|nude|naked|sex|escort|milf|casino|1xbet|betting|poker|roulette)""",
     )
 
+    // ------------------------------------------------------------------ ⛔ my blocked addresses (Web ⚙)
+
+    /** An address blocked with ⛔ (or learned): [from] = the site whose page opened it; [count] = times stopped. */
+    data class Mine(val host: String, val at: Long, val from: String, val count: Int, val auto: Boolean)
+    val mine = MutableStateFlow<List<Mine>>(emptyList())
+    @Volatile private var mineSet: Set<String> = emptySet()
+    private var prefs: android.content.SharedPreferences? = null
+
+    /** 🧠 Learn from what I block: "on" (default), "ask" or "off". */
+    var learn: String
+        get() = prefs?.getString("learn", "on") ?: "on"
+        set(v) { prefs?.edit()?.putString("learn", v)?.apply() }
+
+    private fun loadMine() {
+        val a = runCatching { org.json.JSONArray(prefs?.getString("mine", "[]") ?: "[]") }.getOrDefault(org.json.JSONArray())
+        val list = (0 until a.length()).mapNotNull { i ->
+            a.optJSONObject(i)?.let { Mine(it.optString("h"), it.optLong("at"), it.optString("from"), it.optInt("n"), it.optBoolean("auto")) }
+        }.filter { it.host.isNotBlank() }
+        setMine(list, save = false)
+    }
+
+    private fun setMine(list: List<Mine>, save: Boolean = true) {
+        mine.value = list.sortedByDescending { it.at }
+        mineSet = list.map { it.host }.toHashSet()
+        if (save) prefs?.edit()?.putString("mine", org.json.JSONArray(list.map {
+            org.json.JSONObject().put("h", it.host).put("at", it.at).put("from", it.from).put("n", it.count).put("auto", it.auto)
+        }).toString())?.apply()
+    }
+
+    /** Blocks [host] and every address under its site ("x.noticesbubbly.cfd" → "noticesbubbly.cfd"). */
+    fun block(host: String?, from: String, auto: Boolean = false): String? {
+        val site = siteOf(host).ifBlank { return null }
+        if (site in mineSet) return site
+        setMine(mine.value + Mine(site, System.currentTimeMillis(), from, 0, auto))
+        Log.i("NovaTest", "ADBLOCK mine + $site (from $from${if (auto) ", learned" else ""})")
+        return site
+    }
+
+    fun restore(host: String) = setMine(mine.value.filter { it.host != host })
+    fun restoreAll() = setMine(emptyList())
+
+    /** One of my blocked addresses (counted). */
+    fun isMine(host: String?): Boolean {
+        if (mineSet.isEmpty() || host.isNullOrBlank()) return false
+        var h = host.lowercase()
+        while (true) {
+            if (h in mineSet) {
+                val hit = h
+                setMine(mine.value.map { if (it.host == hit) it.copy(count = it.count + 1) else it })
+                return true
+            }
+            val dot = h.indexOf('.')
+            if (dot < 0) return false
+            h = h.substring(dot + 1)
+        }
+    }
+
+    private val RANDOM = Regex("""[A-Za-z0-9_-]{20,}""")
+
+    /**
+     * 🧠 The same ad back under a new random name: opened by a page of a site where I blocked one before,
+     * same ending (.cfd, .xyz…), and a long random code in its address.
+     */
+    fun looksLikeBlocked(pageSite: String, url: android.net.Uri): Boolean {
+        if (learn == "off" || mineSet.isEmpty()) return false
+        val host = url.host?.lowercase() ?: return false
+        val tld = host.substringAfterLast('.')
+        val random = RANDOM.containsMatchIn(url.encodedPath.orEmpty() + "?" + url.encodedQuery.orEmpty())
+        return random && mine.value.any { it.from == pageSite && it.host.substringAfterLast('.') == tld }
+    }
+
     fun init(context: Context, http: OkHttpClient) {
         if (started) return
         started = true
+        prefs = context.getSharedPreferences("nova_adblock_mine", Context.MODE_PRIVATE)
+        loadMine()
         dir = context.filesDir
         client = http
         val file = File(dir, "adblock-hosts.txt")
@@ -140,7 +214,7 @@ object AdBlock {
 
     /** An ad / tracker domain for this level ("normal"/"strong": the main list; "maximum": + the big list). */
     fun isAd(host: String?, level: String): Boolean =
-        level != "off" && (inSet(host, hosts) || (level == "maximum" && inSet(host, maxHosts)))
+        isMine(host) || (level != "off" && (inSet(host, hosts) || (level == "maximum" && inSet(host, maxHosts))))
 
     /** Kids protection: an adult or gambling site (list or words in the address). */
     fun isAdult(host: String?, url: String): Boolean = inSet(host, adultHosts) || ADULT_WORDS.containsMatchIn(url)
