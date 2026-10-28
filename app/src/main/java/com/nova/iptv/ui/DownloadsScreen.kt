@@ -173,14 +173,14 @@ private fun DownloadRow(
         // 🔗 The link of this film / episode: copy it, or ▦ QR for the phone.
         if (d.url.startsWith("http")) {
             val ctx = androidx.compose.ui.platform.LocalContext.current
-            var qr by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+            val qrState = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("🔗 " + d.url, fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     color = androidx.compose.ui.graphics.Color(0xFFBFE9FF), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 TextButton(onClick = { copyText(ctx, d.url, "✓ Link copied — paste it in another app (1DM, VLC, a browser…)") }) { Text("📋 Copy link") }
-                TextButton(onClick = { qr = true }) { Text("▦ QR") }
+                TextButton(onClick = { qrState.value = true }) { Text("▦ QR") }
             }
-            if (qr) LinkQrDialog(d.url) { qr = false }
+            if (qrState.value) LinkQrDialog(d.url) { qrState.value = false }
         }
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
             if (d.kind != "recording" && d.status in listOf(DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED, DownloadStatus.PAUSED) && d.doneBytes > 0) {
