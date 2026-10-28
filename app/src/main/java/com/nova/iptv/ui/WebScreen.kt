@@ -167,6 +167,10 @@ private object WebState {
     @Volatile var tapAt: Long = 0L
     /** When you last opened an address yourself (Go, bookmark, Open with): its redirects are allowed for 15 s. */
     @Volatile var userNavAt: Long = 0L
+    /** The site you asked for (bookmark, Go…): it may load even if a filter list names it. */
+    @Volatile var userNavSite: String = ""
+    /** "Open anyway" once for this site after a refusal. */
+    @Volatile var allowOnce: String = ""
     /** Per tab: the pages you actually saw (redirect hops and blocked ad pages are never kept), and where you are. */
     class Hist { val list = mutableListOf<String>(); var idx = -1; @Volatile var going: String? = null }
     val hist = HashMap<WebView, Hist>()
@@ -342,6 +346,9 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
     var showPage by remember { mutableStateOf(WebState.pageUrl.isNotBlank()) }
     var canBack by remember { mutableStateOf(false) }
     var blocked by remember { mutableIntStateOf(0) }
+    /** A page you opened (bookmark, Go, History) while it loads: covers the old page; a problem shows here with ⟳ Retry. */
+    var navCover by remember { mutableStateOf<String?>(null) }
+    var navProblem by remember { mutableStateOf<String?>(null) }
     val removedBoxes by WebState.removed.collectAsStateWithLifecycle()
     var note by remember { mutableStateOf<String?>(null) }
     val found = remember { mutableStateListOf<FoundVideo>() }
@@ -459,6 +466,11 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         showPage = true
         address = url
         WebState.userNavAt = System.currentTimeMillis()
+        WebState.userNavSite = AdBlock.siteOf(Uri.parse(url).host)
+        // A clean start: the old page stops and is covered until the new one shows (never a stale page under a new address).
+        navCover = url; navProblem = null
+        blocked = 0; WebState.removed.value = 0; found.clear(); seen.clear()
+        WebState.webView?.stopLoading()
         WebState.webView?.loadUrl(url)
     }
 
@@ -599,6 +611,9 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         h.idx = j; h.going = target; histVersion++
         showPage = true; address = target
         WebState.userNavAt = System.currentTimeMillis()
+        WebState.userNavSite = AdBlock.siteOf(Uri.parse(target).host)
+        navCover = target; navProblem = null
+        webView.stopLoading()
         webView.loadUrl(target)
     }
     /** ← : the previous page you saw; at a tab's first page: back to the tab it came from, or "No earlier page". */
@@ -703,11 +718,14 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     return true
                 }
                 // The whole page sent to an ad address (click-under tricks): refused even after a click.
-                if (request.isForMainFrame && level() != "off" && AdBlock.siteOf(u.host) != site() &&
+                val asked = AdBlock.siteOf(u.host).let { it == WebState.userNavSite || it == WebState.allowOnce } &&
+                    System.currentTimeMillis() - WebState.userNavAt < 15_000
+                if (request.isForMainFrame && !asked && level() != "off" && AdBlock.siteOf(u.host) != site() &&
                     (AdBlock.isAd(u.host, level()) || com.nova.iptv.data.FilterLists.blocks(u.host))
                 ) {
                     main.post { blocked++ }
                     showNote("🚫 Ad page blocked: ${u.host}")
+                    if (current() && navCover != null) main.post { navProblem = "This site sent you to ${u.host}, which is on the ad / scam lists — it was not opened."; navCover = u.toString() }
                     return true
                 }
                 // An address you opened yourself may move to its new home (e.g. a site's new address): allowed for 15 s.
@@ -722,6 +740,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     // Always told (even with short messages off): otherwise the page just seems not to open.
                     val msg = "🚫 Redirect to ${u.host} blocked — tap Go again to open it"
                     main.post { note = msg; address = u.toString(); main.postDelayed({ if (note == msg) note = null }, 6000) }
+                    if (current() && navCover != null) main.post { navProblem = "This site sent you to its other address ${u.host} — blocked as a redirect."; navCover = u.toString() }
                     return true
                 }
                 return false
@@ -783,7 +802,12 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 recordSoon(view, url)
             }
 
+            override fun onPageCommitVisible(view: WebView, url: String) {
+                if (current() && navProblem == null) navCover = null
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
+                if (current() && navProblem == null && url.startsWith("http")) navCover = null
                 if (current()) canBack = view.canGoBack()
                 recordSoon(view, url)
                 if (current()) fetchName(view)
@@ -1151,6 +1175,32 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                         )
                     }
                     WebScrollBar(webView)
+                }
+                // Opening a page: the old one is covered (never shown under the new address); a problem says why, with ⟳ Retry.
+                navCover?.let { target ->
+                    if (showPage) {
+                        LaunchedEffect(target, navProblem) {
+                            if (navProblem == null) { kotlinx.coroutines.delay(20_000); if (navCover == target && navProblem == null) navProblem = "The page didn't answer in 20 s." }
+                        }
+                        Column(
+                            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            val problem = navProblem
+                            Text(if (problem == null) "Opening ${Uri.parse(target).host ?: target}…" else "⚠ Couldn't open the page", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                            Text(target, fontSize = 11.sp, color = Color(0xFF999999), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (problem == null) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth(0.5f))
+                            else {
+                                Text(problem, fontSize = 13.sp, color = Color(0xFFFFB74D))
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    SmallButton("⟳ Retry", { go(target) })
+                                    SmallButton("Open anyway", { WebState.allowOnce = AdBlock.siteOf(Uri.parse(target).host); go(target) })
+                                    SmallButton("✕ Close", { navCover = null; navProblem = null; address = webView.url.orEmpty() })
+                                }
+                            }
+                        }
+                    }
                 }
                 if (!showPage) StartPage(bookmarks, offer, onOpen = { go(it) }, onRestore = { restoreListOpen = true },
                     canEdit = { f -> if (WebStore.flag("pinSettings")) PinGate.require(hasPin, f) else f() })
