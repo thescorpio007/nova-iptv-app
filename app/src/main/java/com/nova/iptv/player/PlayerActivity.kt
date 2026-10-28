@@ -410,6 +410,7 @@ class PlayerActivity : ComponentActivity() {
             addView(epgView)
             addView(timeView)
             addView(buttonScroller)
+            addView(linkLine())
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -505,6 +506,7 @@ class PlayerActivity : ComponentActivity() {
             ),
         )
         if (com.nova.iptv.data.Cast.isTv(this)) vod.extraViews["📺 Play on TV"]?.visibility = View.GONE
+        vod.addBottomView(linkLine())
         // Keep the controls clear of the camera cut-out.
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(vod.view) { v, insets ->
             val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
@@ -676,6 +678,7 @@ class PlayerActivity : ComponentActivity() {
         PlaybackQueue.index = i
         val item = items[i]
         current = item
+        linkTexts.forEach { it.text = "🔗 " + item.url }
         if (otherAppOpen) closeOtherApp()
         if (similarOpen) closeSimilar()
         startSession(item, quiet)
@@ -2185,6 +2188,61 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /** Plays the current channel / video in the external player app and closes this one. */
+    // ------------------------------------------------------------------ 🔗 link of what plays (copy / QR)
+
+    private val linkTexts = mutableListOf<TextView>()
+
+    /** "🔗 http://…  [📋 Copy link] [▦ QR]" under the buttons. */
+    private fun linkLine(): View {
+        val url = TextView(this).apply {
+            setTextColor(0xFFBFE9FF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            typeface = Typeface.MONOSPACE
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            text = current?.url?.let { "🔗 $it" } ?: ""
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        linkTexts += url
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+            addView(url)
+            addView(pill("📋 Copy link") { copyLink() })
+            addView(pill("▦ QR") { showLinkQr() })
+        }
+    }
+
+    private fun copyLink() {
+        val u = current?.url ?: return
+        val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("Nova link", u))
+        Toast.makeText(this, "✓ Link copied — paste it in another app (1DM, VLC, a browser…)", Toast.LENGTH_LONG).show()
+    }
+
+    private fun showLinkQr() {
+        val item = current ?: return
+        val bmp = com.nova.iptv.ui.qrBitmap(item.url, 600) ?: return
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+            addView(android.widget.ImageView(this@PlayerActivity).apply {
+                setImageBitmap(bmp)
+                layoutParams = LinearLayout.LayoutParams(dp(220), dp(220)).apply { gravity = Gravity.CENTER_HORIZONTAL }
+            })
+            addView(TextView(this@PlayerActivity).apply {
+                text = "Scan with the phone camera to get the full link on the phone.\n\n⚠ This link contains your account user name and password — share it only with your own devices."
+                setPadding(0, dp(10), 0, 0)
+            })
+        }
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("▦ Link of " + item.title)
+            .setView(box)
+            .setPositiveButton("Close", null)
+            .show()
+    }
+
     /** 📺 Play on TV (phones): sends this video to Nova on the TV box; the phone pauses when asked. */
     private fun sendToTv() {
         val item = current ?: return

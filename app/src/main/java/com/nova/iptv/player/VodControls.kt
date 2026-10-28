@@ -309,6 +309,11 @@ class VodControls(
         return row
     }
 
+    private var bottomCol: LinearLayout? = null
+
+    /** Adds a line under the buttons (above the signature). */
+    fun addBottomView(v: View) { bottomCol?.let { c -> c.addView(v, (c.childCount - 1).coerceAtLeast(0)) } }
+
     private fun buildBottom(): View {
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -369,6 +374,7 @@ class VodControls(
             // Option A: the row always fits the screen width (smaller text → short labels → icons).
             RowFit.attach(this, buttons, 15f, 12f)
         })
+        bottomCol = col
         col.addView(text(com.nova.iptv.ui.SIGNATURE, 10f).apply {
             alpha = 0.55f
             gravity = Gravity.END

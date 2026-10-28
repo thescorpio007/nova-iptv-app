@@ -269,6 +269,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val welcomeForm = MutableStateFlow(false)
     /** No server yet: Nova used as a web browser (Web tab with the welcome row). */
     val webOnly = MutableStateFlow(false)
+    /** Long-press menu of a film / series (copy name, search, Favorites). */
+    val itemActions = MutableStateFlow<SavedItem?>(null)
     /** "Hide …?" after a double click on a group or a live channel (answered No by itself after 10 s). */
     data class HideAsk(val title: String, val text: String, val onYes: () -> Unit)
     val hideAsk = MutableStateFlow<HideAsk?>(null)

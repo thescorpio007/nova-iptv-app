@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
                     }
                     // Bookmarks sent from another Nova on the Wi-Fi: "Add them?" over any screen.
                     IncomingBookmarksHost()
+                    ItemActionsHost(vm)
                     // A whole Nova configuration sent from another device (phone → box…): code, then restore.
                     IncomingTransferHost(vm)
                 }

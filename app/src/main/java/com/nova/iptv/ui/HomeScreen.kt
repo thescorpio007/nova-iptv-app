@@ -1092,7 +1092,7 @@ private fun FilmsContent(vm: MainViewModel, big: Boolean) {
                     m.name, m.icon,
                     modifier = posterBack.second(m.key, ownPoster),
                     onClick = { vm.openMovie(m) },
-                    onLongClick = { vm.toggleFavorite(vm.saved(m)) },
+                    onLongClick = { vm.itemActions.value = vm.saved(m) },
                     onDoubleClick = if (selected == MainViewModel.FAV) null else ({ hideAsk = m }),
                     favorite = favKeys.contains("${ItemType.MOVIE}|${m.accountId}|${m.streamId}"),
                     active = m.key == lastKey,
@@ -1202,7 +1202,7 @@ private fun SeriesContent(vm: MainViewModel, big: Boolean) {
                     s.name, s.cover,
                     modifier = posterBack.second(s.key, ownPoster),
                     onClick = { vm.openSeries(s) },
-                    onLongClick = { vm.toggleFavorite(vm.saved(s)) },
+                    onLongClick = { vm.itemActions.value = vm.saved(s) },
                     onDoubleClick = if (selected == MainViewModel.FAV) null else ({ hideAsk = s }),
                     favorite = favKeys.contains("${ItemType.SERIES}|${s.accountId}|${s.seriesId}"),
                     badge = posterBadge(vm, s.accountId, sort, s.year, s.rating),
@@ -1284,7 +1284,7 @@ private fun SavedRow(vm: MainViewModel, s: SavedItem, favs: List<SavedItem>, mul
         subtitle = if (multi) "$label  ·  ${vm.accountName(s.accountId)}" else label,
         image = s.icon,
         onClick = onClick,
-        onLongClick = { vm.toggleFavorite(s) },
+        onLongClick = { if (s.type == ItemType.MOVIE || s.type == ItemType.SERIES) vm.itemActions.value = s else vm.toggleFavorite(s) },
         trailing = { FavButton(isFav) { vm.toggleFavorite(s) } },
     )
 }
