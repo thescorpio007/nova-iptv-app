@@ -48,7 +48,7 @@ fun copyText(context: Context, text: String, toast: String) {
     Toast.makeText(context, toast, Toast.LENGTH_LONG).show()
 }
 
-/** Long-press on a film / series: copy its name (to search it on the web), search it in the Web tab, Favorites. Closes after 10 s. */
+/** Long-press on a film / series: ♡ Favorites first, then copy its name (to search it on the web), search it in the Web tab, Favorites. Closes after 10 s. */
 @Composable
 fun ItemActionsHost(vm: MainViewModel) {
     val item by vm.itemActions.collectAsStateWithLifecycle()
@@ -63,9 +63,9 @@ fun ItemActionsHost(vm: MainViewModel) {
         Panel {
             Text(s.name, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = GREEN, maxLines = 2)
             Text((if (s.type == ItemType.SERIES) "Series" else "Film") + " · closes in $left s", fontSize = 12.sp, color = Color(0xFF9FB3E0))
-            WideButton("📋 Copy the name: $clean", primary = true) { copyText(context, clean, "✓ Copied: $clean"); close() }
+            WideButton(if (isFav) "♥ Remove from Favorites" else "♡ Add to Favorites", primary = true) { vm.toggleFavorite(s); close() }
+            WideButton("📋 Copy the name: $clean") { copyText(context, clean, "✓ Copied: $clean"); close() }
             WideButton("🔍 Search it in the Web tab") { close(); vm.openWeb("https://duckduckgo.com/?q=" + android.net.Uri.encode(clean)) }
-            WideButton(if (isFav) "♥ Remove from Favorites" else "♡ Add to Favorites") { vm.toggleFavorite(s); close() }
             WideButton("📋 Copy the exact name") { copyText(context, s.name, "✓ Copied: ${s.name}"); close() }
             WideButton("Cancel") { close() }
         }

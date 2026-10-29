@@ -606,6 +606,8 @@ fun PlayerSettings(vm: MainViewModel) {
 
     HidePictureCard()
 
+    PhoneOrientationCard(vm)
+
     SettingsCard("Built-in player") {
         Text("Video decoder", fontWeight = FontWeight.Medium)
         Hint("Hardware uses the box's chip (needed for 4K, HEVC and HDR). Software can help with a few unusual SD/HD streams but is slow for 4K.")
@@ -1626,5 +1628,18 @@ private fun ReceiveFromPhonesCard() {
         Hint("This device appears as “${com.nova.iptv.data.Dlna.friendlyName()}” in DLNA cast apps on any phone of this Wi-Fi. “Ask me first” shows a popup that plays after 10 s unless you refuse.")
         ChoiceRow(listOf("ask" to "Ask me first (10 s)", "direct" to "Play directly", "off" to "Off"), dlna) { dlna = it; com.nova.iptv.data.Dlna.mode = it }
         Hint("Works while Nova is open, or always if “Open Nova when the box starts” is on with “Display over other apps” allowed.")
+    }
+}
+
+
+/** 📱 Phone orientation of the player: follow the phone (default), start upright, or landscape only. */
+@Composable
+private fun PhoneOrientationCard(vm: MainViewModel) {
+    val st = vm.appStorage
+    var mode by remember { mutableStateOf(st.phoneOrientation) }
+    SettingsCard("📱 Phone orientation", summary = when (mode) { "portrait" -> "start in portrait"; "landscape" -> "landscape only"; else -> "follow the phone" }) {
+        Hint("Phones only — the TV box and tablets stay landscape. The video never stops when it turns. Upright: the video on top, the info and buttons under it (live TV: the channel list below).")
+        ChoiceRow(listOf("follow" to "Follow the phone", "portrait" to "Start in portrait", "landscape" to "Landscape only"), mode) { mode = it; st.phoneOrientation = it }
+        Hint("Follow the phone = upright or sideways like the phone (uses the phone's auto-rotate switch). The ⟲ Rotate button in the player always switches by hand.")
     }
 }

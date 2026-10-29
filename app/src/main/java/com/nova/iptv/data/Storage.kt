@@ -159,6 +159,11 @@ class Storage(context: Context) {
         get() = prefs.getBoolean("groups_always_left", false)
         set(value) = prefs.edit().putBoolean("groups_always_left", value).apply()
 
+    /** 📱 Phones: "follow" (turns with the phone), "portrait" (opens upright) or "landscape" (as before). */
+    var phoneOrientation: String
+        get() = prefs.getString("phone_orientation", "follow") ?: "follow"
+        set(value) = prefs.edit().putString("phone_orientation", value).apply()
+
     /** Which group Live TV, Films and Series open on: "first" (top group of my order), "fav" (★ Favorites) or "last" (last group opened). */
     var startGroup: String
         get() = prefs.getString("start_group", "first") ?: "first"

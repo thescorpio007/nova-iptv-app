@@ -282,6 +282,7 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        startOrientation()
         hideSystemBars()
         buildViews()
         watchNetwork()
@@ -299,6 +300,159 @@ class PlayerActivity : ComponentActivity() {
         startPlayback(PlaybackQueue.index)
         handler.post(tickTask)
         startCastReceiver()
+        applyOrientationLayout()
+    }
+
+    // ------------------------------------------------------------------ 📱 phone upright (YouTube style) / sideways
+
+    private var portrait = false
+    private var layoutDone = false
+    /** ⟲ Rotate or "Start in portrait": held until the phone is physically turned the same way, then it follows the phone again. */
+    private var manualLock = false
+    private var lockedPortrait = false
+    private var startLock = false
+    private var openedAt = 0L
+    private var orientationListener: android.view.OrientationEventListener? = null
+    private var portraitBox: LinearLayout? = null
+    private var portraitList: android.widget.ListView? = null
+    private var infoBarIndex = -1
+    private var infoBarParams: ViewGroup.LayoutParams? = null
+
+    private fun phoneMode(): String =
+        if (!PlayerUi.compact(this)) "tv" else app.storage.phoneOrientation
+
+    private fun baseOrientation(): Int = when (phoneMode()) {
+        "tv", "landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER
+    }
+
+    private fun startOrientation() {
+        openedAt = System.currentTimeMillis()
+        val mode = phoneMode()
+        if (mode == "portrait") {
+            startLock = true
+            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else requestedOrientation = baseOrientation()
+        if (mode == "tv") return
+        orientationListener = object : android.view.OrientationEventListener(this) {
+            override fun onOrientationChanged(deg: Int) {
+                if (deg == ORIENTATION_UNKNOWN) return
+                val upright = deg < 25 || deg > 335 || deg in 155..205
+                val sideways = deg in 65..115 || deg in 245..295
+                when {
+                    // "Start in portrait": turning the phone sideways goes landscape.
+                    startLock && sideways && System.currentTimeMillis() - openedAt > 1500 -> {
+                        startLock = false; requestedOrientation = baseOrientation()
+                    }
+                    // ⟲ Rotate: once the phone is held the same way, it follows the phone again.
+                    manualLock && ((lockedPortrait && upright) || (!lockedPortrait && sideways)) -> {
+                        manualLock = false; requestedOrientation = baseOrientation()
+                    }
+                }
+            }
+        }.also { if (it.canDetectOrientation()) it.enable() }
+    }
+
+    /** ⟲ Rotate: upright ⇄ sideways at once (even with the phone's auto-rotate off). */
+    private fun rotateNow() {
+        val nowPortrait = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        startLock = false
+        manualLock = true
+        lockedPortrait = !nowPortrait
+        requestedOrientation = if (nowPortrait) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyOrientationLayout()
+    }
+
+    /** Upright on a phone: video on top (16:9); under it the info + buttons, and for live TV the channels of the list. */
+    private fun applyOrientationLayout() {
+        if (!::playerView.isInitialized || !::infoBar.isInitialized) return
+        val p = PlayerUi.compact(this) && resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        val w = resources.displayMetrics.widthPixels
+        val vh = w * 9 / 16
+        val live = current?.isLive == true
+        val root = playerView.parent as? FrameLayout ?: return
+        portrait = p
+        layoutDone = true
+        playerView.layoutParams = if (p) FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, vh, Gravity.TOP)
+            else FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        if (::vod.isInitialized) vod.setPortrait(p && !live, vh)
+        // Live TV upright: the info bar moves under the video, with the channel list below it.
+        if (p && live) {
+            val box = portraitBox ?: LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(0xFF0B0E14.toInt())
+            }.also { portraitBox = it }
+            if (infoBar.parent !== box) {
+                infoBarIndex = root.indexOfChild(infoBar)
+                infoBarParams = infoBar.layoutParams
+                root.removeView(infoBar)
+                box.removeAllViews()
+                box.addView(infoBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                box.addView(buildPortraitList(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                root.addView(box, infoBarIndex.coerceAtLeast(0))
+            }
+            box.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply { topMargin = vh }
+            box.visibility = View.VISIBLE
+            infoBar.visibility = View.VISIBLE
+            infoBar.background = null
+            refreshPortraitList()
+        } else {
+            val box = portraitBox
+            if (box != null && infoBar.parent === box) {
+                box.removeView(infoBar)
+                root.removeView(box)
+                root.addView(infoBar, infoBarIndex.coerceIn(0, root.childCount), infoBarParams)
+                infoBar.background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xDD000000.toInt(), 0x00000000))
+                infoBar.visibility = if (live && playerView.isControllerFullyVisible) View.VISIBLE else View.GONE
+            }
+        }
+        updateClock()
+    }
+
+    private fun buildPortraitList(): View {
+        val list = android.widget.ListView(this).apply {
+            divider = android.graphics.drawable.ColorDrawable(0xFF161B24.toInt())
+            dividerHeight = 1
+            choiceMode = android.widget.ListView.CHOICE_MODE_SINGLE
+            setSelector(android.graphics.drawable.ColorDrawable(0xFF16261C.toInt()))
+            setOnItemClickListener { _, _, pos, _ ->
+                if (pos != PlaybackQueue.index && pos in PlaybackQueue.items.indices) {
+                    PlaybackQueue.index = pos
+                    startPlayback(pos)
+                }
+            }
+        }
+        portraitList = list
+        return list
+    }
+
+    private fun refreshPortraitList() {
+        val list = portraitList ?: return
+        val items = PlaybackQueue.items
+        list.adapter = object : android.widget.BaseAdapter() {
+            override fun getCount() = items.size
+            override fun getItem(i: Int) = items[i]
+            override fun getItemId(i: Int) = i.toLong()
+            override fun getView(i: Int, convert: View?, parent: ViewGroup?): View {
+                val t = (convert as? TextView) ?: TextView(this@PlayerActivity).apply {
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    setPadding(dp(16), dp(12), dp(16), dp(12))
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                val on = i == PlaybackQueue.index
+                t.text = "${i + 1}.  ${items[i].title}" + if (on) "  ▶" else ""
+                t.setTextColor(if (on) 0xFF2EE66B.toInt() else Color.WHITE)
+                return t
+            }
+        }
+        val idx = PlaybackQueue.index
+        if (idx in items.indices) { list.setItemChecked(idx, true); list.setSelection((idx - 2).coerceAtLeast(0)) }
     }
 
     // ================================================================== views
@@ -375,6 +529,7 @@ class PlayerActivity : ComponentActivity() {
         downloadButton = pill("⬇ Download") { downloadCurrent() }
         externalButton = pill("↗ External player") { openExternal() }
         val castButton = pill("📺 Play on TV") { sendToTv() }.also { if (com.nova.iptv.data.Cast.isTv(this)) it.visibility = View.GONE }
+        val rotateButton = pill("⟲ Rotate") { rotateNow() }.also { if (!PlayerUi.compact(this)) it.visibility = View.GONE }
         aspectButton = pill("Aspect: Fit") { cycleAspect() }
         favButton = pill("♡ Favorite") { toggleFavorite() }
         val tracksButton = pill("CC Audio & subtitles") { vod.openPanel() }
@@ -387,7 +542,7 @@ class PlayerActivity : ComponentActivity() {
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, favButton, externalButton, castButton, aspectButton, downloadButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, favButton, externalButton, castButton, rotateButton, aspectButton, downloadButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -447,7 +602,7 @@ class PlayerActivity : ComponentActivity() {
             controllerShowTimeoutMs = 5000
             setControllerVisibilityListener(
                 PlayerView.ControllerVisibilityListener { visibility ->
-                    infoBar.visibility = visibility
+                    infoBar.visibility = if (portrait && current?.isLive == true) View.VISIBLE else visibility
                     updateClock()
                     if (visibility != View.VISIBLE && ::keySink.isInitialized && ::vod.isInitialized && !channelPanelOpen && !vod.isPanelOpen) keySink.requestFocus()
                 }
@@ -503,8 +658,10 @@ class PlayerActivity : ComponentActivity() {
                 "♡ Favorite" to { toggleFavorite() },
                 "↗ External player" to { openExternal() },
                 "📺 Play on TV" to { sendToTv() },
+                "⟲ Rotate" to { rotateNow() },
             ),
         )
+        if (!PlayerUi.compact(this)) vod.extraViews["⟲ Rotate"]?.visibility = View.GONE
         if (com.nova.iptv.data.Cast.isTv(this)) vod.extraViews["📺 Play on TV"]?.visibility = View.GONE
         vod.addBottomView(linkLine())
         // Keep the controls clear of the camera cut-out.
@@ -822,6 +979,7 @@ class PlayerActivity : ComponentActivity() {
             vod.resetForNewItem(titleView.text.toString(), resizeNames[resizeIndex])
             vod.showAndFocus()
         }
+        if (layoutDone) applyOrientationLayout()
     }
 
     /** Adds a subtitle file (.srt, .vtt, .ass) to the current video and keeps the position. */
@@ -3765,6 +3923,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        orientationListener?.disable()
         if (castFrom != null && com.nova.iptv.data.Cast.generation.value == castGen) com.nova.iptv.data.Cast.restoreQueue()
         StreamCheck.playing(null)
         StreamCheck.playerClosed()

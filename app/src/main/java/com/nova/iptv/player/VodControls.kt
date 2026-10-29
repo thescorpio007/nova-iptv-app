@@ -506,10 +506,38 @@ class VodControls(
     }
 
     fun hide() {
+        if (pinned) return
         controls.visibility = View.GONE
     }
 
-    fun toggle() = if (controls.visibility == View.VISIBLE) hide() else show()
+    fun toggle() = if (controls.visibility == View.VISIBLE && !pinned) hide() else show()
+
+    /** Phone upright (YouTube style): controls stay on screen, under the video ([videoHeight] at the top). */
+    var pinned = false
+        private set
+    private val landscapeParams = HashMap<View, ViewGroup.LayoutParams>()
+
+    fun setPortrait(portrait: Boolean, videoHeight: Int) {
+        val kids = (0 until controls.childCount).map { controls.getChildAt(it) }
+        if (kids.size < 5) return
+        if (landscapeParams.isEmpty()) kids.forEach { landscapeParams[it] = it.layoutParams }
+        val sides = listOf(kids[1], kids[2])
+        val center = kids[3]
+        val bottom = kids[4]
+        pinned = portrait
+        if (portrait) {
+            sides.forEach { it.visibility = View.GONE }
+            center.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+                .apply { topMargin = (videoHeight / 2 - dp(46)).coerceAtLeast(0) }
+            bottom.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+                .apply { topMargin = videoHeight }
+            if (enabled) show()
+        } else {
+            sides.forEach { it.visibility = View.VISIBLE }
+            landscapeParams[center]?.let { center.layoutParams = it }
+            landscapeParams[bottom]?.let { bottom.layoutParams = it }
+        }
+    }
 
     /** Shows the controls and puts the remote's focus on Play/Pause. */
     fun showAndFocus() {
@@ -558,7 +586,7 @@ class VodControls(
         if (!userSeeking) timeNow.text = format(pos)
         timeTotal.text = if (d > 0) format(d) else "--:--"
         seekBar.keyProgressIncrement = if (d > 0) (10_000L * 1000 / d).toInt().coerceAtLeast(1) else 10
-        if (controls.visibility == View.VISIBLE && !isPanelOpen && p.isPlaying &&
+        if (controls.visibility == View.VISIBLE && !isPanelOpen && p.isPlaying && !pinned &&
             System.currentTimeMillis() - lastInteraction > 5000
         ) {
             hide()
