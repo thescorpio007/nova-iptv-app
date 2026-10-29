@@ -301,6 +301,7 @@ class PlayerActivity : ComponentActivity() {
         handler.post(tickTask)
         startCastReceiver()
         applyOrientationLayout()
+        playerView.postDelayed({ applyOrientationLayout() }, 300)
     }
 
     // ------------------------------------------------------------------ 📱 phone upright (YouTube style) / sideways
@@ -366,6 +367,8 @@ class PlayerActivity : ComponentActivity() {
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         applyOrientationLayout()
+        // The camera / status bar sizes are known once the screen has turned: place again.
+        playerView.postDelayed({ applyOrientationLayout() }, 300)
     }
 
     /** Upright on a phone: video on top (16:9); under it the info + buttons, and for live TV the channels of the list. */
@@ -378,9 +381,15 @@ class PlayerActivity : ComponentActivity() {
         val root = playerView.parent as? FrameLayout ?: return
         portrait = p
         layoutDone = true
-        playerView.layoutParams = if (p) FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, vh, Gravity.TOP)
+        // Upright: the video starts below the front camera / status bar area (never under the camera hole).
+        val ins = androidx.core.view.ViewCompat.getRootWindowInsets(root)
+        val topInset = if (p && ins != null) maxOf(
+            ins.getInsets(WindowInsetsCompat.Type.displayCutout()).top,
+            ins.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.statusBars()).top,
+        ) else 0
+        playerView.layoutParams = if (p) FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, vh, Gravity.TOP).apply { topMargin = topInset }
             else FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        if (::vod.isInitialized) vod.setPortrait(p && !live, vh)
+        if (::vod.isInitialized) vod.setPortrait(p && !live, vh, (topInset - vod.view.paddingTop).coerceAtLeast(0))
         // Live TV upright: the info bar moves under the video, with the channel list below it.
         if (p && live) {
             val box = portraitBox ?: LinearLayout(this).apply {
@@ -396,7 +405,7 @@ class PlayerActivity : ComponentActivity() {
                 box.addView(buildPortraitList(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
                 root.addView(box, infoBarIndex.coerceAtLeast(0))
             }
-            box.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply { topMargin = vh }
+            box.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply { topMargin = vh + topInset }
             box.visibility = View.VISIBLE
             infoBar.visibility = View.VISIBLE
             infoBar.background = null
@@ -3794,23 +3803,16 @@ class PlayerActivity : ComponentActivity() {
             return true
         }
 
-        // ⬛ Hide picture (OK by default): OK twice hides; one OK = channel list (live) / player buttons (films).
+        // ⬛ Hide picture: ☰ Menu only (press again to show). OK: one press = channel list (live) / player buttons (films),
+        // OK twice = info & buttons, hold = Rec / Download (above).
         val hideKey = item != null && RemoteKeys.actionFor(app.storage, RemoteKeys.Area.PLAYER, code) == "play_hide"
         if (pictureHidden && item != null) {
             if (hideKey) {
-                if (down && event.repeatCount == 0) {
-                    val now = android.os.SystemClock.uptimeMillis()
-                    val waiting = pendingUnhide
-                    when {
-                        now - hiddenAt < 400 -> {}  // the end of the double press that hid it
-                        waiting != null -> { handler.removeCallbacks(waiting); pendingUnhide = null; showHideOptions() }
-                        // Wait a moment: a second press opens the options instead (the picture never flashes).
-                        else -> Runnable { pendingUnhide = null; showPicture() }.also { pendingUnhide = it; handler.postDelayed(it, 400) }
-                    }
-                }
+                if (down && event.repeatCount == 0) showPicture()
                 if (down) swallowUp += code
                 return true
             }
+            if (isOk) { if (down) swallowUp += code; return true }
             if (!item.isLive && (code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)) {
                 if (down && event.repeatCount == 0) vod.seekBy(30_000)
                 if (down) swallowUp += code
@@ -3823,17 +3825,23 @@ class PlayerActivity : ComponentActivity() {
                 return true
             }
         } else if (hideKey && item != null) {
+            if (down && event.repeatCount == 0) {
+                if (item.isLive) playerView.hideController() else vod.hide()
+                hidePicture()
+            }
+            if (down) swallowUp += code
+            return true
+        } else if (isOk && item != null && RemoteKeys.actionFor(app.storage, if (item.isLive) RemoteKeys.Area.LIVE else RemoteKeys.Area.VOD, code) == null) {
             val controlsShown = if (item.isLive) playerView.isControllerFullyVisible else vod.controlsVisible
             val menusOpen = vod.isPanelOpen || channelPanelOpen || recentBarOpen
             if (!controlsShown && !menusOpen) {
-                // OK twice = hide. One OK (after a short wait to rule out a second press) = channel list (live TV)
-                // or the player buttons (films). Holding OK = Rec / Download (handled above).
                 if (down && event.repeatCount == 0) {
                     val waiting = okSinglePending
                     if (waiting != null) {
+                        // OK twice: the info & buttons.
                         handler.removeCallbacks(waiting); okSinglePending = null
                         swallowUp += code
-                        hidePicture()
+                        showControlsNow(item)
                     }
                 } else if (event.action == KeyEvent.ACTION_UP) {
                     okSinglePending = Runnable {
@@ -3844,14 +3852,14 @@ class PlayerActivity : ComponentActivity() {
                 }
                 return true
             }
-            if (item.isLive && controlsShown && !infoBar.hasFocus() && isOk) {
+            if (item.isLive && controlsShown && !infoBar.hasFocus()) {
                 // Info on screen (not in the buttons): OK hides it, as before.
                 if (down && event.repeatCount == 0) playerView.hideController()
                 if (down) swallowUp += code
                 return true
             }
             // Buttons on screen: OK presses the highlighted one.
-            if (isOk) return super.dispatchKeyEvent(event)
+            return super.dispatchKeyEvent(event)
         }
 
         if (item != null && !RemoteKeys.isReserved(code)) {

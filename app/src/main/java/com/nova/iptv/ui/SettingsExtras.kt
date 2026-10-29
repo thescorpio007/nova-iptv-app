@@ -1595,7 +1595,7 @@ private fun HidePictureCard() {
     var mode by remember { mutableStateOf(st.hideMode) }
     var secs by remember { mutableStateOf(st.hideSeconds) }
     SettingsCard("⬛ Hide picture", summary = when (mode) { "skip" -> "skip ahead"; "wait" -> "wait"; else -> "until OK" } + " · ${if (secs >= 60) "1 min" else "$secs s"}") {
-        Hint("OK twice while watching covers the picture with a fake “Video signal error” and turns the sound off. One OK shows it again; OK twice opens its options. (One OK alone opens the channel list in live TV, or the player buttons in films.)")
+        Hint("☰ Menu (only Menu) covers the picture with a fake “Video signal error” and turns the sound off; Menu again shows it. Change the key in Settings › Remote control.")
         Text("When I hide the picture", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("skip" to "Skip ahead", "wait" to "Wait", "stay" to "Until I press OK"), mode) { mode = it; st.hideMode = it }
         Hint(when (mode) {

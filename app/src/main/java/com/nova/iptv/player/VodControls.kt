@@ -517,7 +517,7 @@ class VodControls(
         private set
     private val landscapeParams = HashMap<View, ViewGroup.LayoutParams>()
 
-    fun setPortrait(portrait: Boolean, videoHeight: Int) {
+    fun setPortrait(portrait: Boolean, videoHeight: Int, videoTop: Int = 0) {
         val kids = (0 until controls.childCount).map { controls.getChildAt(it) }
         if (kids.size < 5) return
         if (landscapeParams.isEmpty()) kids.forEach { landscapeParams[it] = it.layoutParams }
@@ -528,9 +528,9 @@ class VodControls(
         if (portrait) {
             sides.forEach { it.visibility = View.GONE }
             center.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-                .apply { topMargin = (videoHeight / 2 - dp(46)).coerceAtLeast(0) }
+                .apply { topMargin = (videoTop + videoHeight / 2 - dp(46)).coerceAtLeast(0) }
             bottom.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
-                .apply { topMargin = videoHeight }
+                .apply { topMargin = videoTop + videoHeight }
             if (enabled) show()
         } else {
             sides.forEach { it.visibility = View.VISIBLE }

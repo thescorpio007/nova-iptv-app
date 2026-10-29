@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -114,8 +115,13 @@ fun RemoteMapDialog(storage: Storage, onClose: () -> Unit) {
 
     fun labelFor(b: RemoteButton): Pair<String, String?> {
         b.fixed?.let { return it to null }
-        val a = RemoteKeys.actionInTab(storage, tab, b.code) ?: return "Not used" to null
-        val extra = if (a.id == "play_hide") "OK twice = hide · OK once = channel list (live) / buttons (films) · hold = Rec / Download" else null
+        val ok = b.code == KeyEvent.KEYCODE_DPAD_CENTER || b.code == KeyEvent.KEYCODE_ENTER
+        val a = RemoteKeys.actionInTab(storage, tab, b.code) ?: return when {
+            ok && tab == RemoteKeys.Area.LIVE -> "Channel list" to "OK twice = info & buttons · hold = Rec"
+            ok && tab == RemoteKeys.Area.VOD -> "Player buttons" to "OK twice = info & buttons · hold = Download"
+            else -> "Not used" to null
+        }
+        val extra = if (a.id == "play_hide") "Fake “video signal error” + sound off · press again to show" else null
         return shortName(a.label) to extra
     }
 
@@ -149,6 +155,10 @@ fun RemoteMapDialog(storage: Storage, onClose: () -> Unit) {
                     true
                 },
         ) {
+            // A phone (small screen): a simple list that always fits, instead of the drawn remote.
+            if (minOf(maxWidth.value / 1000f, maxHeight.value / 700f) < 0.7f) {
+                CompactRemote(list, tab, { tab = it }, { labelFor(it) }, { b -> if (b.fixed == null) picking = b }, onClose)
+            } else {
             val s = minOf(maxWidth.value / 1000f, maxHeight.value / 700f)
             fun d(v: Float) = (v * s).dp
             val top = 60f
@@ -233,6 +243,7 @@ fun RemoteMapDialog(storage: Storage, onClose: () -> Unit) {
                     }
                 }
             }
+            }
         }
     }
 
@@ -298,5 +309,41 @@ fun RemoteMapDialog(storage: Storage, onClose: () -> Unit) {
                 }
             },
         )
+    }
+}
+
+
+/** "Your remote" on a phone: every button in a list (name · what it does), tap to change. */
+@Composable
+private fun CompactRemote(
+    list: List<RemoteButton>, tab: RemoteKeys.Area, onTab: (RemoteKeys.Area) -> Unit,
+    labelFor: (RemoteButton) -> Pair<String, String?>, onPick: (RemoteButton) -> Unit, onClose: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("🎮 Your remote", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ACCENT)
+        Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(RemoteKeys.Area.LIVE to "Live TV", RemoteKeys.Area.VOD to "Films & series", RemoteKeys.Area.LISTS to "Lists & menus")
+                .forEach { (a, l) -> Chip(l, tab == a, { onTab(a) }) }
+            Chip("✕ Close", false, onClose)
+        }
+        Text("Tap a button to choose what it does. Not every remote has every button.", fontSize = 12.sp, color = Color(0xFF9FB3E0))
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            items(list.sortedBy { !it.left }) { b ->
+                val (text, extra) = labelFor(b)
+                FocusBox(onClick = { onPick(b) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp)) { f ->
+                    Row(
+                        Modifier.fillMaxWidth().background(if (f) Color(0xFF2F4B7C) else Color(0xFF16264A), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(b.name, fontWeight = FontWeight.Bold, color = ACCENT, modifier = Modifier.width(96.dp), maxLines = 2)
+                        Column(Modifier.weight(1f)) {
+                            Text(text, color = if (b.fixed != null) Color(0xFF9FB3E0) else Color.White)
+                            extra?.let { Text(it, fontSize = 12.sp, color = Color(0xFF9FB3E0)) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

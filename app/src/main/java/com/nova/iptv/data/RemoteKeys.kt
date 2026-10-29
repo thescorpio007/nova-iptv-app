@@ -22,8 +22,8 @@ object RemoteKeys {
 
     val actions: List<Action> = listOf(
         // ---- while watching (both players)
-        Action("play_hide", Area.PLAYER, "⬛ Hide / show the picture (shows a fake error) · press twice to hide; once = channel list (live) / player buttons (films)",
-            listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)),
+        Action("play_hide", Area.PLAYER, "⬛ Hide / show the picture (shows a fake error) · press again to show it",
+            listOf(KeyEvent.KEYCODE_MENU)),
         Action("play_night", Area.PLAYER, "🌙 Night mode (sound) on / off", emptyList()),
         Action("play_boost", Area.PLAYER, "🔊 Volume boost", emptyList()),
         // ---- live TV
@@ -31,7 +31,7 @@ object RemoteKeys {
         Action("live_prev", Area.LIVE, "Previous channel", listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_MEDIA_PREVIOUS)),
         Action("live_list", Area.LIVE, "Groups & channels list (over the video)", listOf(KeyEvent.KEYCODE_DPAD_LEFT)),
         Action("live_recent", Area.LIVE, "Recently watched channels bar", listOf(KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_BOOKMARK)),
-        Action("live_info", Area.LIVE, "Show info & buttons", listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE)),
+        Action("live_info", Area.LIVE, "Show info & buttons", listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE)),
         Action("live_recall", Area.LIVE, "Last watched channel (recall)", listOf(KeyEvent.KEYCODE_LAST_CHANNEL)),
         Action("live_pause", Area.LIVE, "Pause / play", listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)),
         Action("live_rewind", Area.LIVE, "Rewind 30 s (disk buffer)", listOf(KeyEvent.KEYCODE_MEDIA_REWIND)),
@@ -48,7 +48,7 @@ object RemoteKeys {
         Action("vod_forward", Area.VOD, "Forward 10 s", listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)),
         Action("vod_back_long", Area.VOD, "Back 1 minute", emptyList()),
         Action("vod_forward_long", Area.VOD, "Forward 1 minute", emptyList()),
-        Action("vod_controls", Area.VOD, "Show controls", listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO)),
+        Action("vod_controls", Area.VOD, "Show controls", listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_INFO)),
         Action("vod_next", Area.VOD, "Next episode", listOf(KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_PAGE_UP)),
         Action("vod_prev", Area.VOD, "Previous episode", listOf(KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_PAGE_DOWN)),
         Action("vod_download", Area.VOD, "Download", listOf(KeyEvent.KEYCODE_PROG_RED)),
@@ -70,6 +70,7 @@ object RemoteKeys {
 
     private val byId = actions.associateBy { it.id }
     private const val HIDE_OK_DONE = "keys_hide_ok_1"
+    private const val MENU_HIDE_DONE = "keys_menu_hide_1"
 
     fun action(id: String): Action? = byId[id]
 
@@ -128,6 +129,19 @@ object RemoteKeys {
                 storage.remoteKeyMap = o.toString()
             }
             storage.markDone(HIDE_OK_DONE)
+        }
+        // Once: ☰ Menu (only Menu) hides the picture; OK goes back to the channel list / buttons.
+        if (!storage.has(MENU_HIDE_DONE)) {
+            val ok = setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)
+            val menu = KeyEvent.KEYCODE_MENU
+            var changed = false
+            custom["play_hide"]?.let { custom["play_hide"] = (it - ok + menu).distinct(); changed = true }
+            listOf("live_info", "vod_controls").forEach { id -> custom[id]?.let { if (menu in it) { custom[id] = it - menu; changed = true } } }
+            if (changed && saved != null && !saved.isBlank()) {
+                val o = JSONObject(); custom.forEach { (k, v) -> o.put(k, JSONArray(v)) }
+                storage.remoteKeyMap = o.toString()
+            }
+            storage.markDone(MENU_HIDE_DONE)
         }
         val full = actions.associate { a -> a.id to (custom[a.id] ?: defaultsOf(storage, a)) }
         cache = full
