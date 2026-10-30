@@ -1721,6 +1721,16 @@ class PlayerActivity : ComponentActivity() {
                 return
             }
         } else {
+            // A film whose server can't be reached at all on this line (blocked): say so — turn on the VPN.
+            if (!everReady && httpCode == null && retryCount >= 2 && !vpnAsked &&
+                com.nova.iptv.data.SpeedTest.isNetworkBlock(error) && !Vpn.isActive(this)
+            ) {
+                vpnAsked = true
+                reconnectTask?.let { handler.removeCallbacks(it) }
+                session?.fail("FAIL", "film server can't be reached (blocked?) — VPN off [$lastErrorName]")
+                showVpnNeeded(item)
+                return
+            }
             val limit = if (httpCode == 401 || httpCode == 403 || httpCode == 404) 3 else 30
             if (retryCount > limit) {
                 if (httpCode == 404) checkKey(item)?.let { StreamCheck.failed(it, "not found") }
@@ -2414,6 +2424,20 @@ class PlayerActivity : ComponentActivity() {
             .setTitle("▦ Link of " + item.title)
             .setView(box)
             .setPositiveButton("Close", null)
+            .show()
+    }
+
+    private var vpnAsked = false
+
+    /** 🔒 The film's server is blocked on this line: open a VPN app, then ⟳ Retry. */
+    private fun showVpnNeeded(item: PlayItem) {
+        showStatus("This film's server can't be reached on your line.\nTurn on your VPN, then press ⟳ Retry.")
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("🔒 Turn on your VPN")
+            .setMessage("“${item.title}” can't be reached on your line — its server seems blocked.\n\nTurn on your VPN, come back and press ⟳ Retry.")
+            .setPositiveButton("⟳ Retry") { _, _ -> vpnAsked = false; retryCount = 0; startPlayback(PlaybackQueue.index) }
+            .setNeutralButton("🔒 Open my VPN app") { _, _ -> vpnAsked = false; retryCount = 0; Vpn.pickApp(this) }
+            .setNegativeButton("Close", null)
             .show()
     }
 

@@ -32,6 +32,9 @@
     <!-- To list installed video players (Android 11+) -->
     <queries>
         <intent>
+            <action android:name="android.net.VpnService" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="http" android:mimeType="video/*" />
         </intent>

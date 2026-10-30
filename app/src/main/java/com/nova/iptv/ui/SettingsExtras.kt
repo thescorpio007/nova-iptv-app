@@ -608,6 +608,8 @@ fun PlayerSettings(vm: MainViewModel) {
 
     PhoneOrientationCard(vm)
 
+    SpeedTestCard(vm)
+
     SettingsCard("Built-in player") {
         Text("Video decoder", fontWeight = FontWeight.Medium)
         Hint("Hardware uses the box's chip (needed for 4K, HEVC and HDR). Software can help with a few unusual SD/HD streams but is slow for 4K.")
@@ -1641,5 +1643,68 @@ private fun PhoneOrientationCard(vm: MainViewModel) {
         Hint("Phones only — the TV box and tablets stay landscape. The video never stops when it turns. Upright: the video on top, the info and buttons under it (live TV: the channel list below).")
         ChoiceRow(listOf("follow" to "Follow the phone", "portrait" to "Start in portrait", "landscape" to "Landscape only"), mode) { mode = it; st.phoneOrientation = it }
         Hint("Follow the phone = upright or sideways like the phone (uses the phone's auto-rotate switch). The ⟲ Rotate button in the player always switches by hand.")
+    }
+}
+
+
+/** ⚡ Speed test: a film of your account downloaded for 15 s (not shown), with or without VPN; results ranked. */
+@Composable
+private fun SpeedTestCard(vm: MainViewModel) {
+    val ctx = LocalContext.current
+    val app = ctx.applicationContext as com.nova.iptv.NovaApp
+    remember { com.nova.iptv.data.SpeedTest.init(ctx) }
+    val results by com.nova.iptv.data.SpeedTest.results.collectAsStateWithLifecycle()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(-1) }
+    var vpnOn by remember { mutableStateOf(com.nova.iptv.player.Vpn.isActive(ctx)) }
+    val target = remember { vm.speedTestTarget() }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vpnOn = com.nova.iptv.player.Vpn.isActive(ctx) }
+        lifecycle.lifecycle.addObserver(obs)
+        onDispose { lifecycle.lifecycle.removeObserver(obs) }
+    }
+    val time = remember { java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.ENGLISH) }
+    SettingsCard("⚡ Speed test", summary = results.size.let { if (it == 0) "not tested yet" else "$it results" }) {
+        Hint("Nova downloads a film of your account for 15 s (nothing is shown or kept) and measures the real speed — with or without a VPN. To compare VPN servers, change the server in your VPN app, come back and test again.")
+        Text(if (vpnOn) "🔒 VPN connected" else "⚠ No VPN", fontWeight = FontWeight.Bold,
+            color = if (vpnOn) MaterialTheme.colorScheme.primary else Color(0xFFFFD27A))
+        Text(target?.let { "Film used for the test: ${it.title}" } ?: "Watch a film once (or add one to Favorites) — the test uses it.", fontSize = 12.sp)
+        androidx.compose.material3.OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("Name (optional), e.g. France #12") }, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.material3.Button(onClick = {
+                val t = target ?: return@Button
+                if (running >= 0) return@Button
+                running = 0
+                vpnOn = com.nova.iptv.player.Vpn.isActive(ctx)
+                scope.launch {
+                    com.nova.iptv.data.SpeedTest.run(app.http, app.storage.userAgent, t.url, name.trim(), vpnOn) { running = it }
+                    running = -1
+                }
+            }, enabled = target != null && running < 0) { Text(if (running >= 0) "Testing… ${running} s" else "▶ Test (15 s)") }
+            OutlinedButton(onClick = { com.nova.iptv.player.Vpn.pickApp(ctx) }) { Text("🔒 Open my VPN app") }
+        }
+        if (running >= 0) androidx.compose.material3.LinearProgressIndicator(progress = { running / 15f }, modifier = Modifier.fillMaxWidth())
+        val ranked = remember(results) { com.nova.iptv.data.SpeedTest.ranked() }
+        if (ranked.isNotEmpty()) {
+            Text("Results — best first", fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 6.dp))
+            val best = ranked.firstOrNull { it.error == null }
+            ranked.forEach { r ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.weight(1f)) {
+                        Text((if (r == best) "🏆 " else "") + r.name + if (r.vpn) "" else " · no VPN", fontWeight = if (r == best) FontWeight.Bold else FontWeight.Normal,
+                            color = if (r.error != null) Color(0xFFFFB4A8) else if (r == best) MaterialTheme.colorScheme.primary else Color.Unspecified)
+                        Text(
+                            (r.error?.let { "✗ $it" } ?: ("%.1f Mbit/s".format(r.mbps) + " · start %.1f s".format(r.startMs / 1000.0))) + " · " + time.format(java.util.Date(r.at)),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    androidx.compose.material3.TextButton(onClick = { com.nova.iptv.data.SpeedTest.remove(r) }) { Text("🗑") }
+                }
+            }
+            Hint("A film needs about 4–8 Mbit/s (HD), 15+ Mbit/s (4K). Keep the fastest one for films in your VPN app.")
+            OutlinedButton(onClick = { com.nova.iptv.data.SpeedTest.clear() }) { Text("Clear results") }
+        }
     }
 }

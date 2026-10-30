@@ -1474,6 +1474,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** ⚡ Speed test: a film of your accounts (recently watched, then favorites; an episode or a channel as last resort). */
+    fun speedTestTarget(): PlayItem? {
+        val pool = recent.value + favorites.value
+        val order = listOf(ItemType.MOVIE, ItemType.EPISODE, ItemType.LIVE)
+        for (t in order) savedItemsToPlay(pool.filter { it.type == t }).firstOrNull()?.let { return it }
+        return null
+    }
+
     fun seriesFromSaved(s: SavedItem) = Series(s.accountId, s.id, s.name, s.icon, "", null, null)
 
     // ================================================================ settings
