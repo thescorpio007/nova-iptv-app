@@ -101,6 +101,7 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var hideProgress: View
     private lateinit var hideTrack: FrameLayout
     private var spaceWarned = false
+    private var liveSpaceWarned = false
 
     private lateinit var playerView: PlayerView
     private lateinit var infoBar: LinearLayout
@@ -895,8 +896,8 @@ class PlayerActivity : ComponentActivity() {
             val safety = minOf(12L shl 30, free - (500L shl 20)).coerceAtLeast(300L shl 20)
             // Little free space for the chosen length (about 30 MB a minute for HD): say how much will be kept.
             val keepMin = (safety / (30L shl 20)).toInt()
-            if (keepMin < app.storage.liveDiskMinutes && !spaceWarned) {
-                spaceWarned = true
+            if (keepMin < app.storage.liveDiskMinutes && !liveSpaceWarned) {
+                liveSpaceWarned = true
                 Toast.makeText(this, "Little free space: the live buffer keeps about $keepMin min (of ${app.storage.liveDiskMinutes} min)", Toast.LENGTH_LONG).show()
             }
             relay = LiveRelay(
@@ -2428,7 +2429,6 @@ class PlayerActivity : ComponentActivity() {
     /** Sent by a phone (📺 Play on TV): who sent it; the phone's remote reads the position and sends ⏸ / ±30 s / ■. */
     private var castFrom: String? = null
     private var castGen = -1
-    private var spaceWarned = false
 
     private fun startCastReceiver() {
         val from = intent?.getStringExtra(com.nova.iptv.data.Cast.EXTRA_FROM) ?: return
