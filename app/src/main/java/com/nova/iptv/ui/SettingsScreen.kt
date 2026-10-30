@@ -233,14 +233,32 @@ fun SettingsScreen(vm: MainViewModel) {
                 var minutes by remember { mutableStateOf(vm.appStorage.liveDiskMinutes) }
                 Text("Disk buffer length", fontWeight = FontWeight.Medium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(5, 10, 15).forEach { m -> Chip("$m min", minutes == m, { minutes = m; vm.appStorage.liveDiskMinutes = m }) }
+                    listOf(5, 10, 15, 30, 60).forEach { m -> Chip("$m min", minutes == m, { minutes = m; vm.appStorage.liveDiskMinutes = m }) }
                 }
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                val freeGb = remember(minutes) {
+                    runCatching {
+                        val d = com.nova.iptv.data.Folders.bufferDir(ctx, com.nova.iptv.data.Folders.BUFFER_LIVE, vm.appStorage.usePublicFolder).apply { mkdirs() }
+                        android.os.StatFs(d.absolutePath).availableBytes / 1073741824.0
+                    }.getOrDefault(-1.0)
+                }
+                fun gb(mbPerMin: Double) = minutes * mbPerMin / 1024.0
                 Text(
-                    "Up to $minutes min of the channel are kept on disk: the cushion ahead of you (see “Grow the cushion”) and " +
-                        "the rest for rewind and pauses. Older parts are deleted automatically. " +
-                        "Disk space at most: HD ≈ ${minutes * 60} MB · 4K ≈ ${"%.1f".format(minutes * 0.19)} GB.",
+                    "Up to $minutes min of the channel are kept on disk: pause the live, come back later and continue where you stopped " +
+                        "(or ⏭ Live to jump to now). Older parts are deleted automatically. " +
+                        "Disk space at most: SD ≈ ${"%.1f".format(gb(18.0))} GB · HD ≈ ${"%.1f".format(gb(30.0))} GB · " +
+                        "FHD ≈ ${"%.1f".format(gb(60.0))} GB · 4K ≈ ${"%.1f".format(gb(190.0))} GB.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp,
                 )
+                if (freeGb >= 0) {
+                    val enough = freeGb - 0.5 >= gb(60.0)
+                    Text(
+                        (if (enough) "✓ Free on this device: ${"%.1f".format(freeGb)} GB — enough."
+                        else "⚠ Free on this device: ${"%.1f".format(freeGb)} GB — an FHD channel would keep less than $minutes min.") +
+                            " If space runs short, Nova keeps less and tells you.",
+                        color = if (enough) MaterialTheme.colorScheme.primary else Color(0xFFFFD27A), fontSize = 12.sp,
+                    )
+                }
                 BufferFolderLine(com.nova.iptv.data.Folders.BUFFER_LIVE)
                 Text(
                     "💾 Memory size: automatic (64 MB) — the disk holds the protection; the player keeps only a few seconds in memory. " +

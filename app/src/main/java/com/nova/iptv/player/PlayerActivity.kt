@@ -892,7 +892,13 @@ class PlayerActivity : ComponentActivity() {
             val liveDir = Folders.bufferDir(this, Folders.BUFFER_LIVE, app.storage.usePublicFolder)
             // Time-based buffer (minutes); the size is only a safety limit, kept below the free space.
             val free = runCatching { android.os.StatFs(liveDir.apply { mkdirs() }.absolutePath).availableBytes }.getOrDefault(4L shl 30)
-            val safety = minOf(6L shl 30, free - (500L shl 20)).coerceAtLeast(300L shl 20)
+            val safety = minOf(12L shl 30, free - (500L shl 20)).coerceAtLeast(300L shl 20)
+            // Little free space for the chosen length (about 30 MB a minute for HD): say how much will be kept.
+            val keepMin = (safety / (30L shl 20)).toInt()
+            if (keepMin < app.storage.liveDiskMinutes && !spaceWarned) {
+                spaceWarned = true
+                Toast.makeText(this, "Little free space: the live buffer keeps about $keepMin min (of ${app.storage.liveDiskMinutes} min)", Toast.LENGTH_LONG).show()
+            }
             relay = LiveRelay(
                 url = item.url,
                 client = app.http,
@@ -2422,6 +2428,7 @@ class PlayerActivity : ComponentActivity() {
     /** Sent by a phone (📺 Play on TV): who sent it; the phone's remote reads the position and sends ⏸ / ±30 s / ■. */
     private var castFrom: String? = null
     private var castGen = -1
+    private var spaceWarned = false
 
     private fun startCastReceiver() {
         val from = intent?.getStringExtra(com.nova.iptv.data.Cast.EXTRA_FROM) ?: return
