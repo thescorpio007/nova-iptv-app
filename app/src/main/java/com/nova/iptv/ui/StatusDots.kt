@@ -52,6 +52,8 @@ fun CheckList(key: Any, targets: () -> List<StreamCheck.Target>) {
 
 @Composable
 fun StatusDot(status: StreamCheck.Status, size: Dp = 11.dp, modifier: Modifier = Modifier) {
+    // Only items you opened have a dot (green / red / orange); nothing for the others.
+    if (status.state == State.UNKNOWN || status.state == State.CHECKING || status.state == State.WAITING) return
     if (status.state == State.CHECKING) {
         CircularProgressIndicator(
             modifier = modifier.size(size),
@@ -93,19 +95,8 @@ fun DotNoteText(status: StreamCheck.Status, modifier: Modifier = Modifier) {
     )
 }
 
-/** "⟳ Checking… 7 / 14" or "Checked 14 / 14 · ⟳ Test again" for the list on screen. */
+/** Was the "⟳ Checking… 7 / 14" line: nothing is checked automatically any more, so it shows nothing. */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun DotsHeader(keys: List<String>, onRetest: () -> Unit, modifier: Modifier = Modifier) {
-    if (!dotsOn() || keys.isEmpty()) return
-    val (done, total, busy) = StreamCheck.progress(keys)
-    FocusBox(onClick = onRetest, modifier = modifier, shape = RoundedCornerShape(16.dp)) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (busy) {
-                CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = DotGreen, trackColor = DotGrey)
-                Text("  Checking… $done / $total", fontSize = 12.sp)
-            } else {
-                Text("Checked $done / $total  ·  ⟳ Test again", fontSize = 12.sp)
-            }
-        }
-    }
 }

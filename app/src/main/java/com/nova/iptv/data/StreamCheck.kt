@@ -36,9 +36,13 @@ object StreamCheck {
 
     data class Target(val key: String, val url: String, val accountId: String, val live: Boolean)
 
+    /** Background checking of whole lists: off (dots come only from what you opened). */
+    private const val AUTOMATIC_CHECK = false
+
     private data class Net(val ok: Boolean, val at: Long, val note: String?)
 
-    private const val FRESH_MS = 6 * 3600_000L
+    /** A result from what you opened is kept 7 days. */
+    private const val FRESH_MS = 7L * 24 * 3600_000L
     private const val DEVICE_MS = 30L * 24 * 3600_000L
 
     private val net = ConcurrentHashMap<String, Net>()
@@ -122,6 +126,8 @@ object StreamCheck {
 
     /** What is on screen now: only these are checked (the previous list is dropped). */
     fun want(targets: List<Target>, fromPlayer: Boolean = false) {
+        // No automatic checking any more: a dot only comes from a film / channel you opened.
+        if (AUTOMATIC_CHECK.not()) return
         if (!enabled) return
         val list = targets.distinctBy { it.key }.take(300)
         if (fromPlayer) playerQueue = list else mainQueue = list
@@ -136,6 +142,7 @@ object StreamCheck {
 
     /** "⟳ Test again": check these again even when recently checked. */
     fun retest(targets: List<Target>, fromPlayer: Boolean = false, olderThanMs: Long = 0L) {
+        if (!AUTOMATIC_CHECK) return
         val now = System.currentTimeMillis()
         // The old dots stay until each item has been checked again.
         targets.forEach { t -> if (net[t.key]?.let { now - it.at >= olderThanMs } != false) forced += t.key }

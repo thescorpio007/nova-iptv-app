@@ -300,10 +300,9 @@ fun SettingsScreen(vm: MainViewModel) {
             var dotsSetting by remember { mutableStateOf(vm.appStorage.statusDots) }
             Text("Status dots", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
             Text(
-                "Green works, red not working, orange works but this device can't play its format, grey not checked yet. " +
-                    "Film posters and episodes of the open group / season are checked quietly one by one, only while nothing " +
-                    "is playing. Live channels are never checked in the background: their dot comes from what you actually watched. " +
-                    "Results are kept 6 hours.",
+                "A dot appears after you open a film, episode or channel: green it played, red it didn't work (with the reason), " +
+                    "orange it works but this device can't play its format. Nothing is checked automatically, and films you never " +
+                    "opened have no dot. Results are kept 7 days.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
