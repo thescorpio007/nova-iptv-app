@@ -3839,7 +3839,7 @@ class PlayerActivity : ComponentActivity() {
     private fun handleBack(item: PlayItem?) {
         when {
             item?.isLive == true && playerView.isControllerFullyVisible -> playerView.hideController()
-            item != null && !item.isLive && vod.controlsVisible -> { vod.hide(); keySink.requestFocus() }
+            item != null && !item.isLive && vod.controlsVisible && !vod.pinned -> { vod.hide(); keySink.requestFocus() }
             item?.isLive == true && app.storage.doubleBackLive -> {
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000) finish()
