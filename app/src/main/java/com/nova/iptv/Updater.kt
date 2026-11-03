@@ -321,7 +321,7 @@ class UpdateReceiver : BroadcastReceiver() {
 /** "Build NN is ready": what changed, the three checks, and one Install button. */
 class UpdateActivity : android.app.Activity() {
     private val bg = 0xFF0E1116.toInt(); private val card = 0xFF181C24.toInt(); private val accent = 0xFF2EC4B6.toInt()
-    private val text = 0xFFECEEF3.toInt(); private val muted = 0xFF9AA3B5.toInt()
+    private val fg = 0xFFECEEF3.toInt(); private val muted = 0xFF9AA3B5.toInt()
     private lateinit var status: TextView
     private lateinit var installBtn: Button
 
@@ -329,23 +329,23 @@ class UpdateActivity : android.app.Activity() {
     private fun tv(s: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
         this.text = s; textSize = size; setTextColor(color); if (bold) setTypeface(typeface, Typeface.BOLD); setLineSpacing(0f, 1.15f) }
     private fun btn(s: String, primary: Boolean, click: () -> Unit) = Button(this).apply {
-        this.text = s; isAllCaps = false; textSize = 16f; setTextColor(if (primary) Color.WHITE else text)
+        this.text = s; isAllCaps = false; textSize = 16f; setTextColor(if (primary) Color.WHITE else fg)
         background = GradientDrawable().apply { setColor(if (primary) accent else 0xFF222836.toInt()); cornerRadius = dp(12).toFloat() }
         isFocusable = true; setOnClickListener { click() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(24), dp(18), dp(18)) }
-        root.addView(tv("⬆ $APP update", 22f, text, true))
+        root.addView(tv("⬆ $APP update", 22f, fg, true))
         val r = Updater.ready(this)
         val cur = Updater.current(this)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(14), dp(14), dp(14))
             background = GradientDrawable().apply { setColor(card); cornerRadius = dp(16).toFloat() } }
         if (r == null) {
-            box.addView(tv("No update waiting. You have build %02d.".format(cur), 15f, text))
+            box.addView(tv("No update waiting. You have build %02d.".format(cur), 15f, fg))
         } else {
             box.addView(tv("Build %02d → build %02d".format(cur, r.first), 18f, accent, true))
-            box.addView(tv("✓ Checksum file signed with $APP's own key\n✓ SHA-256 of the download matches\n✓ Same signing key as the installed app", 14f, text)
+            box.addView(tv("✓ Checksum file signed with $APP's own key\n✓ SHA-256 of the download matches\n✓ Same signing key as the installed app", 14f, fg)
                 .apply { setPadding(0, dp(10), 0, dp(10)) })
             if (r.third.isNotBlank()) box.addView(tv(r.third, 13f, muted))
         }
