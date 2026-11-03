@@ -146,9 +146,42 @@ object MkvSeek {
         return null
     }
 
-    /** Finds the place for [targetMs] in a film of [durationMs]. Null = not possible (not an MKV, server refused…). */
-    fun locate(r: Reader, targetMs: Long, durationMs: Long): Found? {
+    /** The film's length from its last clusters (for files that don't say how long they are): one read of the end. */
+    private fun lengthFromEnd(r: Reader, scaleNs: Long): Long? {
+        if (r.total <= 0) return null
+        val from = (r.total - 3L * 1024 * 1024).coerceAtLeast(0)
+        val b = r.read(from, (r.total - from).toInt()) ?: return null
+        var last: Long? = null
+        var i = 0
+        while (i <= b.size - 12) {
+            if (b[i] == 0x1F.toByte() && b[i + 1] == 0x43.toByte() && b[i + 2] == 0xB6.toByte() && b[i + 3] == 0x75.toByte()) {
+                timeOfCluster(b, i, scaleNs)?.let { ms -> if (ms < 48L * 3600_000) last = maxOf(last ?: 0L, ms) }
+            }
+            i++
+        }
+        return last?.plus(2_000)
+    }
+
+    /** The time of the cluster whose ID starts at [i] in [b] (ms), or null if it isn't a real cluster. */
+    private fun timeOfCluster(b: ByteArray, i: Int, scaleNs: Long): Long? {
+        val size = readSize(b, i + 4) ?: return null
+        var c = i + 4 + size.len
+        var child = readId(b, c)
+        if (child != null && child.value == ID_CRC) {
+            val cs = readSize(b, c + child.len) ?: return null
+            c += child.len + cs.len + cs.value.toInt(); child = readId(b, c)
+        }
+        if (child == null || child.value != ID_TIMECODE) return null
+        val ts = readSize(b, c + child.len) ?: return null
+        val at = c + child.len + ts.len
+        if (ts.value !in 1..8 || at + ts.value > b.size) return null
+        return uint(b, at, ts.value.toInt()) * scaleNs / 1_000_000L
+    }
+
+    /** Finds the place for [targetMs] in a film of [durationMs] (≤ 0 = unknown). Null = not possible (not an MKV, server refused…). */
+    fun locate(r: Reader, targetMs: Long, durationMsIn: Long): Found? {
         val (first, scaleNs) = layout(r) ?: return null
+        val durationMs = if (durationMsIn > 0) durationMsIn else lengthFromEnd(r, scaleNs) ?: return null
         if (first > 16L * 1024 * 1024) return null
         val header = r.read(0, first.toInt()) ?: return null
         if (header.size.toLong() != first) return null

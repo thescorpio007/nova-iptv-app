@@ -2547,7 +2547,8 @@ class PlayerActivity : ComponentActivity() {
     private fun doSplice(target: Long) {
         val item = current ?: return
         val p = player ?: return
-        val dur = p.duration.takeIf { it > 0 } ?: return
+        // Unknown length (some files don't say): MkvSeek measures it from the end of the file.
+        val dur = p.duration.takeIf { it > 0 } ?: -1L
         spliceJob?.cancel()
         Toast.makeText(this, "⏩ Jumping to ${formatDuration(target)}…", Toast.LENGTH_SHORT).show()
         val wasPlaying = p.playWhenReady

@@ -1305,8 +1305,7 @@ def jump_mkv_without_index():
     pos = int(p[-1]) if p else -1
     check("…and the film keeps playing from there (not from 00:00)", pos >= 20000, f"position {pos} ms")
     shot("mkv-no-index-jump")
-    back_to_main("mkv-no-index")
-    leave_player_and_page()
+    close_opened_player("mkv-no-index")
 
 
 def open_link():
