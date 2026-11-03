@@ -152,3 +152,12 @@ jobs:
           git add -f results
           git commit -m "Emulator test results, run ${{ github.run_number }}"
           git push -f origin ci-tests
+
+      - name: Test passed — publish the build for the apps' automatic updates
+        if: success() && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(printf '%02d' $(( ${{ github.event.workflow_run.run_number }} - 99 )))
+          gh release edit "v4-build-$n" --prerelease=false --latest -R "$GITHUB_REPOSITORY"
+          echo "::notice title=Published::v4-build-$n is now the latest release"

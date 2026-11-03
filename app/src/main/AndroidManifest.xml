@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -265,5 +266,9 @@
             android:name=".download.DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+            <!-- Updates from GitHub Releases (signature + SHA-256 + same key checked before installing) -->
+        <activity android:name="com.nova.iptv.UpdateActivity" android:exported="false" />
+        <receiver android:name="com.nova.iptv.UpdateReceiver" android:exported="false" />
+        <service android:name="com.nova.iptv.UpdateJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 </manifest>
