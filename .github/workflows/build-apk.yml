@@ -138,18 +138,32 @@ jobs:
           name: NovaIPTV-apk
           path: out/NovaIPTV-*.apk
 
-      # A SHA-256 checksum next to every APK: Nova's self-update refuses a damaged or changed download.
-      - name: Checksums
+      - name: Checksums signed with the app's own key (the app checks them before updating)
         run: |
+          set -e
+          export SP="$(grep '^storePassword=' keystore/signing.properties | cut -d= -f2-)"
+          export KP="$(grep '^keyPassword=' keystore/signing.properties | cut -d= -f2-)"
+          [ -n "$KP" ] || export KP="$SP"
           cd out
-          for f in NovaIPTV-*.apk; do sha256sum "$f" > "$f.sha256"; done
-          ls -la
+          sha256sum *.apk > SHA256SUMS.txt
+          keytool -importkeystore -noprompt -srckeystore ../keystore/nova-release.jks -srcalias nova \
+            -srcstorepass:env SP -srckeypass:env KP -destkeystore /tmp/k.p12 -deststoretype PKCS12 -deststorepass:env SP -destkeypass:env SP
+          openssl pkcs12 -in /tmp/k.p12 -nocerts -nodes -passin env:SP -out /tmp/k.pem
+          openssl pkcs12 -in /tmp/k.p12 -nokeys -clcerts -passin env:SP | openssl x509 -pubkey -noout > /tmp/pub.pem
+          openssl dgst -sha256 -sign /tmp/k.pem -out SHA256SUMS.sig SHA256SUMS.txt
+          openssl dgst -sha256 -verify /tmp/pub.pem -signature SHA256SUMS.sig SHA256SUMS.txt
+          rm -f /tmp/k.p12 /tmp/k.pem
+          echo "::notice title=Checksums::SHA256SUMS.txt signed and verified"
 
-      - name: Publish the APK on the Releases page (direct download link)
+      - name: Publish the APK on the Releases page (pre-release until the emulator test passes)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v4-build-${{ env.NOVA_BUILD }}
           name: Nova IPTV 4.0 DLNA build ${{ env.NOVA_BUILD }}
           body: Install NovaIPTV-4.0-DLNA-build-${{ env.NOVA_BUILD }}.apk on your phone or Android TV (Android 7.0 and newer).${{ steps.legacy.outcome == 'success' && format(' For Android 5.0 / 6 (older tablets) use NovaIPTV-4.0-DLNA-Android5.0-build-{0}.apk.', env.NOVA_BUILD) || '' }}
-          files: out/NovaIPTV-*
-          make_latest: true
+          files: |
+            out/NovaIPTV-*.apk
+            out/SHA256SUMS.txt
+            out/SHA256SUMS.sig
+          prerelease: true
+          make_latest: false

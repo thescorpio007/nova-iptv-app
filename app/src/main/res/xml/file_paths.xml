@@ -4,6 +4,5 @@
     <external-path name="external" path="." />
     <external-files-path name="external_files" path="." />
     <files-path name="files" path="." />
-    <cache-path name="updates" path="updates/" />
     <root-path name="drives" path="/storage" />
 </paths>
