@@ -138,8 +138,7 @@ jobs:
       - name: Run the app tests
         run: |
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          set -o pipefail
-          NOVA_MODE="${{ github.event.inputs.mode || 'short' }}" python3 tests/ui_test.py app/build/outputs/apk/release/app-release.apk 2>&1 | tee test-run.txt
+          NOVA_MODE="${{ github.event.inputs.mode || 'short' }}" python3 tests/ui_test.py app/build/outputs/apk/release/app-release.apk
 
       - name: Publish test results
         if: always()
@@ -153,16 +152,3 @@ jobs:
           git add -f results
           git commit -m "Emulator test results, run ${{ github.run_number }}"
           git push -f origin ci-tests
-
-      - name: Test passed — publish the build for the apps' automatic updates
-        # The essential checks decide (installs, opens, signs in, no crash); older screen-text checks don't block updates.
-        if: always() && github.event_name == 'workflow_run'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for c in "PASS  APK installs" "PASS  App opens without crashing" "PASS  Login with Xtream account works" "PASS  No crash in the whole test"; do
-            grep -q "$c" test-run.txt || { echo "::warning title=Not published::essential check missing: $c"; exit 0; }
-          done
-          n=$(printf '%02d' $(( ${{ github.event.workflow_run.run_number }} - 99 )))
-          gh release edit "v4-build-$n" --prerelease=false --latest -R "$GITHUB_REPOSITORY"
-          echo "::notice title=Published::v4-build-$n is now the latest release"

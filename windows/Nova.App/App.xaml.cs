@@ -153,7 +153,6 @@ namespace Nova.App
             var w = Home;
             if (w == null) return;
             if (_args.Length > 0 && _args[0] == "--smoke") { Smoke(w); return; }
-            Updater.AtStart(w);
             if (_args.Length > 0 && _args[0].Trim().Length > 0) { w.OpenFromOutside(_args[0]); _args = new string[0]; }
             else if (Store.Accounts.Count == 0) { w.ShowWelcomeIfEmpty(); }
             else if (Store.Settings.AutoPlayLast) w.PlayLastChannel();

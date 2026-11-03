@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
                     // Bookmarks sent from another Nova on the Wi-Fi: "Add them?" over any screen.
                     IncomingBookmarksHost()
                     ItemActionsHost(vm)
+                    UpdateHost()
                     // A whole Nova configuration sent from another device (phone → box…): code, then restore.
                     IncomingTransferHost(vm)
                 }
@@ -163,7 +164,6 @@ class MainActivity : ComponentActivity() {
         if (backFromPlayer) { backFromPlayer = false; vm.restoreReturnPoint() }
         // Favorites may have been changed from the player screen.
         vm.refreshLocal()
-        try { com.nova.iptv.Updater.maybe(this); com.nova.iptv.Updater.offerOnOpen(this) } catch (_: Exception) { }
     }
 
     override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean {

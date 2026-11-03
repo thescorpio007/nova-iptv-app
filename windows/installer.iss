@@ -105,8 +105,6 @@ Name: "{autodesktop}\Nova IPTV"; Filename: "{app}\Nova.exe"; Tasks: desktopicon
 Filename: "{tmp}\ndp48-web.exe"; Parameters: "/passive /norestart"; StatusMsg: "Installing Microsoft .NET Framework 4.8 (needs internet)…"; Check: NeedsDotNet48; Flags: waituntilterminated
 #endif
 Filename: "{app}\Nova.exe"; Description: "Start Nova IPTV"; Flags: nowait postinstall skipifsilent
-; After an automatic update (silent install started by Nova itself): open Nova again as the normal user.
-Filename: "{app}\Nova.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [Code]
 // .NET Framework 4.8 = release number 528040 or higher.

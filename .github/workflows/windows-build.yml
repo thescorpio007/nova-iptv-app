@@ -125,31 +125,6 @@ jobs:
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Setup.exe
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Portable.zip
 
-      - name: Checksums signed with Nova's key (Nova checks them before updating itself)
-        shell: bash
-        env:
-          NOVA_KEY_PASS: ${{ secrets.NOVA_KEY_PASS }}
-        run: |
-          set -e
-          mkdir -p keystore
-          for f in nova-release.jks signing.properties; do
-            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "keystore-enc/$f.enc" -out "keystore/$f" -pass env:NOVA_KEY_PASS
-          done
-          export SP="$(grep '^storePassword=' keystore/signing.properties | cut -d= -f2- | tr -d '\r')"
-          export KP="$(grep '^keyPassword=' keystore/signing.properties | cut -d= -f2- | tr -d '\r')"
-          [ -n "$KP" ] || export KP="$SP"
-          KT="$JAVA_HOME_17_X64/bin/keytool"; [ -x "$KT" ] || KT="$JAVA_HOME_21_X64/bin/keytool"; [ -x "$KT" ] || KT="$JAVA_HOME/bin/keytool"; [ -x "$KT" ] || KT=keytool
-          "$KT" -importkeystore -noprompt -srckeystore keystore/nova-release.jks -srcalias nova -srcstorepass:env SP -srckeypass:env KP \
-            -destkeystore k.p12 -deststoretype PKCS12 -deststorepass:env SP -destkeypass:env SP
-          openssl pkcs12 -in k.p12 -nocerts -nodes -passin env:SP -out k.pem || openssl pkcs12 -legacy -in k.p12 -nocerts -nodes -passin env:SP -out k.pem
-          { openssl pkcs12 -in k.p12 -nokeys -clcerts -passin env:SP || openssl pkcs12 -legacy -in k.p12 -nokeys -clcerts -passin env:SP; } | openssl x509 -pubkey -noout > pub.pem
-          cd dist
-          sha256sum NovaIPTV-Windows-*.exe NovaIPTV-Windows-*.zip > SHA256SUMS.txt
-          openssl dgst -sha256 -sign ../k.pem -out SHA256SUMS.sig SHA256SUMS.txt
-          openssl dgst -sha256 -verify ../pub.pem -signature SHA256SUMS.sig SHA256SUMS.txt
-          cd ..; rm -f k.p12 k.pem keystore/nova-release.jks keystore/signing.properties
-          cat dist/SHA256SUMS.txt
-
       - name: Publish on the Releases page
         uses: softprops/action-gh-release@v2
         with:
@@ -163,6 +138,4 @@ jobs:
           files: |
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Setup.exe
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Portable.zip
-            dist/SHA256SUMS.txt
-            dist/SHA256SUMS.sig
           make_latest: false

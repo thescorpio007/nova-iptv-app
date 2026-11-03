@@ -795,13 +795,6 @@ namespace Nova.App
             Title(g, "About");
             _about = new TextBlock { Style = (Style)FindResource("Hint"), FontSize = 13.5, LineHeight = 22, TextWrapping = TextWrapping.Wrap };
             g.Children.Add(_about);
-            var upd = Hint(g, Updater.Status.Length > 0 ? Updater.Status : "Updates: checked once a day from GitHub (signature and SHA-256 verified before installing).");
-            Buttons(g, Btn("⬆ Check for updates", async () =>
-            {
-                upd.Text = "Checking GitHub…";
-                upd.Text = await Updater.Check(msg => Dispatcher.Invoke(() => upd.Text = msg));
-                Updater.Offer(App.Home, true);
-            }));
             g.Children.Add(new TextBlock { Text = Brand.Signature, Foreground = (Brush)FindResource("Accent"), FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
         }
 
