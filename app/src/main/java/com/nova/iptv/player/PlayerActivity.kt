@@ -1035,7 +1035,7 @@ class PlayerActivity : ComponentActivity() {
         if (key != boostKeyOf) { boostKeyOf = key; boostSession = null }
         boostSession?.let { return it }
         val saved = key?.let { app.storage.boostFor(it) } ?: 0
-        return (if (saved > 0) saved else app.storage.boostAll).coerceIn(100, 200)
+        return (if (saved > 0) saved else app.storage.boostAll).coerceIn(100, 400)
     }
 
     private fun applyBoost() {
@@ -1323,10 +1323,10 @@ class PlayerActivity : ComponentActivity() {
         if (item.isLive) playerView.showController() else vod.showAndFocus()
     }
 
-    /** 🔊 Boost panel: 100–200 %, then where it applies (this video only / always for this channel or film / everything). */
+    /** 🔊 Boost panel: 100–400 %, then where it applies (this video only / always for this channel or film / everything). */
     private fun showBoost() {
         val item = current ?: return
-        val levels = listOf(100, 125, 150, 175, 200)
+        val levels = listOf(100, 125, 150, 175, 200, 250, 300, 400)
         var chosen = boostLevel()
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(4)) }
         val passthrough = app.storage.audioDecoder == "device"
@@ -1349,7 +1349,12 @@ class PlayerActivity : ComponentActivity() {
             row.addView(c, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
         }
         mark()
-        box.addView(row)
+        box.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) })
+        box.addView(TextView(this).apply {
+            text = "⚠ Above 200 %: loud scenes are held down by the limiter (no crackle), but music can sound flatter. " +
+                "Turn the TV volume down a little if the speakers rattle."
+            setTextColor(0xFFFFD27A.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        })
         val dialog = android.app.AlertDialog.Builder(this)
             .setTitle("🔊 Volume boost")
             .setView(box)

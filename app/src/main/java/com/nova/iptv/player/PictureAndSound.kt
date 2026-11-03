@@ -20,7 +20,7 @@ import kotlin.math.tanh
 @OptIn(UnstableApi::class)
 class GainProcessor : BaseAudioProcessor() {
     companion object {
-        /** 1.0 = 100 %, 2.0 = 200 %. Changes apply at once. */
+        /** 1.0 = 100 % … 4.0 = 400 %. Changes apply at once. */
         @Volatile var gain = 1f
 
         /** 🌙 Night mode (sound): loud parts pulled down above [nightThresholdDb], quiet parts lifted a little. */
@@ -34,12 +34,15 @@ class GainProcessor : BaseAudioProcessor() {
 
     private var envelope = 0f
     private var currentGain = 1f
+    /** Strong boost (above 200 %): a smooth peak limiter, so 300–400 % gets louder without crackling. */
+    private var peakEnv = 0f
+    private var limitGain = 1f
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat =
         if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT) inputAudioFormat
         else AudioProcessor.AudioFormat.NOT_SET
 
-    override fun onFlush() { envelope = 0f; currentGain = 1f }
+    override fun onFlush() { envelope = 0f; currentGain = 1f; peakEnv = 0f; limitGain = 1f }
 
     private fun limit(v: Float): Float {
         val a = abs(v)
@@ -72,6 +75,7 @@ class GainProcessor : BaseAudioProcessor() {
         val attack = 1f - kotlin.math.exp(-1f / (rate * (if (nightFast) 0.003f else 0.015f)))
         val release = 1f - kotlin.math.exp(-1f / (rate * (if (nightFast) 0.15f else 0.40f)))
         val centre = nightOn && nightDialogue && ch == 6
+        val limRelease = 1f - kotlin.math.exp(-1f / (rate * 0.25f))
         val frame = FloatArray(ch)
         val frameBytes = ch * bytes
         while (inB.remaining() >= frameBytes) {
@@ -96,6 +100,14 @@ class GainProcessor : BaseAudioProcessor() {
                 // Glide towards the new level (no clicks).
                 currentGain += (level - currentGain) * 0.05f
                 level = currentGain
+            }
+            if (g > 2f) {
+                // Peak follower: instant when louder, ~250 ms to come back; keeps peaks near 90 % before the soft limiter.
+                val p = peak * level
+                peakEnv = if (p > peakEnv) p else peakEnv + (p - peakEnv) * limRelease
+                val target = if (peakEnv > 0.9f) 0.9f / peakEnv else 1f
+                limitGain += (target - limitGain) * (if (target < limitGain) 0.5f else 0.002f)
+                level *= limitGain
             }
             for (c in 0 until ch) {
                 val v = limit(frame[c] * level)

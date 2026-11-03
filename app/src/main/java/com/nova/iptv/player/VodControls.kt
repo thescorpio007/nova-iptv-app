@@ -742,7 +742,7 @@ class VodControls(
 
         sectionTitle("🔊  Volume boost")
         val level = s.boost()
-        listOf(100, 125, 150, 175, 200).forEach { l ->
+        listOf(100, 125, 150, 175, 200, 250, 300, 400).forEach { l ->
             panelContent.addView(option(if (l == 100) "100 % (off)" else "$l %", level == l) { s.setBoost(l) })
         }
         label("Keep it for this film / channel / everything: 🔊 Boost button")
