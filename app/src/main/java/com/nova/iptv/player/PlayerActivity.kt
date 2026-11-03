@@ -174,9 +174,10 @@ class PlayerActivity : ComponentActivity() {
         if (everReady || item.isLive || resumeFallbackDone) return@Runnable
         resumeFallbackDone = true
         val at = app.storage.getPosition(item.key)
-        app.storage.setPosition(item.key, 0)
-        logHealth(item, "didn't start at the saved place ${formatDuration(at)}", "started from the beginning")
-        Toast.makeText(this, "Couldn't resume at ${formatDuration(at)} — playing from the start", Toast.LENGTH_LONG).show()
+        // The saved place is kept (never erased): watching a little from the start won't overwrite it.
+        resumeKeptMs = at
+        logHealth(item, "didn't start at the saved place ${formatDuration(at)}", "started from the beginning (place kept)")
+        Toast.makeText(this, "Couldn't resume at ${formatDuration(at)} — playing from the start. Your place ${formatDuration(at)} is kept.", Toast.LENGTH_LONG).show()
         p.setMediaItem(buildMediaItem(item))
         p.prepare()
         p.playWhenReady = true
@@ -674,6 +675,7 @@ class PlayerActivity : ComponentActivity() {
         if (!PlayerUi.compact(this)) vod.extraViews["⟲ Rotate"]?.visibility = View.GONE
         if (com.nova.iptv.data.Cast.isTv(this)) vod.extraViews["📺 Play on TV"]?.visibility = View.GONE
         vod.addBottomView(linkLine())
+        vod.seekHandler = { target -> if (noIndexMkv) { requestSplice(target); true } else false }
         // Keep the controls clear of the camera cut-out.
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(vod.view) { v, insets ->
             val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
@@ -945,6 +947,7 @@ class PlayerActivity : ComponentActivity() {
             app.storage.getPosition(item.key)
         } else 0L
         if (!quiet) resumeFallbackDone = false
+        if (!quiet) { pendingResumeMs = resumeAt; noIndexMkv = false; resumeKeptMs = 0L; vod.pendingSeek = null }
         if (resumeAt > 0) {
             if (!resumeFallbackDone) handler.postDelayed(resumeTimeoutTask, 25_000)
             p.setMediaItem(buildMediaItem(item), resumeAt)
@@ -1454,6 +1457,7 @@ class PlayerActivity : ComponentActivity() {
                     if (bufferingAt > 0) { session?.let { it.rebufferMs += android.os.SystemClock.elapsedRealtime() - bufferingAt }; bufferingAt = 0L }
                     everReady = true
                     autoSkips = 0
+                    checkNoIndexMkv()
                     handler.removeCallbacks(startTimeoutTask)
                     handler.removeCallbacks(resumeTimeoutTask)
                     if (storedRestart) {
@@ -2432,6 +2436,149 @@ class PlayerActivity : ComponentActivity() {
             .show()
     }
 
+    // ------------------------------------------------------------------ ⏩ jumping in MKV films without an index
+
+    /** This film is an MKV the player can't jump in by itself: Nova does the jumps (MkvSeek). */
+    private var noIndexMkv = false
+    private var pendingResumeMs = 0L
+    /** A resume that failed: this saved place is kept until you get past it. */
+    private var resumeKeptMs = 0L
+    private var spliceTarget = 0L
+    private var spliceJob: kotlinx.coroutines.Job? = null
+    private val spliceTask = Runnable { doSplice(spliceTarget) }
+
+    private fun looksMkv(item: PlayItem): Boolean =
+        listOf(item.url, item.saved.extension, item.downloadExt).any { it?.lowercase()?.let { s -> s == "mkv" || s.substringBefore('?').endsWith(".mkv") } == true }
+
+    private fun checkNoIndexMkv() {
+        val item = current ?: return
+        val p = player ?: return
+        if (noIndexMkv || item.isLive || item.catchup || !looksMkv(item) || p.isCurrentMediaItemSeekable) return
+        if (p.currentMediaItem?.localConfiguration?.uri?.scheme == "nova-splice") return
+        noIndexMkv = true
+        Log.i("NovaTest", "NOINDEX ${item.title}")
+        session?.action("MKV without index → Nova does the jumps")
+        // Resume: the player started at 00:00 — go to the saved place.
+        val resume = pendingResumeMs.takeIf { it > 30_000 && p.currentPosition < 15_000 }
+        pendingResumeMs = 0
+        if (resume != null) { spliceTarget = resume; doSplice(resume) }
+    }
+
+    /** ⏩ / seek bar / remote: several presses add up, then one jump. */
+    private fun requestSplice(target: Long) {
+        spliceTarget = target
+        resumeKeptMs = 0L
+        handler.removeCallbacks(spliceTask)
+        handler.postDelayed(spliceTask, 700)
+    }
+
+    private fun mkvReader(item: PlayItem, deadline: Long): MkvSeek.Reader? {
+        fun late() = System.currentTimeMillis() > deadline
+        val ra = readAhead
+        val id = item.downloadId
+        // A file on the box (a finished download, a recording, a file opened with Nova).
+        fun fileReader(open: () -> android.os.ParcelFileDescriptor?, total: Long): MkvSeek.Reader? {
+            val pfd = runCatching { open() }.getOrNull() ?: return null
+            val ch = java.io.FileInputStream(pfd.fileDescriptor).channel
+            val size = if (total > 0) total else runCatching { ch.size() }.getOrDefault(0L)
+            return object : MkvSeek.Reader {
+                override val total = size
+                override fun read(pos: Long, len: Int): ByteArray? {
+                    if (late() || pos >= size) return null
+                    val bb = java.nio.ByteBuffer.allocate(minOf(len.toLong(), size - pos).toInt())
+                    var at = pos
+                    while (bb.hasRemaining()) { val n = ch.read(bb, at); if (n <= 0) break; at += n }
+                    return bb.array().copyOf(bb.position())
+                }
+            }
+        }
+        return when {
+            item.isLocal -> {
+                val u = item.url
+                if (u.startsWith("content:")) fileReader({ contentResolver.openFileDescriptor(android.net.Uri.parse(u), "r") }, 0)
+                else {
+                    val f = java.io.File(if (u.startsWith("file:")) android.net.Uri.parse(u).path.orEmpty() else u)
+                    fileReader({ android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY) }, 0)
+                }
+            }
+            id != null -> {
+                val d = DownloadCenter.items.value.firstOrNull { it.id == id } ?: return null
+                val f = java.io.File(d.path)
+                fileReader({ android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY) }, d.totalBytes)
+            }
+            ra != null -> object : MkvSeek.Reader {
+                val handles = ReadAheadBuffer.HandleCache()
+                override val total = ra.totalBytes
+                override fun read(pos: Long, len: Int): ByteArray? {
+                    if (total <= 0) return null
+                    val out = ByteArray(minOf(len.toLong(), total - pos).toInt().coerceAtLeast(0))
+                    var got = 0
+                    while (got < out.size) {
+                        if (late()) return null
+                        val n = runCatching { ra.read(pos + got, out, got, out.size - got, handles) }.getOrElse { return null }
+                        if (n < 0) break
+                        got += n
+                    }
+                    return out.copyOf(got)
+                }
+            }
+            else -> object : MkvSeek.Reader {
+                private val client = app.http.newBuilder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
+                override val total: Long by lazy {
+                    runCatching {
+                        client.newCall(okhttp3.Request.Builder().url(item.url).header("User-Agent", app.storage.userAgent).header("Range", "bytes=0-0").build())
+                            .execute().use { r -> r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: -1L }
+                    }.getOrDefault(-1L)
+                }
+                override fun read(pos: Long, len: Int): ByteArray? {
+                    if (late()) return null
+                    return runCatching {
+                        client.newCall(okhttp3.Request.Builder().url(item.url).header("User-Agent", app.storage.userAgent)
+                            .header("Range", "bytes=$pos-${pos + len - 1}").build()).execute().use { r ->
+                            if (r.code != 206) null else r.body?.bytes()
+                        }
+                    }.getOrNull()
+                }
+            }
+        }
+    }
+
+    /** Finds the place and plays the joined stream from there. */
+    private fun doSplice(target: Long) {
+        val item = current ?: return
+        val p = player ?: return
+        val dur = p.duration.takeIf { it > 0 } ?: return
+        spliceJob?.cancel()
+        Toast.makeText(this, "⏩ Jumping to ${formatDuration(target)}…", Toast.LENGTH_SHORT).show()
+        val wasPlaying = p.playWhenReady
+        p.stop()
+        spliceJob = lifecycleScope.launch {
+            val deadline = System.currentTimeMillis() + 45_000
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val r = mkvReader(item, deadline) ?: return@runCatching null
+                    MkvSeek.locate(r, target, dur)?.let { it to r.total }
+                }.getOrNull()
+            }
+            vod.pendingSeek = null
+            if (current !== item) return@launch
+            if (result == null) {
+                Log.i("NovaTest", "SPLICE ${item.title} target=$target failed")
+                Toast.makeText(this@PlayerActivity, "Couldn't jump in this film here — the server doesn't allow it. Try ↗ External player, or ⬇ Download it.", Toast.LENGTH_LONG).show()
+                p.prepare(); p.playWhenReady = wasPlaying
+                return@launch
+            }
+            val (found, total) = result
+            val uri = MkvSeek.register(MkvSeek.Splice(item.url, found.header, found.clusterOffset, total))
+            p.setMediaItem(buildMediaItem(item).buildUpon().setUri(uri).build())
+            p.prepare()
+            p.playWhenReady = true
+            Log.i("NovaTest", "SPLICE ${item.title} target=$target landed=${found.clusterMs}")
+            session?.action("jump to ${formatDuration(target)} → ${formatDuration(found.clusterMs)}")
+            handler.postDelayed({ if (current === item) Log.i("NovaTest", "POSITION ${item.title} ${player?.currentPosition}") }, 5000)
+        }
+    }
+
     private var vpnAsked = false
 
     /** 🔒 The film's server is blocked on this line: open a VPN app, then ⟳ Retry. */
@@ -2560,6 +2707,7 @@ class PlayerActivity : ComponentActivity() {
         val duration = p.duration
         val pos = p.currentPosition
         if (duration <= 0) return
+        if (resumeKeptMs > 0 && pos < resumeKeptMs) return
         if (pos > 10_000 && pos < duration - 60_000) app.storage.setPosition(item.key, pos)
         else if (pos >= duration - 60_000) app.storage.setPosition(item.key, 0)
     }

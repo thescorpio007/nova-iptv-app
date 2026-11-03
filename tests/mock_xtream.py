@@ -318,6 +318,8 @@ class Handler(BaseHTTPRequestHandler):
                      "container_extension": "mp4", "added": str(now - 5 * 86400)},
                     {"stream_id": "301", "name": "Test Film", "stream_icon": "", "rating": "7.5", "year": "2024",
                      "category_id": "10", "container_extension": "mp4", "added": str(now - 3600)},
+                    {"stream_id": "305", "name": "No Index MKV", "stream_icon": "", "category_id": "10",
+                     "container_extension": "mkv", "added": str(now - 8 * 86400)},
                 ])
             if action == "get_vod_info":
                 return self.send_json({
@@ -402,6 +404,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(path, "video/mp2t", rate=size // 90, burst=size * 3 // 90)
             if kind == "live":
                 return self.send_file(os.path.join(MEDIA, "sample.ts"), "video/mp2t")
+            if kind == "movie" and sid == "305":
+                # MKV with NO index at all (no Cues), like many provider films: jumping must still work.
+                return self.send_file(os.path.join(MEDIA, "noindex.mkv"), "video/x-matroska")
             if kind == "movie" and sid == "304":
                 # MKV (index at the end) from a provider only a little faster than the film.
                 path = os.path.join(MEDIA, "sample.mkv")

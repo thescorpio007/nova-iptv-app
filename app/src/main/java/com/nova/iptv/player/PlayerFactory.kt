@@ -187,7 +187,9 @@ object PlayerFactory {
             )
             .setConstantBitrateSeekingEnabled(true)
 
-        val mediaSources = DefaultMediaSourceFactory(dataSource, extractors)
+        // Films: jumps in MKV files without an index are played as a joined stream (see MkvSeek).
+        val withJumps: DataSource.Factory = if (live) dataSource else DataSource.Factory { SpliceDataSource(dataSource.createDataSource()) }
+        val mediaSources = DefaultMediaSourceFactory(withJumps, extractors)
             .setLoadErrorHandlingPolicy(RetryPolicy(live))
 
         // Decoders: the box's hardware first for video (4K/HDR). For audio, either the box first

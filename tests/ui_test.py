@@ -1287,6 +1287,30 @@ def double_ok_hide():
         pass
 
 
+def jump_mkv_without_index():
+    """An MKV with no index (no Cues): jumping forward must land near the wanted time, not go back to 00:00."""
+    tap("Films")
+    time.sleep(2)
+    tap_scrolling("No Index MKV")
+    tap("Play", exact=True)
+    check("An MKV without index plays", wait_log(r"READY No Index MKV", 45))
+    check("Nova notices the MKV has no index", wait_log(r"NOINDEX No Index MKV", 15))
+    time.sleep(3)
+    adb("shell input keyevent 90 90 90 90")  # ⏩ four times = +40 s
+    ok = wait_log(r"SPLICE No Index MKV target=\d+ landed=\d+", 45)
+    m = re.findall(r"SPLICE No Index MKV target=(\d+) landed=(\d+)", test_log())
+    target, landed = (int(m[-1][0]), int(m[-1][1])) if m else (-1, -1)
+    check("Jumping forward in an MKV without index lands near the wanted time",
+          ok and landed >= 20000 and abs(landed - target) <= 15000, f"target {target} ms, landed {landed} ms")
+    wait_log(r"POSITION No Index MKV \d+", 15)
+    p = re.findall(r"POSITION No Index MKV (\d+)", test_log())
+    pos = int(p[-1]) if p else -1
+    check("…and the film keeps playing from there (not from 00:00)", pos >= 20000, f"position {pos} ms")
+    shot("mkv-no-index-jump")
+    back_to_main("mkv-no-index")
+    leave_player_and_page()
+
+
 def open_link():
     """The "🔗 Link" tab plays any video link; Share → Nova offers Play / Download & watch / Download."""
     tap("Link", 15)
@@ -1433,6 +1457,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("First login", login_first),
         ("Restart with an account", restart_check),
         ("Open link and Share", open_link),
+        ("Jump in an MKV without index", jump_mkv_without_index),
         ("Double OK hides a film", double_ok_hide),
     ]
 

@@ -79,6 +79,8 @@ jobs:
           cat tests/media/part1.ts tests/media/part2.ts > tests/media/stuck.ts
           # An MKV with its index (Cues) at the end, like most provider films.
           ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy tests/media/sample.mkv
+          # An MKV with no index at all (written to a pipe: ffmpeg can't add Cues), like many provider films.
+          ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy -f matroska - > tests/media/noindex.mkv
           ls -la tests/media
 
       - name: Start the fake Xtream server
