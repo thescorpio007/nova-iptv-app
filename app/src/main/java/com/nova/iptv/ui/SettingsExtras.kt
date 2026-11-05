@@ -1210,9 +1210,26 @@ fun LastProblemSettings() {
     val context = LocalContext.current
     var text by remember { mutableStateOf(com.nova.iptv.data.CrashLog.last(context)) }
     LaunchedEffect(Unit) { com.nova.iptv.data.CrashLog.seen(context) }
-    SettingsCard("Last problem", summary = if (text == null) "none" else text!!.lineSequence().drop(1).firstOrNull()?.take(60)) {
+    // A problem from an earlier build is not repeated: folded away unless you ask for it.
+    val nowBuild = remember {
+        com.nova.iptv.data.CrashLog.buildOf("x " + runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty())
+    }
+    val oldBuild = com.nova.iptv.data.CrashLog.buildOf(text)?.takeIf { nowBuild != null && it != nowBuild }
+    var showOld by remember { mutableStateOf(false) }
+    val oldWhen = text?.lineSequence()?.firstOrNull()?.substringAfterLast("· ")?.take(10).orEmpty()
+    SettingsCard("Last problem", summary = when {
+        text == null -> "none"
+        oldBuild != null -> "none in this build (last one: build $oldBuild, $oldWhen)"
+        else -> text!!.lineSequence().drop(1).firstOrNull()?.take(60)
+    }) {
         if (text == null) {
             Hint("Nova has not closed by itself since this was cleared.")
+        } else if (oldBuild != null && !showOld) {
+            Hint("Nova hasn't closed by itself in this build. The last problem was in build $oldBuild ($oldWhen) and hasn't happened again.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showOld = true }) { Text("Show it") }
+                OutlinedButton(onClick = { com.nova.iptv.data.CrashLog.clear(context); text = null }) { Text("Clear") }
+            }
         } else {
             Hint("Why Nova closed by itself last time. Share it so the problem can be fixed (also saved in Download/NovaIPTV/Logs).")
             Text(text!!.take(1500), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

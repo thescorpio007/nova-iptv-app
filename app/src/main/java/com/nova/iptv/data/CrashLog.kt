@@ -45,7 +45,8 @@ object CrashLog {
                 else -> null
             } ?: return@runCatching
             val trace = runCatching { last.traceInputStream?.bufferedReader()?.use { it.readText().take(6000) } }.getOrNull().orEmpty()
-            record(app, "$why\n${last.description.orEmpty()}\nmemory ${last.pss / 1024} MB", Date(last.timestamp), trace)
+            val mem = if (last.pss > 0) "memory used ${last.pss / 1024} MB" else "memory used: not known (Android didn't say)"
+            record(app, "$why\n${last.description.orEmpty()}\n$mem", Date(last.timestamp), trace)
         }
     }
 
@@ -63,6 +64,9 @@ object CrashLog {
                 ?.sortedByDescending { it.name }?.drop(10)?.forEach { it.delete() }
         }
     }
+
+    /** "03" from "Nova IPTV 4.0 · build 03 · 27/10/2026 18:09:46". */
+    fun buildOf(text: String?): String? = text?.lineSequence()?.firstOrNull()?.let { Regex("""build (\d+)""").find(it)?.groupValues?.get(1) }
 
     fun last(context: Context): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("last", null)
     fun isNew(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("new", false)

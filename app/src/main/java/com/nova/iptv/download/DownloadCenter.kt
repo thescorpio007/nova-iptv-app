@@ -42,15 +42,32 @@ object DownloadCenter {
         }
     }
 
+    /** Set by the app: shows a short message (a finished file that isn't real video). */
+    var notify: ((String) -> Unit)? = null
+
     fun update(id: String, persist: Boolean = true, change: (DownloadItem) -> DownloadItem) {
+        var finished: DownloadItem? = null
         synchronized(lock) {
-            _items.value = _items.value.map { if (it.id == id) change(it) else it }
+            _items.value = _items.value.map {
+                if (it.id == id) change(it).also { n -> if (it.status != DownloadStatus.DONE && n.status == DownloadStatus.DONE) finished = n } else it
+            }
             val now = System.currentTimeMillis()
             if (persist || now - lastSave > 5000) {
                 storage.downloads = _items.value
                 lastSave = now
             }
         }
+        finished?.let { d -> Thread({ checkFinished(d) }, "nova-filecheck").apply { isDaemon = true }.start() }
+    }
+
+    /** A finished recording / download is checked once: a web page or an empty file is marked straight away. */
+    private fun checkFinished(d: DownloadItem) {
+        val f = File(d.path)
+        if (!f.isFile) return
+        val problem = FileCheck.problem(f) ?: return
+        update(d.id) { it.copy(note = "⚠ Not real video: $problem · Delete it, then record / download again") }
+        val what = if (d.kind == "recording") "Recording" else "Download"
+        notify?.invoke("⚠ $what “${d.title}” didn't save real video ($problem)")
     }
 
     fun remove(id: String, deleteFile: Boolean) {

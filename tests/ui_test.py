@@ -1308,6 +1308,19 @@ def jump_mkv_without_index():
     close_opened_player("mkv-no-index")
 
 
+def silent_film_server():
+    """A film whose server sends nothing: after 12 s Nova says so and offers a choice (VPN, keep waiting, close)."""
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/movie/alice/secret/306.mkv -t video/x-matroska {PKG}")
+    ok = wait_log(r"CHOICE film 306\.mkv", 30)
+    check("A silent film server: Nova says it isn't answering and offers a choice", ok)
+    check("…the choice offers the VPN and keep waiting", ok and "Turn on my VPN" in test_log() and "Keep waiting" in test_log())
+    shot("film-server-not-answering")
+    adb("shell input keyevent 4")  # Back = keep waiting (closes the popup)
+    time.sleep(1)
+    check("…Back closes the choice (keep waiting), no automatic action", count_log(r"CHOICE auto") == 0)
+    close_opened_player("silent-film")
+
+
 def open_link():
     """The "🔗 Link" tab plays any video link; Share → Nova offers Play / Download & watch / Download."""
     tap("Link", 15)
@@ -1455,6 +1468,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("Restart with an account", restart_check),
         ("Open link and Share", open_link),
         ("Jump in an MKV without index", jump_mkv_without_index),
+        ("A film server that sends nothing", silent_film_server),
         ("Double OK hides a film", double_ok_hide),
     ]
 

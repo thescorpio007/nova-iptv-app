@@ -404,6 +404,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(path, "video/mp2t", rate=size // 90, burst=size * 3 // 90)
             if kind == "live":
                 return self.send_file(os.path.join(MEDIA, "sample.ts"), "video/mp2t")
+            if kind == "movie" and sid == "306":
+                # A blocked film server: the connection opens but nothing ever comes (like UAE blocks).
+                time.sleep(45)
+                return
             if kind == "movie" and sid == "305":
                 # MKV with NO index at all (no Cues), like many provider films: jumping must still work.
                 return self.send_file(os.path.join(MEDIA, "noindex.mkv"), "video/x-matroska")

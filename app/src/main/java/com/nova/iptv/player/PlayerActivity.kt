@@ -63,6 +63,19 @@ class PlayerActivity : ComponentActivity() {
     private var playerTweaks = Tweaks()
     private var videoDecoderSwitched = false
     private var audioFixTried = 0
+    private var audioDecoderName: String? = null
+    /** The extra sound decoder failed: waiting for the box's own decoder to take over (then "Sound fixed"). */
+    private var boxAudioPending = false
+    private val boxAudioPrefs by lazy { getSharedPreferences("box_audio", MODE_PRIVATE) }
+    /** Your own jump (⏩, seek bar, rewind): the wait after it is not a stall. */
+    private var jumpAt = 0L
+    private var bufferingIsJump = false
+    /** A film's server sent nothing at all: asked once per film what to do. */
+    private var filmBlockedAsked = false
+    /** A channel shows no picture after 10 s: other versions offered once. */
+    private var neverStartAsked = false
+    /** "Turn on my VPN" was chosen: try again when you come back to Nova. */
+    private var retryAfterVpn = false
     private var current: PlayItem? = null
     private var relay: LiveRelay? = null
     /** Disk read-ahead of the current film / episode (Settings → Player). */
@@ -174,6 +187,13 @@ class PlayerActivity : ComponentActivity() {
         if (everReady || item.isLive || resumeFallbackDone) return@Runnable
         resumeFallbackDone = true
         val at = app.storage.getPosition(item.key)
+        if (!dataArrived()) {
+            // Nothing arrived at all: starting from 0 wouldn't help (the server is the problem). Keep trying here.
+            resumeKeptMs = at
+            logHealth(item, "the server hasn't sent the film yet (25 s)", "kept trying · place ${formatDuration(at)} kept")
+            if (!choiceOpen) Toast.makeText(this, "⏳ The server hasn't sent the film yet (25 s). Nova keeps trying. Your place ${formatDuration(at)} is kept.", Toast.LENGTH_LONG).show()
+            return@Runnable
+        }
         // The saved place is kept (never erased): watching a little from the start won't overwrite it.
         resumeKeptMs = at
         logHealth(item, "didn't start at the saved place ${formatDuration(at)}", "started from the beginning (place kept)")
@@ -675,7 +695,7 @@ class PlayerActivity : ComponentActivity() {
         if (!PlayerUi.compact(this)) vod.extraViews["⟲ Rotate"]?.visibility = View.GONE
         if (com.nova.iptv.data.Cast.isTv(this)) vod.extraViews["📺 Play on TV"]?.visibility = View.GONE
         vod.addBottomView(linkLine())
-        vod.seekHandler = { target -> if (noIndexMkv) { requestSplice(target); true } else false }
+        vod.seekHandler = { target -> jumpAt = android.os.SystemClock.elapsedRealtime(); if (noIndexMkv) { requestSplice(target); true } else false }
         // Keep the controls clear of the camera cut-out.
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(vod.view) { v, insets ->
             val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
@@ -850,6 +870,12 @@ class PlayerActivity : ComponentActivity() {
         linkTexts.forEach { it.text = "🔗 " + item.url }
         if (otherAppOpen) closeOtherApp()
         if (similarOpen) closeSimilar()
+        if (!quiet) {
+            // Quiet restarts (retries) keep the popup and its timers: they belong to the same try.
+            if (choiceOpen) closeChoice()
+            handler.removeCallbacks(noDataTask)
+            handler.removeCallbacks(neverStartTask)
+        }
         startSession(item, quiet)
         // Status dots: this server's connection is now the player's (a check running there stops).
         StreamCheck.playing(if (item.isLocal) null else item.saved.accountId)
@@ -866,10 +892,13 @@ class PlayerActivity : ComponentActivity() {
         refilling = false
         mediaBps = 0.0; bpsSampleBytes = -1L; arrivals.clear(); arrivalBps = 0.0
         rebuffers.clear(); notArrivingSince = 0L
-        if (!keepTweaks) tweaks = Tweaks()
+        if (!keepTweaks) tweaks = Tweaks(boxAudioFirst = boxAudioPrefs.getBoolean(item.key, false))
         wdReset(android.os.SystemClock.elapsedRealtime())
         videoDecoderSwitched = false
         audioFixTried = 0
+        boxAudioPending = false
+        jumpAt = 0L; bufferingIsJump = false
+        if (!quiet) { filmBlockedAsked = false; neverStartAsked = false }
         externalSuggested = false
         hideStatus()
 
@@ -966,6 +995,15 @@ class PlayerActivity : ComponentActivity() {
         if (item.isLive) {
             // Never give up before the safety cushion has had time to fill.
             handler.postDelayed(startTimeoutTask, startTimeoutMs())
+            // No picture after 10 s: offer the same channel in another quality / on your other server.
+            if (!quiet && !item.catchup && !item.temporary && item.saved.accountId.isNotBlank()) {
+                startCheckKey = item.key
+                handler.postDelayed(neverStartTask, 10_000)
+            }
+        } else if (!quiet && !item.isLocal && item.downloadId == null) {
+            // A film whose server sends nothing at all in 12 s: say why and offer a choice.
+            startCheckKey = item.key
+            handler.postDelayed(noDataTask, 12_000)
         }
 
         val accountLabel = if (app.storage.accounts.size > 1) {
@@ -1454,7 +1492,15 @@ class PlayerActivity : ComponentActivity() {
                         current?.takeIf { it.isLive && !it.catchup && !it.temporary }?.let { app.storage.addRecent(it.saved) }
                     }
                     retryCount = 0
-                    if (bufferingAt > 0) { session?.let { it.rebufferMs += android.os.SystemClock.elapsedRealtime() - bufferingAt }; bufferingAt = 0L }
+                    if (bufferingAt > 0) {
+                        val waited = android.os.SystemClock.elapsedRealtime() - bufferingAt
+                        session?.let { if (bufferingIsJump) it.jumpMs += waited else it.rebufferMs += waited }
+                        bufferingAt = 0L
+                    }
+                    bufferingIsJump = false; jumpAt = 0L
+                    if (choiceOpen && choiceForStart) closeChoice()
+                    handler.removeCallbacks(noDataTask)
+                    handler.removeCallbacks(neverStartTask)
                     everReady = true
                     autoSkips = 0
                     checkNoIndexMkv()
@@ -1478,6 +1524,9 @@ class PlayerActivity : ComponentActivity() {
                     if (everReady) {
                         Log.i("NovaTest", "BUFFERING ${current?.title}")
                         val t = android.os.SystemClock.elapsedRealtime()
+                        // Right after your own jump: counted apart (your jumps), not as a stall.
+                        bufferingIsJump = jumpAt > 0 && t - jumpAt < 15_000
+                        if (bufferingIsJump) { session?.let { it.jumps++; bufferingAt = t }; return }
                         session?.let { it.rebuffers++; bufferingAt = t }
                         rebuffers.addLast(t)
                         while (rebuffers.isNotEmpty() && t - rebuffers.first() > 180_000) rebuffers.removeFirst()
@@ -1499,6 +1548,10 @@ class PlayerActivity : ComponentActivity() {
         override fun onPlayerError(error: PlaybackException) {
             scheduleReconnect(error)
         }
+
+        override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK && everReady) jumpAt = android.os.SystemClock.elapsedRealtime()
+        }
     }
 
     /** Logs which decoders are used (shown in test logs; helps when a format doesn't play). */
@@ -1509,6 +1562,13 @@ class PlayerActivity : ComponentActivity() {
 
         override fun onAudioDecoderInitialized(t: AnalyticsListener.EventTime, name: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
             Log.i("NovaTest", "DECODER audio ${current?.title}: $name")
+            audioDecoderName = name
+            if (boxAudioPending && !name.contains("ffmpeg", ignoreCase = true)) {
+                boxAudioPending = false
+                Log.i("NovaTest", "SOUND FIXED ${current?.title}: $name")
+                session?.let { ss -> if (ss.result == "OK" || ss.result == "SLOW") { ss.result = "FIXED"; ss.note = "sound: extra decoder failed → box decoder ($name)" } }
+                runOnUiThread { Toast.makeText(this@PlayerActivity, "🔊 Sound fixed: Nova switched to the box's own sound decoder. (Remembered for this film.)", Toast.LENGTH_LONG).show() }
+            }
         }
     }
 
@@ -1537,6 +1597,18 @@ class PlayerActivity : ComponentActivity() {
                 return true
             }
             C.TRACK_TYPE_AUDIO -> {
+                val ffmpegFailed = generateSequence(e as Throwable) { it.cause }.any { it.javaClass.simpleName.contains("Ffmpeg", ignoreCase = true) } ||
+                    audioDecoderName?.contains("ffmpeg", ignoreCase = true) == true
+                if (ffmpegFailed && !tweaks.boxAudioFirst && audioFixTried < 2) {
+                    audioFixTried = 1
+                    Log.i("NovaTest", "RECOVER ${item.title}: box sound decoder ($what)")
+                    session?.action("sound: extra decoder failed ($what) → box decoder")
+                    boxAudioPrefs.edit().putBoolean(item.key, true).apply()
+                    boxAudioPending = true
+                    tweaks = tweaks.copy(step = tweaks.step + 1, boxAudioFirst = true, ffmpegAudioFirst = false, noOffload = true)
+                    restartAt(item, position)
+                    return true
+                }
                 if (audioFixTried == 0) {
                     audioFixTried = 1
                     Log.i("NovaTest", "RECOVER ${item.title}: FFmpeg sound decoder ($what)")
@@ -1661,8 +1733,14 @@ class PlayerActivity : ComponentActivity() {
                 }, 1200L * containerRetries)
                 return
             }
-            session?.fail(if (item.isLive) "FAIL" else "FILE", "stream / file not readable by Nova [$lastErrorName]")
+            // A saved file: say what it really is (a web page saved instead of the video…).
+            val fileProblem = if (item.isLocal) runCatching {
+                val path = if (item.url.startsWith("file:")) android.net.Uri.parse(item.url).path else if (item.url.startsWith("/")) item.url else null
+                path?.let { com.nova.iptv.download.FileCheck.problem(java.io.File(it)) }
+            }.getOrNull() else null
+            session?.fail(if (item.isLive) "FAIL" else "FILE", (fileProblem?.let { "not real video: $it" } ?: "stream / file not readable by Nova") + " [$lastErrorName]")
             if (item.isLive) { channelFailed("stream not recognised"); return }
+            if (fileProblem != null) { showStatus("This file isn't real video: $fileProblem.\nDelete it and record / download it again."); return }
             if (app.storage.failApp != "none") offerOtherApp(item, "Nova can't read this file's format", format = true)
             else showStatus("Nova can't read this file's format (not a problem of this device).\nPress OK (or tap here) to open it in an external player.").also { externalSuggested = true }
             return
@@ -1737,7 +1815,8 @@ class PlayerActivity : ComponentActivity() {
                 vpnAsked = true
                 reconnectTask?.let { handler.removeCallbacks(it) }
                 session?.fail("FAIL", "film server can't be reached (blocked?) — VPN off [$lastErrorName]")
-                showVpnNeeded(item)
+                if (filmBlockedAsked) showStatus("This film's server can't be reached on your line.\nTurn on your VPN, then press OK to try again.").also { retryCount = 1 }
+                else offerFilmBlocked(item, refused = true)
                 return
             }
             val limit = if (httpCode == 401 || httpCode == 403 || httpCode == 404) 3 else 30
@@ -1820,9 +1899,11 @@ class PlayerActivity : ComponentActivity() {
                 handler.postDelayed(startTimeoutTask, startTimeoutMs())
             } else {
                 if (n == 4) {
-                    // Safer settings: the other video decoder, no tunneling / audio offload.
+                    // Safer settings: no tunneling / audio offload. The other video decoder only when the decoder itself
+                    // failed — a slow provider is not a decoder problem (the box's hardware decoder plays smoother).
+                    val decoderFailed = lastErrorName?.contains("DECOD", ignoreCase = true) == true
                     val software = tweaks.softwareVideo ?: (s.videoDecoder == "software")
-                    tweaks = tweaks.copy(step = tweaks.step + 1, softwareVideo = !software, noTunnel = true, noOffload = true)
+                    tweaks = tweaks.copy(step = tweaks.step + 1, softwareVideo = if (decoderFailed) !software else tweaks.softwareVideo, noTunnel = true, noOffload = true)
                     player?.release(); player = null; playerMode = null
                 }
                 startPlayback(index, quiet = true, keepTweaks = true)
@@ -1917,7 +1998,14 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun endSession() {
-        session?.let { PlaybackLog.end(it) }
+        session?.let { ss ->
+            if (ss.startMs < 0) ss.bytesSeen = when {
+                readAhead != null -> readAhead!!.bytesArrived
+                relay != null -> relay!!.bytesStoredTotal()
+                else -> -1L
+            }
+            PlaybackLog.end(ss)
+        }
         session = null
     }
 
@@ -2305,6 +2393,7 @@ class PlayerActivity : ComponentActivity() {
 
     private fun timeshift(seconds: Int) {
         val r = relay ?: return
+        jumpAt = android.os.SystemClock.elapsedRealtime()
         r.moveBy(seconds)
         restartFromRelay()
     }
@@ -2571,6 +2660,7 @@ class PlayerActivity : ComponentActivity() {
             }
             val (found, total) = result
             val uri = MkvSeek.register(MkvSeek.Splice(item.url, found.header, found.clusterOffset, total))
+            jumpAt = android.os.SystemClock.elapsedRealtime()
             p.setMediaItem(buildMediaItem(item).buildUpon().setUri(uri).build())
             p.prepare()
             p.playWhenReady = true
@@ -2578,6 +2668,254 @@ class PlayerActivity : ComponentActivity() {
             session?.action("jump to ${formatDuration(target)} → ${formatDuration(found.clusterMs)}")
             handler.postDelayed({ if (current === item) Log.i("NovaTest", "POSITION ${item.title} ${player?.currentPosition}") }, 5000)
         }
+    }
+
+
+    // ------------------------------------------------------------------ "isn't starting" choices (fixes 1, 2, 5)
+
+    /** The film / channel the 12 s / 10 s check is for (a quiet retry keeps it). */
+    private var startCheckKey = ""
+
+    /** Did anything at all arrive from the server for the current video? */
+    private fun dataArrived(): Boolean {
+        readAhead?.let { return it.bytesArrived > 0 }
+        val p = player ?: return false
+        return p.totalBufferedDuration > 0
+    }
+
+    private val noDataTask = Runnable {
+        val item = current ?: return@Runnable
+        if (item.key != startCheckKey || item.isLive || everReady || choiceOpen || otherAppOpen || dataArrived()) return@Runnable
+        offerFilmBlocked(item, refused = false)
+    }
+
+    private val neverStartTask = Runnable {
+        val item = current ?: return@Runnable
+        if (item.key != startCheckKey || !item.isLive || everReady || neverStartAsked || choiceOpen || otherAppOpen || similarOpen) return@Runnable
+        offerOtherVersions(item)
+    }
+
+    /** ⛔ A film's server sends nothing (or refuses): the same film on your other account, the VPN, keep waiting, close. */
+    private fun offerFilmBlocked(item: PlayItem, refused: Boolean) {
+        if (filmBlockedAsked || current !== item) return
+        filmBlockedAsked = true
+        val waited = session?.let { (System.currentTimeMillis() - it.startedAt) / 1000 } ?: 12
+        Log.i("NovaTest", "NODATA ${item.title}: ${if (refused) "refused" else "nothing in $waited s"}")
+        session?.action(if (refused) "server refused the connection" else "server didn't answer: 0 bytes in $waited s")
+        lifecycleScope.launch {
+            val other = if (app.storage.accounts.size > 1) runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { FilmMatch.sameFilmElsewhere(app, item) }
+            }.getOrNull() else null
+            if (current !== item || everReady || choiceOpen) return@launch
+            val choices = mutableListOf<Choice>()
+            other?.let { o ->
+                val acc = app.storage.accounts.firstOrNull { it.id == o.saved.accountId }?.name ?: "your other account"
+                choices += Choice("▶ Same film on $acc", "found: ${o.title}", "Same film on $acc") {
+                    session?.action("you chose: same film on $acc")
+                    playOtherFilm(item, o)
+                }
+            }
+            choices += Choice("🔒 Turn on my VPN", "opens your VPN app, then tries again", "Opening your VPN app") {
+                session?.action("you chose: VPN")
+                retryAfterVpn = true
+                Vpn.pickApp(this@PlayerActivity)
+            }
+            choices += Choice("⏳ Keep waiting", "", "") { session?.action("you chose: keep waiting") }
+            choices += Choice("✕ Close", "", "") { session?.action("you chose: close"); finish() }
+            val sub = (if (refused) "The film server refused the connection. In the UAE this usually means the address is blocked."
+                else "Nova got no data at all in $waited s. In the UAE this usually means the address is blocked.") +
+                (if (app.storage.getPosition(item.key) > 0) " Your saved place is kept." else "")
+            Log.i("NovaTest", "CHOICE film ${item.title}: ${choices.joinToString(" | ") { it.label }}")
+            showChoice(if (refused) "⛔ The film server refused the connection" else "⛔ The film server isn't answering", sub, choices, forStart = true) {
+                session?.action("you chose: keep waiting")
+            }
+        }
+    }
+
+    /** The same film on your other account: plays it there, starting at your saved place. */
+    private fun playOtherFilm(from: PlayItem, other: PlayItem) {
+        val index = PlaybackQueue.index
+        if (PlaybackQueue.items.getOrNull(index) !== from) return
+        val at = app.storage.getPosition(from.key)
+        if (at > 0 && app.storage.getPosition(other.key) <= 0) app.storage.setPosition(other.key, at)
+        session?.action("other account → ${other.title}")
+        PlaybackQueue.items = PlaybackQueue.items.toMutableList().also { it[index] = other }
+        startPlayback(index, quiet = false, keepTweaks = false)
+    }
+
+    /** 📺 A channel with no picture after 10 s: the same channel in another quality, or on your other server. */
+    private fun offerOtherVersions(item: PlayItem) {
+        neverStartAsked = true
+        lifecycleScope.launch {
+            val found = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.similarOnSameServer(app, item) }
+            }.getOrNull()?.found.orEmpty().filter { it.item.saved.key != item.saved.key }
+            val other = if (app.storage.accounts.size > 1) runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.sameChannelElsewhere(app, item) }
+            }.getOrNull() else null
+            if (current !== item || everReady || choiceOpen || otherAppOpen) return@launch
+            val server = app.storage.accounts.firstOrNull { it.id == item.saved.accountId }?.name ?: "this server"
+            fun state(p: PlayItem) = checkKey(p)?.let { StreamCheck.status(it).state }
+            // Versions that worked before first, ones that failed last.
+            val ranked = found.sortedBy { when (state(it.item)) { StreamCheck.State.OK -> 0; StreamCheck.State.BAD, StreamCheck.State.DEVICE -> 2; else -> 1 } }
+            val choices = mutableListOf<Choice>()
+            ranked.take(2).forEach { sim ->
+                val worked = if (state(sim.item) == StreamCheck.State.OK) " · worked before" else ""
+                choices += Choice("▶ ${sim.item.title}", "$server$worked", sim.item.title) {
+                    session?.action("you chose: ${sim.item.title}")
+                    playSimilar(item, sim)
+                }
+            }
+            other?.let { o ->
+                val acc = app.storage.accounts.firstOrNull { it.id == o.saved.accountId }?.name ?: "your other server"
+                choices += Choice("▶ ${o.title}", acc, "${o.title} on $acc") {
+                    session?.action("you chose: ${o.title} on $acc")
+                    playOther(item, o)
+                }
+            }
+            if (choices.isEmpty()) { session?.action("no picture after 10 s · no other version found"); return@launch }
+            choices += Choice("⏳ Keep trying ${item.title}", "", "") { session?.action("you chose: keep trying") }
+            choices += Choice("✕ Back to the list", "", "") { session?.action("you chose: back to the list"); showChannelPanel() }
+            val before = checkKey(item)?.let { StreamCheck.status(it).state == StreamCheck.State.BAD } == true
+            Log.i("NovaTest", "CHOICE channel ${item.title}: ${choices.joinToString(" | ") { it.label }}")
+            session?.action("no picture after 10 s → offered other versions")
+            showChoice("📺 ${item.title} isn't starting", "No picture after 10 s." + (if (before) " This channel also failed before." else ""), choices, forStart = true) {
+                session?.action("you chose: keep trying")
+            }
+        }
+    }
+
+    private class Choice(val label: String, val hint: String, val autoText: String, val run: () -> Unit)
+
+    private var choicePanel: LinearLayout? = null
+    private var choiceTask: Runnable? = null
+    private var choiceCountdown: TextView? = null
+    /** The popup is about a video that hasn't started: it closes by itself once the picture comes. */
+    private var choiceForStart = false
+    /** Back on the popup. */
+    private var choiceBack: (() -> Unit)? = null
+    private val choiceOpen: Boolean get() = choicePanel?.visibility == View.VISIBLE
+
+    /** A popup of choices, the first one focused and run by itself after 10 s (any key stops the countdown). */
+    private fun showChoice(title: String, sub: String, choices: List<Choice>, forStart: Boolean, onBack: () -> Unit) {
+        playerView.hideController()
+        if (::vod.isInitialized && vod.controlsVisible && !vod.pinned) vod.hide()
+        val panel = choicePanel ?: LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(18), dp(22), dp(18))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat(); setColor(0xF21B2130.toInt()); setStroke(dp(2), 0xFF3A4150.toInt())
+            }
+            layoutParams = FrameLayout.LayoutParams(
+                (resources.displayMetrics.widthPixels * 0.62f).toInt().coerceIn(dp(300), dp(640)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
+            )
+            elevation = dp(8).toFloat()
+            (playerView.parent as ViewGroup).addView(this)
+            choicePanel = this
+        }
+        panel.removeAllViews()
+        panel.addView(TextView(this).apply {
+            text = title; setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f); setTypeface(typeface, Typeface.BOLD)
+        })
+        panel.addView(TextView(this).apply {
+            text = sub; setTextColor(0xFFB4BCCB.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setPadding(0, dp(6), 0, dp(12))
+        })
+        fun bg(color: Int, stroke: Int) = GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat(); setColor(color); if (stroke != 0) setStroke(dp(3), stroke)
+        }
+        var first: View? = null
+        choices.forEachIndexed { i, c ->
+            val sb = android.text.SpannableStringBuilder(c.label)
+            if (c.hint.isNotBlank()) {
+                val s0 = sb.length
+                sb.append("    ").append(c.hint)
+                sb.setSpan(android.text.style.RelativeSizeSpan(0.82f), s0, sb.length, 0)
+                sb.setSpan(android.text.style.StyleSpan(Typeface.NORMAL), s0, sb.length, 0)
+            }
+            val btn = TextView(this).apply {
+                text = sb; setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); setTypeface(typeface, Typeface.BOLD)
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(14), dp(11), dp(14), dp(11))
+                isFocusable = true; isClickable = true
+                background = StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), bg(0xFF3DDC84.toInt(), 0xFFBFF5D6.toInt()))
+                    addState(intArrayOf(android.R.attr.state_pressed), bg(0xFF3DDC84.toInt(), 0))
+                    addState(intArrayOf(), bg(0xFF2A3346.toInt(), 0))
+                }
+                val colors = android.content.res.ColorStateList(
+                    arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(0xFF06240F.toInt(), Color.WHITE),
+                )
+                setTextColor(colors)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) }
+                setOnClickListener { closeChoice(); c.run() }
+                setOnTouchListener { _, _ -> stopChoiceCountdown(); false }
+            }
+            panel.addView(btn)
+            if (i == 0) first = btn
+        }
+        val countdown = TextView(this).apply {
+            setTextColor(0xFFFFD27A.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setPadding(0, dp(10), 0, 0)
+        }
+        panel.addView(countdown)
+        choiceCountdown = countdown
+        choiceForStart = forStart
+        choiceBack = onBack
+        panel.visibility = View.VISIBLE
+        first?.requestFocus()
+        choiceTask?.let { handler.removeCallbacks(it) }
+        val auto = choices.first()
+        var left = 10
+        val task = object : Runnable {
+            override fun run() {
+                if (!choiceOpen) return
+                if (left <= 0) { Log.i("NovaTest", "CHOICE auto: ${auto.label}"); closeChoice(); auto.run(); return }
+                countdown.text = (auto.autoText.ifBlank { auto.label }) + " in $left s…   (press any key to choose)"
+                left--
+                handler.postDelayed(this, 1000)
+            }
+        }
+        choiceTask = task
+        task.run()
+    }
+
+    private fun stopChoiceCountdown() {
+        val t = choiceTask ?: return
+        handler.removeCallbacks(t)
+        choiceTask = null
+        choiceCountdown?.text = "Choose below — Back keeps waiting"
+    }
+
+    private fun closeChoice() {
+        choiceTask?.let { handler.removeCallbacks(it) }
+        choiceTask = null
+        choicePanel?.visibility = View.GONE
+        if (::keySink.isInitialized) keySink.requestFocus()
+    }
+
+    // ------------------------------------------------------------------ ↻ quiet reconnect note (fix 4)
+
+    private var quietChip: TextView? = null
+    private val hideQuietChip = Runnable { quietChip?.visibility = View.GONE }
+
+    /** "↻ Reconnecting quietly · 74 s stored" at the top right for a few seconds; the picture is not touched. */
+    private fun showQuietChip(storedSec: Int) {
+        val chip = quietChip ?: TextView(this).apply {
+            setTextColor(0xFFFFD27A.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(0xA6000000.toInt()) }
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
+                .apply { setMargins(dp(20), dp(56), dp(20), dp(20)) }
+            (playerView.parent as ViewGroup).addView(this)
+            quietChip = this
+        }
+        Log.i("NovaTest", "QUIET reconnect ${current?.title}: $storedSec s stored")
+        chip.text = "↻ Reconnecting quietly · $storedSec s stored"
+        chip.visibility = View.VISIBLE
+        chip.bringToFront()
+        handler.removeCallbacks(hideQuietChip)
+        handler.postDelayed(hideQuietChip, 6000)
     }
 
     private var vpnAsked = false
@@ -3442,8 +3780,16 @@ class PlayerActivity : ComponentActivity() {
             r != null && quietFor >= 30_000 -> {
                 r.reconnect()
                 notArrivingSince = 0L
-                restartOnStoredVideo(item, newPlayer = false)
-                "reconnected to the provider (stored video kept)"
+                val stored = behindLiveSeconds() ?: 0
+                val p = player
+                if (p != null && p.playbackState == Player.STATE_READY && p.isPlaying && stored >= 20) {
+                    // Enough stored video: the picture is not touched, the provider is reconnected in the background.
+                    showQuietChip(stored)
+                    "reconnected quietly (picture untouched, $stored s stored)"
+                } else {
+                    restartOnStoredVideo(item, newPlayer = false)
+                    "reconnected to the provider (stored video kept)"
+                }
             }
             // Nothing new stored to jump to: let the stream come back by itself (no needless restarts).
             r != null && notArrivingSince > 0 -> null
@@ -3471,7 +3817,7 @@ class PlayerActivity : ComponentActivity() {
         if (action == null) { Log.i("NovaTest", "WD ${item.title}: $problem -> waiting (quiet ${quietFor / 1000} s)"); return }
         wdGraceUntil = now + 20_000
         logHealth(item, problem, action)
-        if (app.storage.watchdogNotes) Toast.makeText(this, "⟳ ${action.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
+        if (app.storage.watchdogNotes && !action.startsWith("reconnected quietly")) Toast.makeText(this, "⟳ ${action.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
     }
 
     /** Is video still coming in from the provider (at least a fifth of what the channel needs)? */
@@ -3573,6 +3919,7 @@ class PlayerActivity : ComponentActivity() {
         val p = player
         val restart = p == null || p.playbackState != Player.STATE_READY || problem.contains("frozen")
         if (restart) restartOnStoredVideo(item, newPlayer = false)
+        else if (providerQuiet) showQuietChip(behindLiveSeconds() ?: 0)
         return when {
             providerQuiet && restart -> "reconnected to the provider and restarted the player (stored video kept)"
             providerQuiet -> "reconnected to the provider (stored video kept)"
@@ -3879,6 +4226,17 @@ class PlayerActivity : ComponentActivity() {
             return super.dispatchKeyEvent(event)
         }
 
+        // Choice popup (film server not answering / channel not starting): arrows / OK choose, any key stops
+        // the countdown, Back = keep waiting.
+        if (choiceOpen) {
+            if (down && code != KeyEvent.KEYCODE_BACK) stopChoiceCountdown()
+            if (code == KeyEvent.KEYCODE_BACK) {
+                if (down) { swallowUp += code; choiceBack?.invoke(); closeChoice() }
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+
         // "Open in another app" offer: arrows / OK on its buttons, Back = Stay in Nova.
         if (otherAppOpen) {
             if (down && code != KeyEvent.KEYCODE_BACK) stopOtherAppCountdown()
@@ -4099,6 +4457,15 @@ class PlayerActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemBars()
+        if (retryAfterVpn) {
+            retryAfterVpn = false
+            current?.let { c ->
+                session?.action("back from the VPN app (VPN ${if (Vpn.isActive(this)) "on" else "off"}) → tried again")
+                vpnAsked = false; retryCount = 0
+                handler.postDelayed({ if (current === c) startPlayback(PlaybackQueue.index, quiet = false, keepTweaks = false) }, 800)
+                return
+            }
+        }
         val p = player ?: return
         // With the memory buffer, live TV jumps back to live after a pause.
         // With the disk buffer it continues where you paused (timeshift).

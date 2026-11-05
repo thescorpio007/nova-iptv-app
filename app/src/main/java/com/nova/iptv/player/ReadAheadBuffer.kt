@@ -82,6 +82,10 @@ class ReadAheadBuffer(
     @Volatile var rangeSupported = true
         private set
 
+    /** Bytes received from the server so far (0 = the server hasn't sent anything yet). */
+    @Volatile var bytesArrived = 0L
+        private set
+
     private val thread = Thread({ runLoop() }, "nova-readahead").apply { isDaemon = true }
 
     fun start() {
@@ -300,6 +304,7 @@ class ReadAheadBuffer(
                     }
                     out!!.write(buf, 0, n)
                     pos += n
+                    bytesArrived += n
                     lock.withLock {
                         partialEnd = pos
                         if (pos == segStart(seg + 1) || (total > 0 && pos >= total)) {

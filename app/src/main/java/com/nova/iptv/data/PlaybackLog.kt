@@ -18,9 +18,13 @@ object PlaybackLog {
 
     private const val KEEP_MS = 7L * 24 * 3600_000
     private lateinit var file: File
+    /** "24" for Nova 4.0 · build 24: each line says which build played it. */
+    private var build = ""
 
     fun init(context: Context) {
         file = File(context.filesDir, "playback-log.jsonl")
+        build = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
+            ?.let { Regex("""build (\d+)""").find(it)?.groupValues?.get(1) }.orEmpty()
     }
 
     /** One playback in progress (filled by the player, written when it ends). */
@@ -45,6 +49,11 @@ object PlaybackLog {
         var cushionMin = Int.MAX_VALUE
         var rebuffers = 0
         var rebufferMs = 0L
+        /** Waits right after your own jumps (⏩, seek bar, rewind): not counted as stalls. */
+        var jumps = 0
+        var jumpMs = 0L
+        /** What arrived from the server before the picture started (-1 = not known). */
+        var bytesSeen = -1L
         val actions = mutableListOf<String>()
         var result = "OK"
         var note = ""
@@ -57,8 +66,17 @@ object PlaybackLog {
             if (sec > cushionMax) cushionMax = sec
             if (sec < cushionMin) cushionMin = sec
         }
-        fun action(a: String) { if (actions.size < 12) actions += a }
-        fun fail(r: String, why: String) { if (result == "OK" || result == "SLOW") { result = r; note = why } }
+        fun action(a: String) {
+            // The same step again right after: "… ×2" instead of a second copy.
+            val last = actions.lastOrNull()
+            if (last != null && (last == a || last.startsWith("$a ×"))) {
+                val n = (last.substringAfter("$a ×", "1").toIntOrNull() ?: 1) + 1
+                actions[actions.lastIndex] = "$a ×$n"
+                return
+            }
+            if (actions.size < 12) actions += a
+        }
+        fun fail(r: String, why: String) { if (result == "OK" || result == "SLOW" || result == "FIXED") { result = r; note = why } }
     }
 
     fun end(s: Session) {
@@ -66,7 +84,11 @@ object PlaybackLog {
         val dur = System.currentTimeMillis() - s.startedAt
         // A channel skipped through in under 3 s without trouble is not worth a line.
         if (s.result == "OK" && s.startMs < 0 && dur < 3000) return
-        if (s.result == "OK" && s.startMs < 0) s.fail("FAIL", "no picture (left after ${dur / 1000} s)")
+        if (s.result == "OK" && s.startMs < 0) s.fail("FAIL", when {
+            s.bytesSeen == 0L -> "server didn't answer: 0 bytes in ${dur / 1000} s (likely blocked)"
+            s.bytesSeen > 0 -> "data arrived (${"%.1f".format(s.bytesSeen / 1_048_576.0)} MB) but the picture didn't start (left after ${dur / 1000} s)"
+            else -> "no picture (left after ${dur / 1000} s)"
+        })
         val o = JSONObject()
             .put("at", s.startedAt).put("dur", dur).put("t", s.title).put("k", s.kind).put("srv", s.server)
             .put("grp", s.group ?: "").put("mode", s.mode).put("cont", s.container).put("vid", s.video).put("dec", s.decoder)
@@ -74,6 +96,7 @@ object PlaybackLog {
             .put("c0", s.cushionStart).put("cmax", s.cushionMax).put("cmin", if (s.cushionMin == Int.MAX_VALUE) -1 else s.cushionMin)
             .put("rb", s.rebuffers).put("rbms", s.rebufferMs).put("act", s.actions.joinToString(" · "))
             .put("res", s.result).put("note", s.note)
+            .put("jp", s.jumps).put("jpms", s.jumpMs).put("b", build)
         runCatching {
             synchronized(this) {
                 file.appendText(o.toString() + "\n")
@@ -104,7 +127,7 @@ object PlaybackLog {
     fun glance(days: Int = 7): String {
         val r = records(days)
         if (r.isEmpty()) return "Nothing played yet in this period."
-        val ok = r.count { it.optString("res") == "OK" || it.optString("res") == "SLOW" }
+        val ok = r.count { it.optString("res") == "OK" || it.optString("res") == "SLOW" || it.optString("res") == "FIXED" }
         val failed = r.count { it.optString("res") == "FAIL" }
         val device = r.count { it.optString("res") == "DEVICE" }
         val file = r.count { it.optString("res") == "FILE" }
@@ -165,8 +188,12 @@ object PlaybackLog {
         blocks.forEach { (o, times) ->
             val res = (o.optString("res") + if (times > 1) " ×$times" else "").padEnd(6)
             val grp = o.optString("grp").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            sb.appendLine("${df.format(Date(o.optLong("at")))} $res ${o.optString("t")} · ${o.optString("srv")} · ${o.optString("k")}$grp")
-            val tech = listOf(o.optString("mode"), o.optString("cont"), o.optString("vid"), o.optString("dec")).filter { it.isNotBlank() }
+            val b = o.optString("b").takeIf { it.isNotBlank() }?.let { "   · build $it" }.orEmpty()
+            sb.appendLine("${df.format(Date(o.optLong("at")))} $res ${o.optString("t")} · ${o.optString("srv")} · ${o.optString("k")}$grp$b")
+            val dec = o.optString("dec").takeIf { it.isNotBlank() }?.let {
+                (if (it.startsWith("c2.android") || it.startsWith("OMX.google")) "software decoder" else "hardware decoder") + " ($it)"
+            }.orEmpty()
+            val tech = listOf(o.optString("mode"), o.optString("cont"), o.optString("vid"), dec).filter { it.isNotBlank() }
             if (tech.isNotEmpty()) sb.appendLine("   " + tech.joinToString(" · "))
             val parts = mutableListOf<String>()
             val start = o.optLong("start")
@@ -180,6 +207,8 @@ object PlaybackLog {
             val line3 = mutableListOf<String>()
             if (c0 >= 0) line3 += "cushion ${c0} s→${cmax} s (low ${cmin.coerceAtLeast(0)} s)"
             line3 += "rebuffers $rb" + if (rb > 0) " (${rbms / 1000} s)" else ""
+            val jp = o.optInt("jp")
+            if (jp > 0) line3 += "your jumps $jp (waited ${o.optLong("jpms") / 1000} s)"
             o.optString("act").takeIf { it.isNotBlank() }?.let { line3 += it }
             sb.appendLine("   " + line3.joinToString(" · "))
             o.optString("note").takeIf { it.isNotBlank() }?.let { sb.appendLine("   → $it") }

@@ -81,6 +81,8 @@ data class Tweaks(
     val ffmpegAudioFirst: Boolean = false,
     val noOffload: Boolean = false,
     val noTunnel: Boolean = false,
+    /** The extra (FFmpeg) sound decoder failed on this video: the box's own decoder first. */
+    val boxAudioFirst: Boolean = false,
 )
 
 /** How the player gets its data. */
@@ -220,7 +222,7 @@ object PlayerFactory {
             .setMediaCodecSelector(codecSelector)
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(
-                if (s.audioDecoder == "ffmpeg" || tweaks.ffmpegAudioFirst) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                if (!tweaks.boxAudioFirst && (s.audioDecoder == "ffmpeg" || tweaks.ffmpegAudioFirst)) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
             )
 
