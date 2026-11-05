@@ -605,6 +605,8 @@ fun PlayerSettings(vm: MainViewModel) {
 
     NightModeCard()
 
+    SoundSyncCard()
+
     HidePictureCard()
 
     PhoneOrientationCard(vm)
@@ -1603,6 +1605,41 @@ private fun NightModeCard() {
         Text("Applies to", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("all" to "Everything", "vod" to "Films & series", "live" to "Live TV"), scope) { scope = it; st.nightScope = it }
         Hint("Works with Nova's own sound decoding (the default). Not applied to Dolby / DTS sent untouched to a soundbar. The player's 🌙 button always wins for the video you are watching.")
+    }
+}
+
+
+/** Settings › 🎧 Bluetooth sound sync: each sound device keeps its own correction, applied automatically. */
+@Composable
+private fun SoundSyncCard() {
+    val context = LocalContext.current
+    val S = com.nova.iptv.player.SoundSync
+    var devices by remember { mutableStateOf(S.devices(context)) }
+    val now = remember { S.device(context) }
+    var safe by remember { mutableStateOf(S.safePath(context)) }
+    val nowMs = devices[now] ?: 0
+    SettingsCard("🎧 Bluetooth sound sync", summary = if (now == S.TV) "TV speakers ${S.label(nowMs)} · ${devices.size - 1} Bluetooth" else "$now ${S.label(nowMs)}") {
+        Hint("Earbuds and Bluetooth speakers often play the sound late. Each device keeps its own correction, applied automatically " +
+            "to every film and channel while it is connected. + = sound earlier (when voices come after the lips). " +
+            "You can also adjust it while watching: 🔊 Sound sync button.")
+        devices.forEach { (name, ms) ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text((if (name == S.TV) "📺 " else "🎧 ") + name, fontWeight = FontWeight.Medium, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text((if (name == now) "● connected · " else "") + S.label(ms), fontSize = 12.sp,
+                        color = if (ms != 0) Color(0xFF3DDC84) else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                fun set(v: Int) { S.setDeviceMs(context, name, v); devices = S.devices(context) }
+                OutlinedButton(onClick = { set(ms - 25) }) { Text("− 25") }
+                OutlinedButton(onClick = { set(ms + 25) }) { Text("+ 25") }
+                OutlinedButton(onClick = { set(0) }) { Text("↺") }
+                if (name != S.TV && name != now) OutlinedButton(onClick = { S.forget(context, name); devices = S.devices(context) }) { Text("✕") }
+            }
+        }
+        Text("Safer sound path with Bluetooth", fontWeight = FontWeight.Medium)
+        Hint("While Bluetooth sound is connected, Nova doesn't use tunneling / audio offload: the box can then report the earbuds' delay, and the correction above works.")
+        ChoiceRow(listOf("on" to "On", "off" to "Off"), if (safe) "on" else "off") { safe = it == "on"; S.setSafePath(context, safe) }
     }
 }
 

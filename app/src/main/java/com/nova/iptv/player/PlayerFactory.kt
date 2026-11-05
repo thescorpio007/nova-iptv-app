@@ -212,12 +212,15 @@ object PlayerFactory {
         }
         val renderers = object : DefaultRenderersFactory(context) {
             // 🔊 Boost: Nova's own gain + limiter in the sound path (works even where Android's sound effects are skipped).
+            // 🔊 Sound sync: the sound path's clock can be moved so the picture waits for late (Bluetooth) sound.
             override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): androidx.media3.exoplayer.audio.AudioSink =
-                androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
-                    .setEnableFloatOutput(enableFloatOutput)
-                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessors(arrayOf<androidx.media3.common.audio.AudioProcessor>(GainProcessor()))
-                    .build()
+                SyncSink(
+                    androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setAudioProcessors(arrayOf<androidx.media3.common.audio.AudioProcessor>(GainProcessor()))
+                        .build()
+                )
         }
             .setMediaCodecSelector(codecSelector)
             .setEnableDecoderFallback(true)
@@ -228,10 +231,12 @@ object PlayerFactory {
 
         // Tunneled playback (optional): smoother video and tighter audio sync on many
         // Amlogic TV boxes, but a few streams misbehave with it, so it is a setting.
+        // Bluetooth sound / a sound sync set: no tunneling or offload (they would bypass Nova's sound clock).
+        val avoidShortcuts = SoundSync.avoidShortcuts(context)
         val trackSelector = DefaultTrackSelector(context).apply {
             setParameters(
                 buildUponParameters()
-                    .setTunnelingEnabled(s.tunneling && !tweaks.noTunnel)
+                    .setTunnelingEnabled(s.tunneling && !tweaks.noTunnel && !avoidShortcuts)
                     // Try 4K / high-bitrate / HDR tracks even when the device reports it might not cope,
                     // instead of refusing the video.
                     .setExceedRendererCapabilitiesIfNecessary(true)
@@ -240,7 +245,7 @@ object PlayerFactory {
                     .setAudioOffloadPreferences(
                         TrackSelectionParameters.AudioOffloadPreferences.Builder()
                             .setAudioOffloadMode(
-                                if (s.audioOffload && !tweaks.noOffload) TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED
+                                if (s.audioOffload && !tweaks.noOffload && !avoidShortcuts) TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED
                                 else TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
                             )
                             .build()

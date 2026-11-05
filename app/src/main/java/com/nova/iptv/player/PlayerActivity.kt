@@ -308,6 +308,7 @@ class PlayerActivity : ComponentActivity() {
         hideSystemBars()
         buildViews()
         watchNetwork()
+        watchSoundDevice()
         // Back from any source (remote, gesture, system): close what is open first.
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -567,13 +568,14 @@ class PlayerActivity : ComponentActivity() {
         val infoButton = pill("ℹ Video info") { showVideoInfo() }
         similarButton = pill("≈ Similar") { showSimilar(auto = false) }
         val boostButton = pill("🔊 Boost") { showBoost() }
+        val syncButton = pill("🔊 Sound sync") { showSoundSync() }.also { syncPill = it }
         val nightButton = pill("🌙 Night mode: Off") { toggleNight() }.also { nightPill = it }
         val hideButton = pill("⬛ Hide picture") { hidePicture() }
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, hideButton, infoButton, favButton, externalButton, castButton, rotateButton, aspectButton, downloadButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, syncButton, hideButton, infoButton, favButton, externalButton, castButton, rotateButton, aspectButton, downloadButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -683,6 +685,7 @@ class PlayerActivity : ComponentActivity() {
             extraButtons = listOf(
                 "🌙 Night mode: Off" to { toggleNight() },
                 "🔊 Boost" to { showBoost() },
+                "🔊 Sound sync" to { showSoundSync() },
                 "⬛ Hide picture" to { hidePicture() },
                 "⬇ Download" to { downloadCurrent() },
                 "ℹ Video info" to { showVideoInfo() },
@@ -787,7 +790,9 @@ class PlayerActivity : ComponentActivity() {
 
     private fun ensurePlayer(mode: SourceMode): ExoPlayer {
         val existing = player
-        if (existing != null && playerMode == mode && playerTweaks == tweaks) return existing
+        val avoidNow = SoundSync.avoidShortcuts(this)
+        val pathSame = !(app.storage.tunneling || app.storage.audioOffload) || avoidNow == playerAvoid
+        if (existing != null && playerMode == mode && playerTweaks == tweaks && pathSame) return existing
         existing?.release()
         val source = when (mode) {
             SourceMode.VOD_DISK, SourceMode.GROWING -> diskSource
@@ -795,6 +800,7 @@ class PlayerActivity : ComponentActivity() {
         }
         val p = PlayerFactory.create(this, app, mode, source, tweaks)
         playerTweaks = tweaks
+        playerAvoid = avoidNow
         p.addListener(listener)
         p.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
@@ -868,6 +874,7 @@ class PlayerActivity : ComponentActivity() {
         val item = items[i]
         current = item
         linkTexts.forEach { it.text = "🔗 " + item.url }
+        applySoundSync(announce = !quiet)
         if (otherAppOpen) closeOtherApp()
         if (similarOpen) closeSimilar()
         if (!quiet) {
@@ -2918,6 +2925,187 @@ class PlayerActivity : ComponentActivity() {
         handler.postDelayed(hideQuietChip, 6000)
     }
 
+
+    // ------------------------------------------------------------------ 🔊 Sound sync (Bluetooth earbuds)
+
+    private var syncPill: TextView? = null
+    private var playerAvoid = false
+    private var soundDevice: String? = null
+    private var soundDeviceCallback: android.media.AudioDeviceCallback? = null
+
+    /** Total correction for what is playing: the sound device's value + this film / channel's extra. */
+    private fun syncTotalMs(): Int {
+        val dev = SoundSync.deviceMs(this, SoundSync.device(this))
+        val extra = current?.let { SoundSync.itemMs(this, it.key) } ?: 0
+        return (dev + extra).coerceIn(-SoundSync.MAX_MS, SoundSync.MAX_MS)
+    }
+
+    private fun applySoundSync(announce: Boolean) {
+        val total = syncTotalMs()
+        SoundSync.offsetUs = total * 1000L
+        val label = if (total == 0) "🔊 Sound sync" else "🔊 Sync ${SoundSync.label(total)}"
+        syncPill?.text = label
+        if (::vod.isInitialized) vod.extraViews["🔊 Sound sync"]?.text = label
+        if (announce && total != 0) {
+            val dev = SoundSync.device(this)
+            Log.i("NovaTest", "SYNC ${current?.title}: $total ms ($dev)")
+            Toast.makeText(this, "🔊 Sound sync ${SoundSync.label(total)}" + (if (dev != SoundSync.TV) " · 🎧 $dev" else ""), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Earbuds connected / disconnected (even in the middle of a film): their value is applied at once. */
+    private fun watchSoundDevice() {
+        soundDevice = SoundSync.device(this)
+        if (soundDevice != SoundSync.TV) SoundSync.noteDevice(this, soundDevice!!)
+        if (android.os.Build.VERSION.SDK_INT < 23) return
+        val cb = object : android.media.AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>?) { handler.removeCallbacks(soundDeviceChanged); handler.postDelayed(soundDeviceChanged, 700) }
+            override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>?) { handler.removeCallbacks(soundDeviceChanged); handler.postDelayed(soundDeviceChanged, 700) }
+        }
+        soundDeviceCallback = cb
+        runCatching { (getSystemService(AUDIO_SERVICE) as android.media.AudioManager).registerAudioDeviceCallback(cb, handler) }
+    }
+
+    private val soundDeviceChanged = Runnable {
+        val dev = SoundSync.device(this)
+        if (dev == soundDevice) return@Runnable
+        soundDevice = dev
+        if (dev != SoundSync.TV) SoundSync.noteDevice(this, dev)
+        applySoundSync(announce = false)
+        val ms = SoundSync.deviceMs(this, dev)
+        Log.i("NovaTest", "SYNC device $dev: $ms ms")
+        session?.action("sound now on ${dev} (sync ${SoundSync.label(ms)})")
+        Toast.makeText(this,
+            if (dev == SoundSync.TV) "📺 Sound back on the TV · sound sync ${SoundSync.label(ms)}"
+            else "🎧 $dev connected · sound sync ${SoundSync.label(ms)}" + if (ms == 0) " — adjust it: 🔊 Sound sync" else "",
+            Toast.LENGTH_LONG).show()
+        // Tunneling / offload bypass the sync: a new player at the same place when that changes.
+        val item = current ?: return@Runnable
+        val p = player ?: return@Runnable
+        if ((app.storage.tunneling || app.storage.audioOffload) && SoundSync.avoidShortcuts(this) != playerAvoid && everReady) {
+            if (item.isLive) restartOnStoredVideo(item, newPlayer = true) else restartAt(item, p.currentPosition)
+        }
+    }
+
+    /** 🔊 Sound sync panel: 🎧 the device's value (every film & channel), 🎬 this video's extra. The video keeps playing. */
+    private fun showSoundSync() {
+        val item = current ?: return
+        val dev = SoundSync.device(this)
+        val devIcon = if (dev == SoundSync.TV) "📺" else "🎧"
+        var layer = 0 // 0 = device, 1 = this video
+        fun value(l: Int) = if (l == 0) SoundSync.deviceMs(this, dev) else SoundSync.itemMs(this, item.key)
+        fun store(l: Int, v: Int) {
+            val c = v.coerceIn(-SoundSync.MAX_MS, SoundSync.MAX_MS)
+            if (l == 0) SoundSync.setDeviceMs(this, dev, c) else SoundSync.setItemMs(this, item.key, c)
+            applySoundSync(announce = false)
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(6), dp(20), dp(4)) }
+        box.addView(TextView(this).apply {
+            text = "Voices after the lips → move the sound earlier (▶). Voices before the lips → later (◀)."
+            setTextColor(0xFFB8C4DD.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        })
+        class Layer(val title: TextView, val value: TextView, val hint: TextView, val bar: View, val frame: LinearLayout)
+        fun barView(l: Int) = object : View(this) {
+            val line = android.graphics.Paint().apply { color = 0xFF3A4150.toInt(); strokeWidth = dp(4).toFloat() }
+            val fill = android.graphics.Paint().apply { color = 0xFF3DDC84.toInt(); strokeWidth = dp(4).toFloat() }
+            val mid = android.graphics.Paint().apply { color = 0xFF9AA3B2.toInt(); strokeWidth = dp(2).toFloat() }
+            override fun onDraw(c: android.graphics.Canvas) {
+                val y = height / 2f; val pad = dp(10).toFloat(); val w = width - 2 * pad
+                c.drawLine(pad, y, pad + w, y, line)
+                val cx = pad + w / 2f
+                val x = cx + (value(l) / SoundSync.MAX_MS.toFloat()) * (w / 2f)
+                c.drawLine(cx, y, x, y, fill)
+                c.drawLine(cx, y - dp(9), cx, y + dp(9), mid)
+                c.drawCircle(x, y, dp(8).toFloat(), fill)
+            }
+        }
+        val layers = (0..1).map { l ->
+            val frame = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
+            val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val title = TextView(this).apply {
+                text = if (l == 0) "$devIcon $dev · every film & channel" else (if (item.isLive) "📺 This channel only (extra)" else "🎬 This film only (extra)")
+                setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); setTypeface(typeface, Typeface.BOLD)
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val v = TextView(this).apply { setTextColor(0xFF3DDC84.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f); setTypeface(typeface, Typeface.BOLD) }
+            top.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            top.addView(v)
+            frame.addView(top)
+            val hint = TextView(this).apply {
+                text = if (l == 0) (if (dev == SoundSync.TV) "Used whenever the sound plays on the TV." else "Applied automatically whenever these earbuds are connected. The TV keeps its own value.")
+                    else "Only if this video is itself out of sync. Added on top of the line above."
+                setTextColor(0xFF9AA3B2.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            }
+            frame.addView(hint)
+            val bar = barView(l)
+            frame.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(26)))
+            box.addView(frame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            Layer(title, v, hint, bar, frame)
+        }
+        val total = TextView(this).apply { setTextColor(0xFFCFD6E2.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f); gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(4)) }
+        box.addView(total)
+        // Buttons for touch screens (the remote uses ◀ ▶ ▲ ▼).
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        fun refresh() {
+            layers.forEachIndexed { i, ly ->
+                ly.value.text = SoundSync.label(value(i))
+                ly.value.setTextColor(if (value(i) != 0) 0xFF3DDC84.toInt() else 0xFFCFD6E2.toInt())
+                ly.frame.background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat(); setColor(0xFF202838.toInt())
+                    if (i == layer) setStroke(dp(3), 0xFF3DDC84.toInt())
+                }
+                ly.bar.invalidate()
+            }
+            total.text = "Now: " + SoundSync.words(syncTotalMs()) + " than the file"
+        }
+        listOf("−100" to -100, "−25" to -25, "↺ Reset" to 0, "+25" to 25, "+100" to 100).forEach { (lbl, d) ->
+            row.addView(pill(lbl) { store(layer, if (d == 0) 0 else value(layer) + d); refresh() }.apply { isFocusable = false },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(3), 0, dp(3), 0) })
+        }
+        box.addView(row)
+        layers.forEachIndexed { i, ly -> ly.frame.setOnClickListener { layer = i; refresh() } }
+        box.addView(TextView(this).apply {
+            text = "◀ ▶ adjust (hold = faster) · ▲ ▼ ${if (dev == SoundSync.TV) "TV" else "earbuds"} / ${if (item.isLive) "channel" else "film"} · OK = done · hold OK = reset"
+            setTextColor(0xFFFFD27A.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); gravity = Gravity.CENTER; setPadding(0, dp(8), 0, 0)
+        })
+        refresh()
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("🔊 Sound sync")
+            .setView(box)
+            .setPositiveButton("✓ Done", null)
+            .create()
+        // OK released without a long hold = done.
+        var okDownAt = 0L
+        dialog.setOnKeyListener(object : android.content.DialogInterface.OnKeyListener {
+            override fun onKey(d: android.content.DialogInterface, code: Int, ev: KeyEvent): Boolean {
+                val step = if (ev.repeatCount >= 4) 100 else 25
+                val down = ev.action == KeyEvent.ACTION_DOWN
+                return when (code) {
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if (down) { store(layer, value(layer) + step); refresh() }; true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (down) { store(layer, value(layer) - step); refresh() }; true }
+                    KeyEvent.KEYCODE_DPAD_UP -> { if (down) { layer = 0; refresh() }; true }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> { if (down) { layer = 1; refresh() }; true }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                        if (down && ev.repeatCount == 0) okDownAt = android.os.SystemClock.elapsedRealtime()
+                        if (down && ev.repeatCount == 4) { store(layer, 0); refresh(); Toast.makeText(this@PlayerActivity, "↺ Reset to 0", Toast.LENGTH_SHORT).show() }
+                        if (!down && okDownAt > 0 && android.os.SystemClock.elapsedRealtime() - okDownAt < 600) d.dismiss()
+                        if (!down) okDownAt = 0L
+                        true
+                    }
+                    else -> false
+                }
+            }
+        })
+        dialog.setOnDismissListener {
+            val t = syncTotalMs()
+            session?.action("sound sync ${SoundSync.label(t)} ($dev)")
+            Log.i("NovaTest", "SYNC set ${item.title}: $t ms ($dev)")
+            if (::keySink.isInitialized) keySink.requestFocus()
+        }
+        dialog.show()
+        dialog.window?.setDimAmount(0.15f)
+    }
+
     private var vpnAsked = false
 
     /** 🔒 The film's server is blocked on this line: open a VPN app, then ⟳ Retry. */
@@ -4484,6 +4672,7 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         orientationListener?.disable()
+        soundDeviceCallback?.let { cb -> if (android.os.Build.VERSION.SDK_INT >= 23) runCatching { (getSystemService(AUDIO_SERVICE) as android.media.AudioManager).unregisterAudioDeviceCallback(cb) } }
         if (castFrom != null && com.nova.iptv.data.Cast.generation.value == castGen) com.nova.iptv.data.Cast.restoreQueue()
         StreamCheck.playing(null)
         StreamCheck.playerClosed()
