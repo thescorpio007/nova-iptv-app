@@ -1321,6 +1321,16 @@ def silent_film_server():
     close_opened_player("silent-film")
 
 
+def web_grab_by_type():
+    """Web tab: a page's video whose address has no ".mp4" in its name is still found (recognised by its type)."""
+    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/grab.html -n {PKG}/.ui.OpenWithActivity")
+    check("Web: the grab test page opens", find("Nova Grab page", 30) is not None)
+    check("Web: a video address without “.mp4” is recognised by its type", wait_log(r"GRAB by type MP4", 30))
+    shot("web-grab-by-type")
+    adb(f"shell am start -n {PKG}/.ui.MainActivity")
+    time.sleep(2)
+
+
 def open_link():
     """The "🔗 Link" tab plays any video link; Share → Nova offers Play / Download & watch / Download."""
     tap("Link", 15)
@@ -1469,6 +1479,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("Open link and Share", open_link),
         ("Jump in an MKV without index", jump_mkv_without_index),
         ("A film server that sends nothing", silent_film_server),
+        ("Web: grab a video by its type", web_grab_by_type),
         ("Double OK hides a film", double_ok_hide),
     ]
 

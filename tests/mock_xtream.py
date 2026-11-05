@@ -198,6 +198,22 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if path == "/web/grab.html":
+            # A film page whose player plays an address with no ".mp4" in its name (Nova must recognise it by its type).
+            body = ("<html><head><title>Nova Grab Test</title><meta name='viewport' content='width=device-width'></head>"
+                    "<body style='font-family:sans-serif;background:#fff'><h1>Nova Grab page</h1>"
+                    "<video controls autoplay width='320' src='/web/stream?id=7'></video>"
+                    "</body></html>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/web/stream":
+            return self.send_file(os.path.join(MEDIA, "sample.mp4"), "video/mp4")
+
         if path == "/web/hop.html":
             # A redirect page (like a site's old address): sends you on at once.
             body = ("<html><head><title>Hop</title></head><body>moving…"
