@@ -996,6 +996,19 @@ def stuck_picture():
     back_to_main("stuck-picture")
 
 
+def damaged_clock():
+    """A live feed whose clock jumps (damaged / switching source): Nova smooths the clock and keeps playing."""
+    n = count_log(r"READY Damaged Clock")
+    open_test_channel("Damaged Clock")
+    check("Damaged clock channel starts", wait_count(r"READY Damaged Clock", n + 1, 30))
+    check("Play through damage: the clock jump is smoothed", wait_log(r"CLOCK repaired Damaged Clock|CLOCK repaired", 60))
+    time.sleep(20)
+    log = test_log()
+    check("…and it keeps playing without the watchdog (no freeze, no restart)",
+          not re.search(r"WATCHDOG Damaged Clock: .*(frozen|stuck)", log))
+    back_to_main("damaged-clock")
+
+
 def open_section(title):
     """Settings sections are folded: open the one named [title] (Settings must be on screen)."""
     for attempt in range(2):
@@ -1365,6 +1378,7 @@ if os.environ.get("NOVA_MODE") == "stuck":
         ("First login", login_first),
         ("Software decoder", lambda: set_video_decoder("Software decoder")),
         ("Stuck picture: watchdog jumps to live", stuck_picture),
+        ("Damaged clock: played through", damaged_clock),
     ]
 
 def web_first_start():

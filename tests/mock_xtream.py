@@ -43,6 +43,7 @@ LIVE = {
             {"num": 7, "name": "Cold Channel", "stream_id": 107, "stream_icon": "", "category_id": "3"},
             {"num": 8, "name": "Weak Channel", "stream_id": 108, "stream_icon": "", "category_id": "3"},
             {"num": 9, "name": "Stuck Channel", "stream_id": 109, "stream_icon": "", "category_id": "3"},
+            {"num": 10, "name": "Damaged Clock", "stream_id": 110, "stream_icon": "", "category_id": "3"},
         ],
     },
     "bob": {"7": [{"num": 1, "name": "Bob Channel A", "stream_id": 201, "category_id": "7"}]},
@@ -399,6 +400,10 @@ class Handler(BaseHTTPRequestHandler):
                 # The picture stops after 20 s while sound and data keep arriving (real-time pace).
                 rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90
                 return self.send_file(os.path.join(MEDIA, "stuck.ts"), "video/mp2t", rate=rate, burst=rate * 3)
+            if kind == "live" and sid == "110":
+                # A damaged feed: its clock jumps ahead by 5000 s after 30 s (like a provider switching source).
+                rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90
+                return self.send_file(os.path.join(MEDIA, "jump.ts"), "video/mp2t", rate=rate, burst=rate * 3)
             if kind == "live" and sid == "108":
                 # A weak signal: a 4 s burst, then video arrives at only 60 % of real time (never stops).
                 path = os.path.join(MEDIA, "sample.ts")

@@ -2006,6 +2006,9 @@ class PlayerActivity : ComponentActivity() {
 
     private fun endSession() {
         session?.let { ss ->
+            relay?.repair?.let { rp ->
+                if (rp.clockFixes > 0 || rp.streamFixes > 0) ss.action("played through damage: ${rp.clockFixes} clock jump(s), ${rp.streamFixes} stream jump(s) smoothed")
+            }
             if (ss.startMs < 0) ss.bytesSeen = when {
                 readAhead != null -> readAhead!!.bytesArrived
                 relay != null -> relay!!.bytesStoredTotal()
@@ -3910,7 +3913,11 @@ class PlayerActivity : ComponentActivity() {
                     return
                 }
                 val allowed = if (item.isLive) limit else limit * 2
-                if (now - wdBufferingSince > allowed) watchdogAct(item, "stuck loading for ${(now - wdBufferingSince) / 1000} s")
+                // Live: stuck although plenty is stored on disk ahead (more than the cushion): damaged feed — act after 4 s.
+                val rr = relay
+                val storedAhead = if (rr != null && mediaBps > 0) rr.bytesAhead() / mediaBps else 0.0
+                val damaged = item.isLive && everReady && storedAhead >= s.cushionSeconds + 5 && now - wdBufferingSince > 4000
+                if (damaged || now - wdBufferingSince > allowed) watchdogAct(item, "stuck loading for ${(now - wdBufferingSince) / 1000} s" + if (damaged) " (${storedAhead.toInt()} s stored ahead)" else "")
                 return
             }
             Player.STATE_READY -> wdBufferingSince = 0L
@@ -3920,13 +3927,16 @@ class PlayerActivity : ComponentActivity() {
         val pos = p.currentPosition
         if (pos != wdLastPos) { wdLastPos = pos; wdPosSince = now }
         else if (now - wdPosSince > maxOf(5000L, limit * 3 / 4)) { watchdogAct(item, "clock frozen for ${(now - wdPosSince) / 1000} s"); return }
+        // Sound still moving (tracked every tick): a picture frozen while the sound plays is damaged video.
+        p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; if (n != wdAudioCount) { wdAudioCount = n; wdAudioMovedAt = now } }
+        val soundMoving = now - wdAudioMovedAt < 1500
         // New video frames.
         val counters = p.videoDecoderCounters
         if (counters != null && p.videoFormat != null) {
             counters.ensureUpdated()
             val frames = counters.renderedOutputBufferCount
             if (frames != wdLastFrames) { wdLastFrames = frames; wdFramesSince = now }
-            else if (now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) {
+            else if ((item.isLive && relay != null && soundMoving && now - wdFramesSince > 3000) || now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) {
                 val sound = p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; val moved = n != wdLastAudio; wdLastAudio = n; moved } ?: false
                 val ahead = relay?.let { r -> if (mediaBps > 0) " · ${(r.bytesAhead() / mediaBps).toInt()} s stored ahead" else "" } ?: ""
                 watchdogAct(item, "picture frozen for ${(now - wdFramesSince) / 1000} s" + (if (sound) " (sound kept playing)" else "") + ahead)
@@ -3958,6 +3968,8 @@ class PlayerActivity : ComponentActivity() {
     private val wdLiveFixes = ArrayDeque<Long>()
     private var repairBehindBefore: Int? = null
     private var wdLastAudio = -1
+    private var wdAudioCount = -1
+    private var wdAudioMovedAt = 0L
     private var repairNote = ""
 
     private fun liveOnlyFix(item: PlayItem, problem: String) {
@@ -3992,7 +4004,18 @@ class PlayerActivity : ComponentActivity() {
             else -> {
                 while (wdLiveFixes.isNotEmpty() && now - wdLiveFixes.first() > 120_000) wdLiveFixes.removeFirst()
                 wdLiveFixes.addLast(now)
+                // Damaged video (frozen picture / stuck) with video stored ahead: jump just past the damage (2 s, then 3 s,
+                // then 5 s) instead of restarting on the same damaged part.
+                val damage = (problem.startsWith("picture frozen") || problem.startsWith("stuck loading")) &&
+                    r != null && mediaBps > 0 && r.bytesAhead() / mediaBps >= 5
                 when {
+                    damage && wdLiveFixes.size <= 4 -> {
+                        val skip = when (wdLiveFixes.size) { 1 -> 2; 2 -> 3; else -> 5 }
+                        r!!.moveBy(skip)
+                        Log.i("NovaTest", "DAMAGE ${item.title}: skipped $skip s ($problem)")
+                        restartOnStoredVideo(item, newPlayer = wdLiveFixes.size >= 3)
+                        "skipped damaged part ($skip s ahead, cushion kept)"
+                    }
                     r != null && wdLiveFixes.size == 1 -> { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
                     r != null && wdLiveFixes.size == 2 -> { r.moveBy(10); restartOnStoredVideo(item, newPlayer = true); "skipped 10 s, new player (cushion kept)" }
                     // Plenty stored ahead (30 s or more): never throw it away — restart again a bit further on.

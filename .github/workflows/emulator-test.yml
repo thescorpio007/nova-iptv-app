@@ -77,6 +77,10 @@ jobs:
           ffmpeg -loglevel error -i tests/media/sample.ts -t 20 -map 0 -c copy -streamid 0:256 -streamid 1:257 -f mpegts tests/media/part1.ts
           ffmpeg -loglevel error -copyts -ss 20 -i tests/media/sample.ts -map 0:a -c copy -streamid 0:257 -f mpegts tests/media/part2.ts
           cat tests/media/part1.ts tests/media/part2.ts > tests/media/stuck.ts
+          # A damaged live feed: after 30 s its clock jumps ahead by 5000 s (provider switching source).
+          ffmpeg -loglevel error -i tests/media/sample.ts -t 30 -map 0 -c copy -f mpegts tests/media/jumpa.ts
+          ffmpeg -loglevel error -ss 30 -i tests/media/sample.ts -map 0 -c copy -output_ts_offset 5000 -f mpegts tests/media/jumpb.ts
+          cat tests/media/jumpa.ts tests/media/jumpb.ts > tests/media/jump.ts
           # An MKV with its index (Cues) at the end, like most provider films.
           ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy tests/media/sample.mkv
           # An MKV with no index at all (written to a pipe: ffmpeg can't add Cues), like many provider films.

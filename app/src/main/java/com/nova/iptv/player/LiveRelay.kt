@@ -86,6 +86,24 @@ class LiveRelay(
 
     private val thread = Thread({ downloadLoop() }, "LiveRelay")
 
+    /** "Play through damage": clock jumps in the feed are smoothed as it is stored (see [TsClockRepair]). */
+    val repair = TsClockRepair()
+    @Volatile var repairOn = true
+    private var connectionIsTs = true
+
+    /** Stores what arrived, through the clock repair when the feed is MPEG-TS. */
+    private fun store(b: ByteArray, n: Int, from: Int) {
+        if (repairOn && connectionIsTs) {
+            repair.feed(b, from, n) { c, o, l -> append(c, l, o) }
+            val fixes = repair.clockFixes + repair.streamFixes
+            if (fixes != loggedFixes) {
+                loggedFixes = fixes
+                android.util.Log.i("NovaTest", "CLOCK repaired: ${repair.clockFixes} clock jump(s), ${repair.streamFixes} stream jump(s)")
+            }
+        } else append(b, n, from)
+    }
+    private var loggedFixes = 0
+
     init {
         dir.mkdirs()
         dir.listFiles()?.forEach { if (it.name.startsWith("seg_")) it.delete() }
@@ -113,6 +131,7 @@ class LiveRelay(
                     // Instead, keep only what starts at the first real MPEG-TS packet of each connection.
                     val start = java.io.ByteArrayOutputStream()
                     var aligned = false
+                    repair.newConnection()
                     while (running) {
                         val n = input.read(buf)
                         if (n < 0) break
@@ -124,13 +143,14 @@ class LiveRelay(
                             if (at < 0 && bytes.size < START_SCAN_BYTES) continue
                             aligned = true
                             val from = if (at < 0) 0 else at // not MPEG-TS at all: pass everything on as it is
+                            connectionIsTs = at >= 0
                             if (from > 0) {
                                 skippedStartBytes += from
                                 android.util.Log.i("NovaTest", "RELAY skipped $from bytes before the first video packet")
                             }
                             val len = bytes.size - from
                             if (len > 0) {
-                                append(bytes, len, from)
+                                store(bytes, len, from)
                                 tap?.invoke(bytes, from, len)
                             }
                             consecutiveFailures = 0
@@ -138,7 +158,7 @@ class LiveRelay(
                             windowBytes += len
                             continue
                         }
-                        append(buf, n)
+                        store(buf, n, 0)
                         tap?.invoke(buf, 0, n)
                         consecutiveFailures = 0
                         lastError = null
@@ -325,7 +345,8 @@ class LiveRelay(
 
     /** Moves the read position; the player must be restarted afterwards. */
     fun moveBy(seconds: Int) {
-        val rate = bytesPerSec
+        // The channel's real bitrate when known (download speed can burst above it).
+        val rate = if (mediaBytesPerSec > 0) mediaBytesPerSec else bytesPerSec
         if (rate <= 0) return
         synchronized(lock) {
             val first = segments.firstOrNull()?.start ?: 0L
