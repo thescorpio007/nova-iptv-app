@@ -1509,6 +1509,7 @@ class PlayerActivity : ComponentActivity() {
                     handler.removeCallbacks(noDataTask)
                     handler.removeCallbacks(neverStartTask)
                     everReady = true
+                    readyAt = android.os.SystemClock.elapsedRealtime()
                     autoSkips = 0
                     checkNoIndexMkv()
                     handler.removeCallbacks(startTimeoutTask)
@@ -3936,7 +3937,9 @@ class PlayerActivity : ComponentActivity() {
             counters.ensureUpdated()
             val frames = counters.renderedOutputBufferCount
             if (frames != wdLastFrames) { wdLastFrames = frames; wdFramesSince = now }
-            else if ((item.isLive && relay != null && soundMoving && now - wdFramesSince > 3000) || now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) {
+            else if ((item.isLive && relay != null && soundMoving && frames > 50 && readyAt > 0 && now - readyAt > 15_000 && now - wdFramesSince > 3000) ||
+                now - wdFramesSince > maxOf(5000L, limit * 5 / 8)
+            ) {
                 val sound = p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; val moved = n != wdLastAudio; wdLastAudio = n; moved } ?: false
                 val ahead = relay?.let { r -> if (mediaBps > 0) " · ${(r.bytesAhead() / mediaBps).toInt()} s stored ahead" else "" } ?: ""
                 watchdogAct(item, "picture frozen for ${(now - wdFramesSince) / 1000} s" + (if (sound) " (sound kept playing)" else "") + ahead)
@@ -3970,6 +3973,8 @@ class PlayerActivity : ComponentActivity() {
     private var wdLastAudio = -1
     private var wdAudioCount = -1
     private var wdAudioMovedAt = 0L
+    /** When the picture last started (quick damage checks only once it has played normally for a while). */
+    private var readyAt = 0L
     private var repairNote = ""
 
     private fun liveOnlyFix(item: PlayItem, problem: String) {

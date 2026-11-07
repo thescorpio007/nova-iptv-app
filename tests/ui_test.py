@@ -999,10 +999,12 @@ def stuck_picture():
 def damaged_clock():
     """A live feed whose clock jumps (damaged / switching source): Nova smooths the clock and keeps playing."""
     n = count_log(r"READY Damaged Clock")
+    fixed = count_log(r"CLOCK repaired")
     open_test_channel("Damaged Clock")
     check("Damaged clock channel starts", wait_count(r"READY Damaged Clock", n + 1, 30))
-    check("Play through damage: the clock jump is smoothed", wait_log(r"CLOCK repaired Damaged Clock|CLOCK repaired", 60))
-    time.sleep(20)
+    # The jump comes 30 s into the feed (stored ahead of what you see): wait until it has played past it.
+    check("Play through damage: the clock jump is smoothed", wait_count(r"CLOCK repaired", fixed + 1, 60))
+    time.sleep(45)
     log = test_log()
     check("…and it keeps playing without the watchdog (no freeze, no restart)",
           not re.search(r"WATCHDOG Damaged Clock: .*(frozen|stuck)", log))
