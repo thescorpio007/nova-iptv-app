@@ -1,0 +1,20 @@
+Fake Xtream server on :8080
+127.0.0.1 "GET /player_api.php?username=alice&password=x HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams&category_id=1 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_streams HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_series&category_id=20 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_vod_streams&category_id=10 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_streams&category_id=3 HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_live_categories HTTP/1.1" 200 -
+127.0.0.1 "GET /live/alice/secret/109.ts HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_short_epg&stream_id=109&limit=6 HTTP/1.1" 200 -
+127.0.0.1 "GET /live/alice/secret/109.ts HTTP/1.1" 200 -
+127.0.0.1 "GET /live/alice/secret/110.ts HTTP/1.1" 200 -
+127.0.0.1 "GET /player_api.php?username=alice&password=secret&action=get_short_epg&stream_id=110&limit=6 HTTP/1.1" 200 -
