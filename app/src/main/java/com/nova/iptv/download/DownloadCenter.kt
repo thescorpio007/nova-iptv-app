@@ -64,6 +64,15 @@ object DownloadCenter {
     private fun checkFinished(d: DownloadItem) {
         val f = File(d.path)
         if (!f.isFile) return
+        // A recording of only a few seconds (stopped at once, or the channel never came): removed, with a note.
+        if (d.kind == "recording") {
+            val secs = if (d.createdAt > 0) (System.currentTimeMillis() - d.createdAt) / 1000 else -1L
+            if ((secs in 0..9) || f.length() < 1_000_000L) {
+                remove(d.id, deleteFile = true)
+                notify?.invoke("⏺ Recording “${d.title}” was too short (" + (if (secs in 0..9) "$secs s" else "${f.length() / 1024} KB") + ") — removed")
+                return
+            }
+        }
         val problem = FileCheck.problem(f) ?: return
         update(d.id) { it.copy(note = "⚠ Not real video: $problem · Delete it, then record / download again") }
         val what = if (d.kind == "recording") "Recording" else "Download"

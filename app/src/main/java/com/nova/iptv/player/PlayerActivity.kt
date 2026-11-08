@@ -222,6 +222,8 @@ class PlayerActivity : ComponentActivity() {
             updateTimeLabel()
             updateClock()
             measureSignal()
+            updateSpeedBadge()
+            lighterTick()
             refillTick()
             watchdogTick()
             cushionTick()
@@ -905,7 +907,7 @@ class PlayerActivity : ComponentActivity() {
         audioFixTried = 0
         boxAudioPending = false
         jumpAt = 0L; bufferingIsJump = false
-        if (!quiet) { filmBlockedAsked = false; neverStartAsked = false }
+        if (!quiet) { filmBlockedAsked = false; neverStartAsked = false; lighterAsked = false; stallTimes.clear(); damageFixes = 0; damageAtMs = -1L; filmRate = 0.0; filmLastBytes = -1L }
         externalSuggested = false
         hideStatus()
 
@@ -1536,6 +1538,8 @@ class PlayerActivity : ComponentActivity() {
                         bufferingIsJump = jumpAt > 0 && t - jumpAt < 15_000
                         if (bufferingIsJump) { session?.let { it.jumps++; bufferingAt = t }; return }
                         session?.let { it.rebuffers++; bufferingAt = t }
+                        stallTimes.addLast(t)
+                        while (stallTimes.isNotEmpty() && t - stallTimes.first() > 600_000) stallTimes.removeFirst()
                         rebuffers.addLast(t)
                         while (rebuffers.isNotEmpty() && t - rebuffers.first() > 180_000) rebuffers.removeFirst()
                     }
@@ -1727,6 +1731,8 @@ class PlayerActivity : ComponentActivity() {
         lastErrorName = error?.let { e ->
             e.errorCodeName.removePrefix("ERROR_CODE_") + (generateSequence(e.cause) { it.cause }.lastOrNull()?.let { c -> " (${c.javaClass.simpleName}: ${c.message?.take(80)})" } ?: "")
         }
+        // Films: a damaged part in the middle (after it played) — download it again, then step over it by 1 s.
+        if (!item.isLive && everReady && filmDamage(item, error, code)) return
         // "Stream not recognised": usually the first data arrived broken or empty (server hiccup), not this device.
         // Retry quietly; only after that is it reported as a file the player can't read.
         if (code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED) {
@@ -2808,7 +2814,7 @@ class PlayerActivity : ComponentActivity() {
     private val choiceOpen: Boolean get() = choicePanel?.visibility == View.VISIBLE
 
     /** A popup of choices, the first one focused and run by itself after 10 s (any key stops the countdown). */
-    private fun showChoice(title: String, sub: String, choices: List<Choice>, forStart: Boolean, onBack: () -> Unit) {
+    private fun showChoice(title: String, sub: String, choices: List<Choice>, forStart: Boolean, auto: Boolean = true, onBack: () -> Unit) {
         playerView.hideController()
         if (::vod.isInitialized && vod.controlsVisible && !vod.pinned) vod.hide()
         val panel = choicePanel ?: LinearLayout(this).apply {
@@ -2876,13 +2882,14 @@ class PlayerActivity : ComponentActivity() {
         panel.visibility = View.VISIBLE
         first?.requestFocus()
         choiceTask?.let { handler.removeCallbacks(it) }
-        val auto = choices.first()
+        if (!auto) { countdown.text = "Choose below — Back keeps this one"; return }
+        val autoChoice = choices.first()
         var left = 10
         val task = object : Runnable {
             override fun run() {
                 if (!choiceOpen) return
-                if (left <= 0) { Log.i("NovaTest", "CHOICE auto: ${auto.label}"); closeChoice(); auto.run(); return }
-                countdown.text = (auto.autoText.ifBlank { auto.label }) + " in $left s…   (press any key to choose)"
+                if (left <= 0) { Log.i("NovaTest", "CHOICE auto: ${autoChoice.label}"); closeChoice(); autoChoice.run(); return }
+                countdown.text = (autoChoice.autoText.ifBlank { autoChoice.label }) + " in $left s…   (press any key to choose)"
                 left--
                 handler.postDelayed(this, 1000)
             }
@@ -2917,7 +2924,7 @@ class PlayerActivity : ComponentActivity() {
             setPadding(dp(12), dp(6), dp(12), dp(6))
             background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(0xA6000000.toInt()) }
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
-                .apply { setMargins(dp(20), dp(56), dp(20), dp(20)) }
+                .apply { setMargins(dp(20), dp(60), dp(20), dp(20)) }
             (playerView.parent as ViewGroup).addView(this)
             quietChip = this
         }
@@ -3108,6 +3115,207 @@ class PlayerActivity : ComponentActivity() {
         }
         dialog.show()
         dialog.window?.setDimAmount(0.15f)
+    }
+
+
+    // ------------------------------------------------------------------ ⬇ speed on screen, 🪶 lighter version, film damage
+
+    private var speedBadge: TextView? = null
+    private var badgeLogged = ""
+    private val stallTimes = ArrayDeque<Long>()
+    private var lighterAsked = false
+    private var lighterFrom: PlayItem? = null
+    private var lighterKey = ""
+    private var lighterSince = 0L
+    private var backOffered = false
+    private var filmRate = 0.0
+    private var filmLastBytes = -1L
+    private var filmLastAt = 0L
+    private var damageFixes = 0
+    private var damageAtMs = -1L
+
+    /** ⬇ Speed and what the video needs (live), or download speed and how far ahead (films): top-right corner. */
+    private fun updateSpeedBadge() {
+        val item = current
+        val p = player
+        val mode = PlayerPrefs.speedBadge(this)
+        val badge = speedBadge ?: TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f); setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(11), dp(5), dp(11), dp(5))
+            background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(0x9E000000.toInt()) }
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
+                .apply { setMargins(dp(16), dp(14), dp(16), dp(16)) }
+            (playerView.parent as ViewGroup).addView(this)
+            speedBadge = this
+        }
+        val buttonsShown = (::vod.isInitialized && vod.controlsVisible) || timeView.visibility == View.VISIBLE || playerView.isControllerFullyVisible
+        if (item == null || p == null || mode == "off" || (mode == "buttons" && !buttonsShown) || item.isLocal || pictureHidden()) {
+            badge.visibility = View.GONE; return
+        }
+        val green = 0xFF3DDC84.toInt(); val yellow = 0xFFFFD27A.toInt(); val red = 0xFFFF8A7A.toInt()
+        val now = android.os.SystemClock.elapsedRealtime()
+        val r = relay
+        val ra = readAhead
+        var text: String
+        var color: Int
+        if (item.isLive && r != null) {
+            val stored = behindLiveSeconds() ?: 0
+            val ratio = if (mediaBps > 0 && arrivalBps > 0) arrivalBps / mediaBps else 0.0
+            text = when {
+                mediaBps > 0 && arrivalBps > 0 -> "⬇ ${mbit(arrivalBps)} · needs ${mbit(mediaBps)} Mbit/s"
+                arrivalBps > 0 -> "⬇ ${mbit(arrivalBps)} Mbit/s"
+                else -> "⬇ waiting for the provider…"
+            } + "  · $stored s stored"
+            color = when {
+                arrivalBps <= 0 -> red
+                mediaBps <= 0 || ratio >= 1.15 || (ratio >= 0.95 && stored >= 20) -> green
+                ratio >= 0.9 -> yellow
+                else -> red
+            }
+        } else if (ra != null) {
+            // Films: download speed (2 s average) and how far ahead the film is already downloaded.
+            val got = ra.bytesArrived
+            if (filmLastBytes >= 0 && now > filmLastAt) {
+                val inst = (got - filmLastBytes) * 1000.0 / (now - filmLastAt)
+                filmRate = if (filmRate <= 0) inst else filmRate * 0.6 + inst * 0.4
+            }
+            filmLastBytes = got; filmLastAt = now
+            val total = ra.totalBytes
+            val dur = p.duration
+            val aheadSec = if (total > 0 && dur > 0) {
+                val bytesPerSec = total * 1000.0 / dur
+                val at = (total * (p.currentPosition.toDouble() / dur)).toLong().coerceAtLeast(0L)
+                (ra.contiguousFrom(at) / bytesPerSec).toInt()
+            } else (p.totalBufferedDuration / 1000).toInt()
+            val complete = total > 0 && dur > 0 && p.currentPosition + aheadSec * 1000L >= dur - 2000
+            val ahead = if (complete) "✓ downloaded to the end" else if (aheadSec >= 120) "${aheadSec / 60} min ahead" else "$aheadSec s ahead"
+            text = (if (filmRate > 1000) "⬇ ${mbit(filmRate)} Mbit/s" else "⬇ —") + "  · $ahead"
+            color = when { complete || aheadSec >= 60 -> green; aheadSec >= 15 -> yellow; else -> red }
+        } else {
+            val downloading = item.downloadId?.let { id -> com.nova.iptv.download.DownloadCenter.items.value.firstOrNull { it.id == id } }
+            val ahead = (p.totalBufferedDuration / 1000).toInt()
+            text = (downloading?.speed?.takeIf { it > 0 }?.let { "⬇ ${mbit(it.toDouble())} Mbit/s  · " } ?: "") + "$ahead s ahead"
+            color = when { ahead >= 30 -> green; ahead >= 8 -> yellow; else -> red }
+        }
+        badge.text = "● $text"
+        badge.setTextColor(color)
+        if (badgeLogged != item.key && !text.contains("waiting")) { badgeLogged = item.key; Log.i("NovaTest", "SPEED ${item.title}: $text") }
+        // Below the clock when the clock sits in the top-right corner.
+        val lp = badge.layoutParams as FrameLayout.LayoutParams
+        val clockTop = ::clockView.isInitialized && clockView.visibility == View.VISIBLE &&
+            ((clockView.layoutParams as? FrameLayout.LayoutParams)?.gravity ?: 0) == (Gravity.TOP or Gravity.END)
+        val top = if (clockTop) dp(18) + clockView.height else dp(14)
+        if (lp.topMargin != top) { lp.topMargin = top; badge.layoutParams = lp }
+        badge.visibility = View.VISIBLE
+        badge.bringToFront()
+    }
+
+    private fun pictureHidden(): Boolean = ::hideCover.isInitialized && hideCover.visibility == View.VISIBLE
+
+    /** 🪶 Stalls again and again on a line with no spare speed: the same channel in a lighter version. */
+    private fun lighterTick() {
+        val item = current ?: return
+        if (!item.isLive) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Back to the better version after 20 calm minutes on the lighter one (asked, never automatic).
+        val from = lighterFrom
+        if (from != null) {
+            if (item.key != lighterKey) { lighterFrom = null }
+            else if (!backOffered && now - lighterSince > 20 * 60_000L && stallTimes.isEmpty() && !choiceOpen && !otherAppOpen) {
+                backOffered = true
+                showChoice("↑ Back to the better quality?", "No stalls for 20 min on the lighter version.", listOf(
+                    Choice("▶ Back to ${from.title}", "", "") { session?.action("you chose: back to ${from.title}"); lighterFrom = null; playOther(item, from) },
+                    Choice("Stay on this one", "", "") { session?.action("you chose: stay on the lighter version") },
+                ), forStart = false, auto = false) {}
+            }
+        }
+        if (!everReady || lighterAsked || choiceOpen || otherAppOpen || similarOpen) return
+        val mode = PlayerPrefs.lighter(this)
+        if (mode == "never") return
+        while (stallTimes.isNotEmpty() && now - stallTimes.first() > 600_000) stallTimes.removeFirst()
+        if (stallTimes.size < 2) return
+        // Stalls with spare speed on the line are not the line's fault: no lighter version for those.
+        if (mediaBps > 0 && arrivalBps >= mediaBps * 1.15) return
+        lighterAsked = true
+        offerLighter(item, auto = mode == "auto")
+    }
+
+    private fun offerLighter(item: PlayItem, auto: Boolean) {
+        val stalls = stallTimes.size
+        val got = arrivalBps; val need = mediaBps
+        lifecycleScope.launch {
+            val here = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.similarOnSameServer(app, item) }
+            }.getOrNull()?.found.orEmpty().filter { it.item.saved.key != item.saved.key }
+            val elsewhere = if (app.storage.accounts.size > 1) runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.sameChannelElsewhere(app, item) }
+            }.getOrNull() else null
+            if (current !== item) return@launch
+            val r0 = PlayerPrefs.qualityRank(item.title)
+            fun bad(p: PlayItem) = checkKey(p)?.let { StreamCheck.status(it).state == StreamCheck.State.BAD } == true
+            // The closest lighter version (best quality among the lighter ones), this server first.
+            val sim = here.filter { PlayerPrefs.qualityRank(it.item.title) < r0 && !bad(it.item) }
+                .maxByOrNull { PlayerPrefs.qualityRank(it.item.title) }
+            val other = elsewhere?.takeIf { PlayerPrefs.qualityRank(it.title) < r0 && !bad(it) }
+            if (sim == null && other == null) {
+                Log.i("NovaTest", "LIGHTER ${item.title}: none found")
+                session?.action("line too tight ($stalls stalls in 10 min) · no lighter version found")
+                return@launch
+            }
+            val target = sim?.item ?: other!!
+            val acc = app.storage.accounts.firstOrNull { it.id == target.saved.accountId }?.name.orEmpty()
+            Log.i("NovaTest", "LIGHTER ${item.title}: offer ${target.title}")
+            session?.action("line too tight ($stalls stalls in 10 min) → offered ${target.title}")
+            val go = {
+                session?.action("lighter version → ${target.title}")
+                logHealth(item, "line too tight ($stalls stalls in 10 min)", "lighter version “${target.title}”")
+                if (sim != null) playSimilar(item, sim) else playOther(item, target)
+                lighterFrom = item; lighterKey = target.key; lighterSince = android.os.SystemClock.elapsedRealtime(); backOffered = false
+            }
+            val speed = if (got > 0 && need > 0) " · the line gives ${mbit(got)}, the channel needs ${mbit(need)} Mbit/s" else ""
+            showChoice(
+                "🪶 Line too tight for this quality",
+                "$stalls stalls in 10 min$speed.\nA lighter version plays smoothly at lower quality.",
+                listOf(
+                    Choice("▶ ${target.title}", if (sim == null && acc.isNotBlank()) acc else "lighter", "Switching to ${target.title}") { go() },
+                    Choice("Keep this one", "", "") { session?.action("you chose: keep this quality") },
+                ),
+                forStart = false, auto = auto,
+            ) { session?.action("you chose: keep this quality") }
+        }
+    }
+
+    /**
+     * Films: a damaged part (broken data / a frame the decoder can't read) — first the part is downloaded again from
+     * the server and played at the same place; only if it is still broken, Nova steps over it by 1 s, then 3 s.
+     */
+    private fun filmDamage(item: PlayItem, error: PlaybackException?, code: Int?): Boolean {
+        val p = player ?: return false
+        val malformed = code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
+        val videoBroken = code == PlaybackException.ERROR_CODE_DECODING_FAILED &&
+            (error as? ExoPlaybackException)?.let { it.type == ExoPlaybackException.TYPE_RENDERER && MimeTypes.getTrackType(it.rendererFormat?.sampleMimeType) == C.TRACK_TYPE_VIDEO } == true
+        if (!malformed && !videoBroken) return false
+        val pos = p.currentPosition.coerceAtLeast(0L)
+        if (pos < 5_000) return false
+        // A new damaged spot (more than a minute away from the last one): start again from the first fix.
+        if (damageAtMs < 0 || kotlin.math.abs(pos - damageAtMs) > 60_000) { damageFixes = 0; damageAtMs = pos }
+        damageFixes++
+        val ra = readAhead
+        val action = when {
+            damageFixes == 1 && ra != null && ra.rangeSupported && ra.totalBytes > 0 && p.duration > 0 -> {
+                val at = (ra.totalBytes * (pos.toDouble() / p.duration)).toLong()
+                val n = ra.refetchAround(at)
+                restartAt(item, pos)
+                "damaged part at ${formatDuration(pos)} → downloaded again ($n MB), same place"
+            }
+            damageFixes <= 2 -> { restartAt(item, pos + 1_000); "damaged part at ${formatDuration(pos)} → stepped 1 s past it" }
+            damageFixes == 3 -> { restartAt(item, pos + 3_000); "damaged part at ${formatDuration(pos)} → stepped 3 s past it" }
+            else -> return false
+        }
+        Log.i("NovaTest", "FILMDAMAGE ${item.title}: $action")
+        session?.action(action)
+        logHealth(item, "damaged part ($lastErrorName)", action.substringAfter("→ "))
+        return true
     }
 
     private var vpnAsked = false
@@ -3991,6 +4199,11 @@ class PlayerActivity : ComponentActivity() {
                     // Enough stored video: the picture is not touched, the provider is reconnected in the background.
                     showQuietChip(stored)
                     "reconnected quietly (picture untouched, $stored s stored)"
+                } else if (p != null && p.playbackState == Player.STATE_BUFFERING && stored < 3) {
+                    // Nothing stored to play: restarting the picture can't help (it caused minutes of black before).
+                    // The player simply waits and goes on by itself ~3–6 s after the provider sends again.
+                    showQuietChip(stored)
+                    "reconnected quietly (waiting for the provider, no restart)"
                 } else {
                     restartOnStoredVideo(item, newPlayer = false)
                     "reconnected to the provider (stored video kept)"

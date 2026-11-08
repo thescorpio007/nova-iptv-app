@@ -109,6 +109,25 @@ class ReadAheadBuffer(
     /** Bytes on disk without a gap from [from] onwards. */
     fun contiguousFrom(from: Long): Long = lock.withLock { contiguousLocked(from) }
 
+    /**
+     * A damaged part of the film: the stored pieces around byte [at] (one before, two after) are thrown away so they are
+     * downloaded again from the server. Returns how many MB will be fetched again.
+     */
+    fun refetchAround(at: Long): Int = lock.withLock {
+        val i = (at / SEG).toInt()
+        var n = 0
+        for (seg in (i - 1)..(i + 2)) {
+            if (seg < 0 || seg == partialSeg || seg !in complete) continue
+            complete.remove(seg)
+            segLen.remove(seg)
+            runCatching { segFile(seg).delete() }
+            n++
+        }
+        reevaluate = true
+        changed.signalAll()
+        (n * SEG / (1024 * 1024)).toInt()
+    }
+
     private fun segFile(i: Int) = File(dir, "seg_$i.bin")
 
     private fun segStart(i: Int) = i * SEG

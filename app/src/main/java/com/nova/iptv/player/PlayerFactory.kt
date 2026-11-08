@@ -135,7 +135,9 @@ object PlayerFactory {
         val maxMs = if (mode == SourceMode.VOD_HLS_DISK) maxOf(60_000, cushionMs + 5_000)
         else if (diskBacked) maxOf(20_000, cushionMs + 5_000)
         else maxOf(s.maxBufferSeconds * 1000, cushionMs + 10_000, if (live) s.weakRefillSecs * 1000 + 15_000 else 0)
-        val rebufferMs = (cushionMs * 3 / 2).coerceIn(2000, maxMs)
+        // After a stall, live TV goes on as soon as ~5 s is back (waiting for 1.5× the cushion meant long black
+        // pauses on lines with no spare speed, where the cushion can never refill quickly). Films keep the larger margin.
+        val rebufferMs = if (live) minOf((cushionMs * 3 / 2), 5_000).coerceAtLeast(2000) else (cushionMs * 3 / 2).coerceIn(2000, maxMs)
         // Live "fast start": begin with ~2 s near live; the player builds the rest of the cushion while playing.
         val startMs = if (live && s.liveStart == "fast") minOf(2000, cushionMs) else cushionMs
 

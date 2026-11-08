@@ -607,6 +607,8 @@ fun PlayerSettings(vm: MainViewModel) {
 
     SoundSyncCard()
 
+    SpeedAndLighterCard()
+
     HidePictureCard()
 
     PhoneOrientationCard(vm)
@@ -1605,6 +1607,26 @@ private fun NightModeCard() {
         Text("Applies to", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("all" to "Everything", "vod" to "Films & series", "live" to "Live TV"), scope) { scope = it; st.nightScope = it }
         Hint("Works with Nova's own sound decoding (the default). Not applied to Dolby / DTS sent untouched to a soundbar. The player's 🌙 button always wins for the video you are watching.")
+    }
+}
+
+
+/** Settings › ⬇ Speed on screen and 🪶 lighter version on a tight line. */
+@Composable
+private fun SpeedAndLighterCard() {
+    val context = LocalContext.current
+    val P = com.nova.iptv.player.PlayerPrefs
+    var badge by remember { mutableStateOf(P.speedBadge(context)) }
+    var lighter by remember { mutableStateOf(P.lighter(context)) }
+    val badgeLabel = mapOf("always" to "Always", "buttons" to "Only with the buttons", "off" to "Off")
+    val lighterLabel = mapOf("auto" to "Switch automatically", "ask" to "Ask", "never" to "Never")
+    SettingsCard("⬇ Speed on screen · 🪶 lighter version", summary = "${badgeLabel[badge]} · ${lighterLabel[lighter]}") {
+        Text("⬇ Speed on screen", fontWeight = FontWeight.Medium)
+        Hint("Top-right corner while watching. Live: the speed of your line and what the channel needs (green = spare, yellow = just enough, red = too slow). Films: download speed and how far ahead the film is downloaded.")
+        ChoiceRow(badgeLabel.toList(), badge) { badge = it; P.setSpeedBadge(context, it) }
+        Text("🪶 Lighter version when the line is too tight", fontWeight = FontWeight.Medium)
+        Hint("After 2 stalls in 10 min on a line with no spare speed: the same channel in a lower quality (SD / 540p / H265, on this or your other server). Smooth instead of stopping. After 20 calm minutes Nova offers to go back.")
+        ChoiceRow(lighterLabel.toList(), lighter) { lighter = it; P.setLighter(context, it) }
     }
 }
 

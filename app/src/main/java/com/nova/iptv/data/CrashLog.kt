@@ -44,7 +44,15 @@ object CrashLog {
                 android.app.ApplicationExitInfo.REASON_CRASH -> null // already recorded by the handler above
                 else -> null
             } ?: return@runCatching
-            val trace = runCatching { last.traceInputStream?.bufferedReader()?.use { it.readText().take(6000) } }.getOrNull().orEmpty()
+            // Android's own record of the freeze: keep the part about Nova's main (screen) thread — that is what was blocked.
+            val full = runCatching { last.traceInputStream?.bufferedReader()?.use { it.readText() } }.getOrNull().orEmpty()
+            val mainPart = full.indexOf("\"main\"").takeIf { it >= 0 }?.let { full.substring(it).substringBefore("\n\n").take(5000) }
+            // Nova's own watch of the screen thread (works even when Android gives no record).
+            val hint = if (last.reason == android.app.ApplicationExitInfo.REASON_ANR) MainThreadWatch.lastStall(app, last.timestamp) else null
+            val trace = listOfNotNull(
+                hint?.let { "What the screen thread was doing (Nova's own watch):\n$it" },
+                mainPart?.let { "Android's record of the screen thread:\n$it" } ?: full.take(4000).takeIf { it.isNotBlank() },
+            ).joinToString("\n\n")
             val mem = if (last.pss > 0) "memory used ${last.pss / 1024} MB" else "memory used: not known (Android didn't say)"
             record(app, "$why\n${last.description.orEmpty()}\n$mem", Date(last.timestamp), trace)
         }

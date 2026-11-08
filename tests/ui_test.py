@@ -1336,6 +1336,16 @@ def silent_film_server():
     close_opened_player("silent-film")
 
 
+def speed_badge():
+    """The speed shows on screen while a live channel plays (top-right corner)."""
+    n = count_log(r"READY Working Channel")
+    open_test_channel("Working Channel")
+    check("Working channel plays", wait_count(r"READY Working Channel", n + 1, 30))
+    check("⬇ Speed on screen: line speed and what the channel needs", wait_log(r"SPEED Working Channel: ⬇ .*needs .*Mbit/s", 30))
+    shot("speed-badge")
+    back_to_main("speed-badge")
+
+
 def web_grab_by_type():
     """Web tab: a page's video whose address has no ".mp4" in its name is still found (recognised by its type)."""
     adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/grab.html -n {PKG}/.ui.OpenWithActivity")
@@ -1496,6 +1506,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("Jump in an MKV without index", jump_mkv_without_index),
         ("A film server that sends nothing", silent_film_server),
         ("Web: grab a video by its type", web_grab_by_type),
+        ("Speed on screen", speed_badge),
         ("Double OK hides a film", double_ok_hide),
     ]
 
