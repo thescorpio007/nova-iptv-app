@@ -43,7 +43,6 @@ LIVE = {
             {"num": 7, "name": "Cold Channel", "stream_id": 107, "stream_icon": "", "category_id": "3"},
             {"num": 8, "name": "Weak Channel", "stream_id": 108, "stream_icon": "", "category_id": "3"},
             {"num": 9, "name": "Stuck Channel", "stream_id": 109, "stream_icon": "", "category_id": "3"},
-            {"num": 10, "name": "Damaged Clock", "stream_id": 110, "stream_icon": "", "category_id": "3"},
         ],
     },
     "bob": {"7": [{"num": 1, "name": "Bob Channel A", "stream_id": 201, "category_id": "7"}]},
@@ -199,22 +198,6 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        if path == "/web/grab.html":
-            # A film page whose player plays an address with no ".mp4" in its name (Nova must recognise it by its type).
-            body = ("<html><head><title>Nova Grab Test</title><meta name='viewport' content='width=device-width'></head>"
-                    "<body style='font-family:sans-serif;background:#fff'><h1>Nova Grab page</h1>"
-                    "<video controls autoplay width='320' src='/web/stream?id=7'></video>"
-                    "</body></html>").encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        if path == "/web/stream":
-            return self.send_file(os.path.join(MEDIA, "sample.mp4"), "video/mp4")
-
         if path == "/web/hop.html":
             # A redirect page (like a site's old address): sends you on at once.
             body = ("<html><head><title>Hop</title></head><body>moving…"
@@ -335,8 +318,6 @@ class Handler(BaseHTTPRequestHandler):
                      "container_extension": "mp4", "added": str(now - 5 * 86400)},
                     {"stream_id": "301", "name": "Test Film", "stream_icon": "", "rating": "7.5", "year": "2024",
                      "category_id": "10", "container_extension": "mp4", "added": str(now - 3600)},
-                    {"stream_id": "305", "name": "No Index MKV", "stream_icon": "", "category_id": "10",
-                     "container_extension": "mkv", "added": str(now - 8 * 86400)},
                 ])
             if action == "get_vod_info":
                 return self.send_json({
@@ -400,10 +381,6 @@ class Handler(BaseHTTPRequestHandler):
                 # The picture stops after 20 s while sound and data keep arriving (real-time pace).
                 rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90
                 return self.send_file(os.path.join(MEDIA, "stuck.ts"), "video/mp2t", rate=rate, burst=rate * 3)
-            if kind == "live" and sid == "110":
-                # A damaged feed: its clock jumps ahead by 5000 s after 30 s (like a provider switching source).
-                rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90
-                return self.send_file(os.path.join(MEDIA, "jump.ts"), "video/mp2t", rate=rate, burst=rate * 3)
             if kind == "live" and sid == "108":
                 # A weak signal: a 4 s burst, then video arrives at only 60 % of real time (never stops).
                 path = os.path.join(MEDIA, "sample.ts")
@@ -425,13 +402,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(path, "video/mp2t", rate=size // 90, burst=size * 3 // 90)
             if kind == "live":
                 return self.send_file(os.path.join(MEDIA, "sample.ts"), "video/mp2t")
-            if kind == "movie" and sid == "306":
-                # A blocked film server: the connection opens but nothing ever comes (like UAE blocks).
-                time.sleep(45)
-                return
-            if kind == "movie" and sid == "305":
-                # MKV with NO index at all (no Cues), like many provider films: jumping must still work.
-                return self.send_file(os.path.join(MEDIA, "noindex.mkv"), "video/x-matroska")
             if kind == "movie" and sid == "304":
                 # MKV (index at the end) from a provider only a little faster than the film.
                 path = os.path.join(MEDIA, "sample.mkv")

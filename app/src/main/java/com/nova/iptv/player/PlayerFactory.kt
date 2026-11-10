@@ -81,8 +81,6 @@ data class Tweaks(
     val ffmpegAudioFirst: Boolean = false,
     val noOffload: Boolean = false,
     val noTunnel: Boolean = false,
-    /** The extra (FFmpeg) sound decoder failed on this video: the box's own decoder first. */
-    val boxAudioFirst: Boolean = false,
 )
 
 /** How the player gets its data. */
@@ -135,12 +133,7 @@ object PlayerFactory {
         val maxMs = if (mode == SourceMode.VOD_HLS_DISK) maxOf(60_000, cushionMs + 5_000)
         else if (diskBacked) maxOf(20_000, cushionMs + 5_000)
         else maxOf(s.maxBufferSeconds * 1000, cushionMs + 10_000, if (live) s.weakRefillSecs * 1000 + 15_000 else 0)
-        // After a stall, live TV goes on as soon as ~5 s is back (waiting for 1.5× the cushion meant long black
-        // pauses on lines with no spare speed, where the cushion can never refill quickly). Films keep the larger margin.
-        // After a stall: wait for a good cushion again (as in build 19). "Resume quickly" (Settings, off by default)
-        // goes on after only ~5 s on live TV — fewer seconds of waiting, but more frequent short stops on a tight line.
-        val rebufferMs = if (live && PlayerPrefs.fastResume(context)) minOf((cushionMs * 3 / 2), 5_000).coerceAtLeast(2000)
-            else (cushionMs * 3 / 2).coerceIn(2000, maxMs)
+        val rebufferMs = (cushionMs * 3 / 2).coerceIn(2000, maxMs)
         // Live "fast start": begin with ~2 s near live; the player builds the rest of the cushion while playing.
         val startMs = if (live && s.liveStart == "fast") minOf(2000, cushionMs) else cushionMs
 
@@ -194,9 +187,7 @@ object PlayerFactory {
             )
             .setConstantBitrateSeekingEnabled(true)
 
-        // Films: jumps in MKV files without an index are played as a joined stream (see MkvSeek).
-        val withJumps: DataSource.Factory = if (live) dataSource else DataSource.Factory { SpliceDataSource(dataSource.createDataSource()) }
-        val mediaSources = DefaultMediaSourceFactory(withJumps, extractors)
+        val mediaSources = DefaultMediaSourceFactory(dataSource, extractors)
             .setLoadErrorHandlingPolicy(RetryPolicy(live))
 
         // Decoders: the box's hardware first for video (4K/HDR). For audio, either the box first
@@ -230,7 +221,7 @@ object PlayerFactory {
             .setMediaCodecSelector(codecSelector)
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(
-                if (!tweaks.boxAudioFirst && (s.audioDecoder == "ffmpeg" || tweaks.ffmpegAudioFirst)) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                if (s.audioDecoder == "ffmpeg" || tweaks.ffmpegAudioFirst) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
             )
 

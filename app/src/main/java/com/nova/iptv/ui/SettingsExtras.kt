@@ -611,8 +611,6 @@ fun PlayerSettings(vm: MainViewModel) {
 
     SoundSyncCard()
 
-    SpeedAndLighterCard()
-
     HidePictureCard()
 
     PhoneOrientationCard(vm)
@@ -1218,26 +1216,9 @@ fun LastProblemSettings() {
     val context = LocalContext.current
     var text by remember { mutableStateOf(com.nova.iptv.data.CrashLog.last(context)) }
     LaunchedEffect(Unit) { com.nova.iptv.data.CrashLog.seen(context) }
-    // A problem from an earlier build is not repeated: folded away unless you ask for it.
-    val nowBuild = remember {
-        com.nova.iptv.data.CrashLog.buildOf("x " + runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty())
-    }
-    val oldBuild = com.nova.iptv.data.CrashLog.buildOf(text)?.takeIf { nowBuild != null && it != nowBuild }
-    var showOld by remember { mutableStateOf(false) }
-    val oldWhen = text?.lineSequence()?.firstOrNull()?.substringAfterLast("· ")?.take(10).orEmpty()
-    SettingsCard("Last problem", summary = when {
-        text == null -> "none"
-        oldBuild != null -> "none in this build (last one: build $oldBuild, $oldWhen)"
-        else -> text!!.lineSequence().drop(1).firstOrNull()?.take(60)
-    }) {
+    SettingsCard("Last problem", summary = if (text == null) "none" else text!!.lineSequence().drop(1).firstOrNull()?.take(60)) {
         if (text == null) {
             Hint("Nova has not closed by itself since this was cleared.")
-        } else if (oldBuild != null && !showOld) {
-            Hint("Nova hasn't closed by itself in this build. The last problem was in build $oldBuild ($oldWhen) and hasn't happened again.")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { showOld = true }) { Text("Show it") }
-                OutlinedButton(onClick = { com.nova.iptv.data.CrashLog.clear(context); text = null }) { Text("Clear") }
-            }
         } else {
             Hint("Why Nova closed by itself last time. Share it so the problem can be fixed (also saved in Download/NovaIPTV/Logs).")
             Text(text!!.take(1500), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1611,32 +1592,6 @@ private fun NightModeCard() {
         Text("Applies to", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("all" to "Everything", "vod" to "Films & series", "live" to "Live TV"), scope) { scope = it; st.nightScope = it }
         Hint("Works with Nova's own sound decoding (the default). Not applied to Dolby / DTS sent untouched to a soundbar. The player's 🌙 button always wins for the video you are watching.")
-    }
-}
-
-
-/** Settings › ⬇ Speed on screen and 🪶 lighter version on a tight line. */
-@Composable
-private fun SpeedAndLighterCard() {
-    val context = LocalContext.current
-    val P = com.nova.iptv.player.PlayerPrefs
-    var badge by remember { mutableStateOf(P.speedBadge(context)) }
-    var lighter by remember { mutableStateOf(P.lighter(context)) }
-    val badgeLabel = mapOf("always" to "Always", "buttons" to "Only with the buttons", "off" to "Off")
-    val lighterLabel = mapOf("auto" to "Switch automatically", "ask" to "Ask", "never" to "Never")
-    SettingsCard("⬇ Speed on screen · 🪶 lighter version", summary = "${badgeLabel[badge]} · ${lighterLabel[lighter]}") {
-        Text("⬇ Speed on screen", fontWeight = FontWeight.Medium)
-        Hint("Top-right corner while watching. Live: the speed of your line and what the channel needs (green = spare, yellow = just enough, red = too slow). Films: download speed and how far ahead the film is downloaded.")
-        ChoiceRow(badgeLabel.toList(), badge) { badge = it; P.setSpeedBadge(context, it) }
-        Text("🪶 Lighter version when the line is too tight", fontWeight = FontWeight.Medium)
-        Hint("After 2 stalls in 10 min on a line with no spare speed: the same channel in a lower quality (SD / 540p / H265, on this or your other server). Smooth instead of stopping. After 20 calm minutes Nova offers to go back.")
-        ChoiceRow(lighterLabel.toList(), lighter) { lighter = it; P.setLighter(context, it) }
-        var fast by remember { mutableStateOf(P.fastResume(context)) }
-        Text("⏯ After a stall (live TV)", fontWeight = FontWeight.Medium)
-        Hint("Wait for a good cushion (smoothest, as in build 19) or go on after only ~5 s (shorter waits, but more frequent short stops on a tight line).")
-        ChoiceRow(listOf("cushion" to "Wait for a good cushion", "fast" to "Resume quickly"), if (fast) "fast" else "cushion") {
-            fast = it == "fast"; P.setFastResume(context, fast)
-        }
     }
 }
 

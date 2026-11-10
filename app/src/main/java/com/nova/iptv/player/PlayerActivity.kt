@@ -63,19 +63,6 @@ class PlayerActivity : ComponentActivity() {
     private var playerTweaks = Tweaks()
     private var videoDecoderSwitched = false
     private var audioFixTried = 0
-    private var audioDecoderName: String? = null
-    /** The extra sound decoder failed: waiting for the box's own decoder to take over (then "Sound fixed"). */
-    private var boxAudioPending = false
-    private val boxAudioPrefs by lazy { getSharedPreferences("box_audio", MODE_PRIVATE) }
-    /** Your own jump (⏩, seek bar, rewind): the wait after it is not a stall. */
-    private var jumpAt = 0L
-    private var bufferingIsJump = false
-    /** A film's server sent nothing at all: asked once per film what to do. */
-    private var filmBlockedAsked = false
-    /** A channel shows no picture after 10 s: other versions offered once. */
-    private var neverStartAsked = false
-    /** "Turn on my VPN" was chosen: try again when you come back to Nova. */
-    private var retryAfterVpn = false
     private var current: PlayItem? = null
     private var relay: LiveRelay? = null
     /** Disk read-ahead of the current film / episode (Settings → Player). */
@@ -187,17 +174,9 @@ class PlayerActivity : ComponentActivity() {
         if (everReady || item.isLive || resumeFallbackDone) return@Runnable
         resumeFallbackDone = true
         val at = app.storage.getPosition(item.key)
-        if (!dataArrived()) {
-            // Nothing arrived at all: starting from 0 wouldn't help (the server is the problem). Keep trying here.
-            resumeKeptMs = at
-            logHealth(item, "the server hasn't sent the film yet (25 s)", "kept trying · place ${formatDuration(at)} kept")
-            if (!choiceOpen) Toast.makeText(this, "⏳ The server hasn't sent the film yet (25 s). Nova keeps trying. Your place ${formatDuration(at)} is kept.", Toast.LENGTH_LONG).show()
-            return@Runnable
-        }
-        // The saved place is kept (never erased): watching a little from the start won't overwrite it.
-        resumeKeptMs = at
-        logHealth(item, "didn't start at the saved place ${formatDuration(at)}", "started from the beginning (place kept)")
-        Toast.makeText(this, "Couldn't resume at ${formatDuration(at)} — playing from the start. Your place ${formatDuration(at)} is kept.", Toast.LENGTH_LONG).show()
+        app.storage.setPosition(item.key, 0)
+        logHealth(item, "didn't start at the saved place ${formatDuration(at)}", "started from the beginning")
+        Toast.makeText(this, "Couldn't resume at ${formatDuration(at)} — playing from the start", Toast.LENGTH_LONG).show()
         p.setMediaItem(buildMediaItem(item))
         p.prepare()
         p.playWhenReady = true
@@ -222,8 +201,6 @@ class PlayerActivity : ComponentActivity() {
             updateTimeLabel()
             updateClock()
             measureSignal()
-            updateSpeedBadge()
-            lighterTick()
             refillTick()
             watchdogTick()
             cushionTick()
@@ -700,7 +677,6 @@ class PlayerActivity : ComponentActivity() {
         if (!PlayerUi.compact(this)) vod.extraViews["⟲ Rotate"]?.visibility = View.GONE
         if (com.nova.iptv.data.Cast.isTv(this)) vod.extraViews["📺 Play on TV"]?.visibility = View.GONE
         vod.addBottomView(linkLine())
-        vod.seekHandler = { target -> jumpAt = android.os.SystemClock.elapsedRealtime(); if (noIndexMkv) { requestSplice(target); true } else false }
         // Keep the controls clear of the camera cut-out.
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(vod.view) { v, insets ->
             val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
@@ -879,12 +855,6 @@ class PlayerActivity : ComponentActivity() {
         applySoundSync(announce = !quiet)
         if (otherAppOpen) closeOtherApp()
         if (similarOpen) closeSimilar()
-        if (!quiet) {
-            // Quiet restarts (retries) keep the popup and its timers: they belong to the same try.
-            if (choiceOpen) closeChoice()
-            handler.removeCallbacks(noDataTask)
-            handler.removeCallbacks(neverStartTask)
-        }
         startSession(item, quiet)
         // Status dots: this server's connection is now the player's (a check running there stops).
         StreamCheck.playing(if (item.isLocal) null else item.saved.accountId)
@@ -901,13 +871,10 @@ class PlayerActivity : ComponentActivity() {
         refilling = false
         mediaBps = 0.0; bpsSampleBytes = -1L; arrivals.clear(); arrivalBps = 0.0
         rebuffers.clear(); notArrivingSince = 0L
-        if (!keepTweaks) tweaks = Tweaks(boxAudioFirst = boxAudioPrefs.getBoolean(item.key, false))
+        if (!keepTweaks) tweaks = Tweaks()
         wdReset(android.os.SystemClock.elapsedRealtime())
         videoDecoderSwitched = false
         audioFixTried = 0
-        boxAudioPending = false
-        jumpAt = 0L; bufferingIsJump = false
-        if (!quiet) { filmBlockedAsked = false; neverStartAsked = false; lighterAsked = false; stallTimes.clear(); damageSeen = false; damageFixes = 0; damageAtMs = -1L; filmRate = 0.0; filmLastBytes = -1L }
         externalSuggested = false
         hideStatus()
 
@@ -985,7 +952,6 @@ class PlayerActivity : ComponentActivity() {
             app.storage.getPosition(item.key)
         } else 0L
         if (!quiet) resumeFallbackDone = false
-        if (!quiet) { pendingResumeMs = resumeAt; noIndexMkv = false; resumeKeptMs = 0L; vod.pendingSeek = null }
         if (resumeAt > 0) {
             if (!resumeFallbackDone) handler.postDelayed(resumeTimeoutTask, 25_000)
             p.setMediaItem(buildMediaItem(item), resumeAt)
@@ -1004,15 +970,6 @@ class PlayerActivity : ComponentActivity() {
         if (item.isLive) {
             // Never give up before the safety cushion has had time to fill.
             handler.postDelayed(startTimeoutTask, startTimeoutMs())
-            // No picture after 10 s: offer the same channel in another quality / on your other server.
-            if (!quiet && !item.catchup && !item.temporary && item.saved.accountId.isNotBlank()) {
-                startCheckKey = item.key
-                handler.postDelayed(neverStartTask, 10_000)
-            }
-        } else if (!quiet && !item.isLocal && item.downloadId == null) {
-            // A film whose server sends nothing at all in 12 s: say why and offer a choice.
-            startCheckKey = item.key
-            handler.postDelayed(noDataTask, 12_000)
         }
 
         val accountLabel = if (app.storage.accounts.size > 1) {
@@ -1501,19 +1458,9 @@ class PlayerActivity : ComponentActivity() {
                         current?.takeIf { it.isLive && !it.catchup && !it.temporary }?.let { app.storage.addRecent(it.saved) }
                     }
                     retryCount = 0
-                    if (bufferingAt > 0) {
-                        val waited = android.os.SystemClock.elapsedRealtime() - bufferingAt
-                        session?.let { if (bufferingIsJump) it.jumpMs += waited else it.rebufferMs += waited }
-                        bufferingAt = 0L
-                    }
-                    bufferingIsJump = false; jumpAt = 0L
-                    if (choiceOpen && choiceForStart) closeChoice()
-                    handler.removeCallbacks(noDataTask)
-                    handler.removeCallbacks(neverStartTask)
+                    if (bufferingAt > 0) { session?.let { it.rebufferMs += android.os.SystemClock.elapsedRealtime() - bufferingAt }; bufferingAt = 0L }
                     everReady = true
-                    readyAt = android.os.SystemClock.elapsedRealtime()
                     autoSkips = 0
-                    checkNoIndexMkv()
                     handler.removeCallbacks(startTimeoutTask)
                     handler.removeCallbacks(resumeTimeoutTask)
                     if (storedRestart) {
@@ -1534,12 +1481,7 @@ class PlayerActivity : ComponentActivity() {
                     if (everReady) {
                         Log.i("NovaTest", "BUFFERING ${current?.title}")
                         val t = android.os.SystemClock.elapsedRealtime()
-                        // Right after your own jump: counted apart (your jumps), not as a stall.
-                        bufferingIsJump = jumpAt > 0 && t - jumpAt < 15_000
-                        if (bufferingIsJump) { session?.let { it.jumps++; bufferingAt = t }; return }
                         session?.let { it.rebuffers++; bufferingAt = t }
-                        stallTimes.addLast(t)
-                        while (stallTimes.isNotEmpty() && t - stallTimes.first() > 600_000) stallTimes.removeFirst()
                         rebuffers.addLast(t)
                         while (rebuffers.isNotEmpty() && t - rebuffers.first() > 180_000) rebuffers.removeFirst()
                     }
@@ -1560,10 +1502,6 @@ class PlayerActivity : ComponentActivity() {
         override fun onPlayerError(error: PlaybackException) {
             scheduleReconnect(error)
         }
-
-        override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
-            if (reason == Player.DISCONTINUITY_REASON_SEEK && everReady) jumpAt = android.os.SystemClock.elapsedRealtime()
-        }
     }
 
     /** Logs which decoders are used (shown in test logs; helps when a format doesn't play). */
@@ -1574,13 +1512,6 @@ class PlayerActivity : ComponentActivity() {
 
         override fun onAudioDecoderInitialized(t: AnalyticsListener.EventTime, name: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
             Log.i("NovaTest", "DECODER audio ${current?.title}: $name")
-            audioDecoderName = name
-            if (boxAudioPending && !name.contains("ffmpeg", ignoreCase = true)) {
-                boxAudioPending = false
-                Log.i("NovaTest", "SOUND FIXED ${current?.title}: $name")
-                session?.let { ss -> if (ss.result == "OK" || ss.result == "SLOW") { ss.result = "FIXED"; ss.note = "sound: extra decoder failed → box decoder ($name)" } }
-                runOnUiThread { Toast.makeText(this@PlayerActivity, "🔊 Sound fixed: Nova switched to the box's own sound decoder. (Remembered for this film.)", Toast.LENGTH_LONG).show() }
-            }
         }
     }
 
@@ -1609,18 +1540,6 @@ class PlayerActivity : ComponentActivity() {
                 return true
             }
             C.TRACK_TYPE_AUDIO -> {
-                val ffmpegFailed = generateSequence(e as Throwable) { it.cause }.any { it.javaClass.simpleName.contains("Ffmpeg", ignoreCase = true) } ||
-                    audioDecoderName?.contains("ffmpeg", ignoreCase = true) == true
-                if (ffmpegFailed && !tweaks.boxAudioFirst && audioFixTried < 2) {
-                    audioFixTried = 1
-                    Log.i("NovaTest", "RECOVER ${item.title}: box sound decoder ($what)")
-                    session?.action("sound: extra decoder failed ($what) → box decoder")
-                    boxAudioPrefs.edit().putBoolean(item.key, true).apply()
-                    boxAudioPending = true
-                    tweaks = tweaks.copy(step = tweaks.step + 1, boxAudioFirst = true, ffmpegAudioFirst = false, noOffload = true)
-                    restartAt(item, position)
-                    return true
-                }
                 if (audioFixTried == 0) {
                     audioFixTried = 1
                     Log.i("NovaTest", "RECOVER ${item.title}: FFmpeg sound decoder ($what)")
@@ -1731,8 +1650,6 @@ class PlayerActivity : ComponentActivity() {
         lastErrorName = error?.let { e ->
             e.errorCodeName.removePrefix("ERROR_CODE_") + (generateSequence(e.cause) { it.cause }.lastOrNull()?.let { c -> " (${c.javaClass.simpleName}: ${c.message?.take(80)})" } ?: "")
         }
-        // Films: a damaged part in the middle (after it played) — download it again, then step over it by 1 s.
-        if (!item.isLive && everReady && filmDamage(item, error, code)) return
         // "Stream not recognised": usually the first data arrived broken or empty (server hiccup), not this device.
         // Retry quietly; only after that is it reported as a file the player can't read.
         if (code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED) {
@@ -1747,14 +1664,8 @@ class PlayerActivity : ComponentActivity() {
                 }, 1200L * containerRetries)
                 return
             }
-            // A saved file: say what it really is (a web page saved instead of the video…).
-            val fileProblem = if (item.isLocal) runCatching {
-                val path = if (item.url.startsWith("file:")) android.net.Uri.parse(item.url).path else if (item.url.startsWith("/")) item.url else null
-                path?.let { com.nova.iptv.download.FileCheck.problem(java.io.File(it)) }
-            }.getOrNull() else null
-            session?.fail(if (item.isLive) "FAIL" else "FILE", (fileProblem?.let { "not real video: $it" } ?: "stream / file not readable by Nova") + " [$lastErrorName]")
+            session?.fail(if (item.isLive) "FAIL" else "FILE", "stream / file not readable by Nova [$lastErrorName]")
             if (item.isLive) { channelFailed("stream not recognised"); return }
-            if (fileProblem != null) { showStatus("This file isn't real video: $fileProblem.\nDelete it and record / download it again."); return }
             if (app.storage.failApp != "none") offerOtherApp(item, "Nova can't read this file's format", format = true)
             else showStatus("Nova can't read this file's format (not a problem of this device).\nPress OK (or tap here) to open it in an external player.").also { externalSuggested = true }
             return
@@ -1829,8 +1740,7 @@ class PlayerActivity : ComponentActivity() {
                 vpnAsked = true
                 reconnectTask?.let { handler.removeCallbacks(it) }
                 session?.fail("FAIL", "film server can't be reached (blocked?) — VPN off [$lastErrorName]")
-                if (filmBlockedAsked) showStatus("This film's server can't be reached on your line.\nTurn on your VPN, then press OK to try again.").also { retryCount = 1 }
-                else offerFilmBlocked(item, refused = true)
+                showVpnNeeded(item)
                 return
             }
             val limit = if (httpCode == 401 || httpCode == 403 || httpCode == 404) 3 else 30
@@ -1913,11 +1823,9 @@ class PlayerActivity : ComponentActivity() {
                 handler.postDelayed(startTimeoutTask, startTimeoutMs())
             } else {
                 if (n == 4) {
-                    // Safer settings: no tunneling / audio offload. The other video decoder only when the decoder itself
-                    // failed — a slow provider is not a decoder problem (the box's hardware decoder plays smoother).
-                    val decoderFailed = lastErrorName?.contains("DECOD", ignoreCase = true) == true
+                    // Safer settings: the other video decoder, no tunneling / audio offload.
                     val software = tweaks.softwareVideo ?: (s.videoDecoder == "software")
-                    tweaks = tweaks.copy(step = tweaks.step + 1, softwareVideo = if (decoderFailed) !software else tweaks.softwareVideo, noTunnel = true, noOffload = true)
+                    tweaks = tweaks.copy(step = tweaks.step + 1, softwareVideo = !software, noTunnel = true, noOffload = true)
                     player?.release(); player = null; playerMode = null
                 }
                 startPlayback(index, quiet = true, keepTweaks = true)
@@ -2012,17 +1920,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun endSession() {
-        session?.let { ss ->
-            relay?.repair?.let { rp ->
-                if (rp.clockFixes > 0 || rp.streamFixes > 0) ss.action("played through damage: ${rp.clockFixes} clock jump(s), ${rp.streamFixes} stream jump(s) smoothed")
-            }
-            if (ss.startMs < 0) ss.bytesSeen = when {
-                readAhead != null -> readAhead!!.bytesArrived
-                relay != null -> relay!!.bytesStoredTotal()
-                else -> -1L
-            }
-            PlaybackLog.end(ss)
-        }
+        session?.let { PlaybackLog.end(it) }
         session = null
     }
 
@@ -2410,7 +2308,6 @@ class PlayerActivity : ComponentActivity() {
 
     private fun timeshift(seconds: Int) {
         val r = relay ?: return
-        jumpAt = android.os.SystemClock.elapsedRealtime()
         r.moveBy(seconds)
         restartFromRelay()
     }
@@ -2541,401 +2438,6 @@ class PlayerActivity : ComponentActivity() {
             .setPositiveButton("Close", null)
             .show()
     }
-
-    // ------------------------------------------------------------------ ⏩ jumping in MKV films without an index
-
-    /** This film is an MKV the player can't jump in by itself: Nova does the jumps (MkvSeek). */
-    private var noIndexMkv = false
-    private var pendingResumeMs = 0L
-    /** A resume that failed: this saved place is kept until you get past it. */
-    private var resumeKeptMs = 0L
-    private var spliceTarget = 0L
-    private var spliceJob: kotlinx.coroutines.Job? = null
-    private val spliceTask = Runnable { doSplice(spliceTarget) }
-
-    private fun looksMkv(item: PlayItem): Boolean =
-        listOf(item.url, item.saved.extension, item.downloadExt).any { it?.lowercase()?.let { s -> s == "mkv" || s.substringBefore('?').endsWith(".mkv") } == true }
-
-    private fun checkNoIndexMkv() {
-        val item = current ?: return
-        val p = player ?: return
-        if (noIndexMkv || item.isLive || item.catchup || !looksMkv(item) || p.isCurrentMediaItemSeekable) return
-        if (p.currentMediaItem?.localConfiguration?.uri?.scheme == "nova-splice") return
-        noIndexMkv = true
-        Log.i("NovaTest", "NOINDEX ${item.title}")
-        session?.action("MKV without index → Nova does the jumps")
-        // Resume: the player started at 00:00 — go to the saved place.
-        val resume = pendingResumeMs.takeIf { it > 30_000 && p.currentPosition < 15_000 }
-        pendingResumeMs = 0
-        if (resume != null) { spliceTarget = resume; doSplice(resume) }
-    }
-
-    /** ⏩ / seek bar / remote: several presses add up, then one jump. */
-    private fun requestSplice(target: Long) {
-        spliceTarget = target
-        resumeKeptMs = 0L
-        handler.removeCallbacks(spliceTask)
-        handler.postDelayed(spliceTask, 700)
-    }
-
-    private fun mkvReader(item: PlayItem, deadline: Long): MkvSeek.Reader? {
-        fun late() = System.currentTimeMillis() > deadline
-        val ra = readAhead
-        val id = item.downloadId
-        // A file on the box (a finished download, a recording, a file opened with Nova).
-        fun fileReader(open: () -> android.os.ParcelFileDescriptor?, total: Long): MkvSeek.Reader? {
-            val pfd = runCatching { open() }.getOrNull() ?: return null
-            val ch = java.io.FileInputStream(pfd.fileDescriptor).channel
-            val size = if (total > 0) total else runCatching { ch.size() }.getOrDefault(0L)
-            return object : MkvSeek.Reader {
-                override val total = size
-                override fun read(pos: Long, len: Int): ByteArray? {
-                    if (late() || pos >= size) return null
-                    val bb = java.nio.ByteBuffer.allocate(minOf(len.toLong(), size - pos).toInt())
-                    var at = pos
-                    while (bb.hasRemaining()) { val n = ch.read(bb, at); if (n <= 0) break; at += n }
-                    return bb.array().copyOf(bb.position())
-                }
-            }
-        }
-        return when {
-            item.isLocal -> {
-                val u = item.url
-                if (u.startsWith("content:")) fileReader({ contentResolver.openFileDescriptor(android.net.Uri.parse(u), "r") }, 0)
-                else {
-                    val f = java.io.File(if (u.startsWith("file:")) android.net.Uri.parse(u).path.orEmpty() else u)
-                    fileReader({ android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY) }, 0)
-                }
-            }
-            id != null -> {
-                val d = DownloadCenter.items.value.firstOrNull { it.id == id } ?: return null
-                val f = java.io.File(d.path)
-                fileReader({ android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY) }, d.totalBytes)
-            }
-            ra != null -> object : MkvSeek.Reader {
-                val handles = ReadAheadBuffer.HandleCache()
-                override val total = ra.totalBytes
-                override fun read(pos: Long, len: Int): ByteArray? {
-                    if (total <= 0) return null
-                    val out = ByteArray(minOf(len.toLong(), total - pos).toInt().coerceAtLeast(0))
-                    var got = 0
-                    while (got < out.size) {
-                        if (late()) return null
-                        val n = runCatching { ra.read(pos + got, out, got, out.size - got, handles) }.getOrElse { return null }
-                        if (n < 0) break
-                        got += n
-                    }
-                    return out.copyOf(got)
-                }
-            }
-            else -> object : MkvSeek.Reader {
-                private val client = app.http.newBuilder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
-                override val total: Long by lazy {
-                    runCatching {
-                        client.newCall(okhttp3.Request.Builder().url(item.url).header("User-Agent", app.storage.userAgent).header("Range", "bytes=0-0").build())
-                            .execute().use { r -> r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: -1L }
-                    }.getOrDefault(-1L)
-                }
-                override fun read(pos: Long, len: Int): ByteArray? {
-                    if (late()) return null
-                    return runCatching {
-                        client.newCall(okhttp3.Request.Builder().url(item.url).header("User-Agent", app.storage.userAgent)
-                            .header("Range", "bytes=$pos-${pos + len - 1}").build()).execute().use { r ->
-                            if (r.code != 206) null else r.body?.bytes()
-                        }
-                    }.getOrNull()
-                }
-            }
-        }
-    }
-
-    /** Finds the place and plays the joined stream from there. */
-    private fun doSplice(target: Long) {
-        val item = current ?: return
-        val p = player ?: return
-        // Unknown length (some files don't say): MkvSeek measures it from the end of the file.
-        val dur = p.duration.takeIf { it > 0 } ?: -1L
-        spliceJob?.cancel()
-        Toast.makeText(this, "⏩ Jumping to ${formatDuration(target)}…", Toast.LENGTH_SHORT).show()
-        val wasPlaying = p.playWhenReady
-        p.stop()
-        spliceJob = lifecycleScope.launch {
-            val deadline = System.currentTimeMillis() + 45_000
-            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching {
-                    val r = mkvReader(item, deadline) ?: return@runCatching null
-                    MkvSeek.locate(r, target, dur)?.let { it to r.total }
-                }.getOrNull()
-            }
-            vod.pendingSeek = null
-            if (current !== item) return@launch
-            if (result == null) {
-                Log.i("NovaTest", "SPLICE ${item.title} target=$target failed")
-                Toast.makeText(this@PlayerActivity, "Couldn't jump in this film here — the server doesn't allow it. Try ↗ External player, or ⬇ Download it.", Toast.LENGTH_LONG).show()
-                p.prepare(); p.playWhenReady = wasPlaying
-                return@launch
-            }
-            val (found, total) = result
-            val uri = MkvSeek.register(MkvSeek.Splice(item.url, found.header, found.clusterOffset, total))
-            jumpAt = android.os.SystemClock.elapsedRealtime()
-            p.setMediaItem(buildMediaItem(item).buildUpon().setUri(uri).build())
-            p.prepare()
-            p.playWhenReady = true
-            Log.i("NovaTest", "SPLICE ${item.title} target=$target landed=${found.clusterMs}")
-            session?.action("jump to ${formatDuration(target)} → ${formatDuration(found.clusterMs)}")
-            handler.postDelayed({ if (current === item) Log.i("NovaTest", "POSITION ${item.title} ${player?.currentPosition}") }, 5000)
-        }
-    }
-
-
-    // ------------------------------------------------------------------ "isn't starting" choices (fixes 1, 2, 5)
-
-    /** The film / channel the 12 s / 10 s check is for (a quiet retry keeps it). */
-    private var startCheckKey = ""
-
-    /** Did anything at all arrive from the server for the current video? */
-    private fun dataArrived(): Boolean {
-        readAhead?.let { return it.bytesArrived > 0 }
-        val p = player ?: return false
-        return p.totalBufferedDuration > 0
-    }
-
-    private val noDataTask = Runnable {
-        val item = current ?: return@Runnable
-        if (item.key != startCheckKey || item.isLive || everReady || choiceOpen || otherAppOpen || dataArrived()) return@Runnable
-        offerFilmBlocked(item, refused = false)
-    }
-
-    private val neverStartTask = Runnable {
-        val item = current ?: return@Runnable
-        if (item.key != startCheckKey || !item.isLive || everReady || neverStartAsked || choiceOpen || otherAppOpen || similarOpen) return@Runnable
-        offerOtherVersions(item)
-    }
-
-    /** ⛔ A film's server sends nothing (or refuses): the same film on your other account, the VPN, keep waiting, close. */
-    private fun offerFilmBlocked(item: PlayItem, refused: Boolean) {
-        if (filmBlockedAsked || current !== item) return
-        filmBlockedAsked = true
-        val waited = session?.let { (System.currentTimeMillis() - it.startedAt) / 1000 } ?: 12
-        Log.i("NovaTest", "NODATA ${item.title}: ${if (refused) "refused" else "nothing in $waited s"}")
-        session?.action(if (refused) "server refused the connection" else "server didn't answer: 0 bytes in $waited s")
-        lifecycleScope.launch {
-            val other = if (app.storage.accounts.size > 1) runCatching {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { FilmMatch.sameFilmElsewhere(app, item) }
-            }.getOrNull() else null
-            if (current !== item || everReady || choiceOpen) return@launch
-            val choices = mutableListOf<Choice>()
-            other?.let { o ->
-                val acc = app.storage.accounts.firstOrNull { it.id == o.saved.accountId }?.name ?: "your other account"
-                choices += Choice("▶ Same film on $acc", "found: ${o.title}", "Same film on $acc") {
-                    session?.action("you chose: same film on $acc")
-                    playOtherFilm(item, o)
-                }
-            }
-            choices += Choice("🔒 Turn on my VPN", "opens your VPN app, then tries again", "Opening your VPN app") {
-                session?.action("you chose: VPN")
-                retryAfterVpn = true
-                Vpn.pickApp(this@PlayerActivity)
-            }
-            choices += Choice("⏳ Keep waiting", "", "") { session?.action("you chose: keep waiting") }
-            choices += Choice("✕ Close", "", "") { session?.action("you chose: close"); finish() }
-            val sub = (if (refused) "The film server refused the connection. In the UAE this usually means the address is blocked."
-                else "Nova got no data at all in $waited s. In the UAE this usually means the address is blocked.") +
-                (if (app.storage.getPosition(item.key) > 0) " Your saved place is kept." else "")
-            Log.i("NovaTest", "CHOICE film ${item.title}: ${choices.joinToString(" | ") { it.label }}")
-            showChoice(if (refused) "⛔ The film server refused the connection" else "⛔ The film server isn't answering", sub, choices, forStart = true) {
-                session?.action("you chose: keep waiting")
-            }
-        }
-    }
-
-    /** The same film on your other account: plays it there, starting at your saved place. */
-    private fun playOtherFilm(from: PlayItem, other: PlayItem) {
-        val index = PlaybackQueue.index
-        if (PlaybackQueue.items.getOrNull(index) !== from) return
-        val at = app.storage.getPosition(from.key)
-        if (at > 0 && app.storage.getPosition(other.key) <= 0) app.storage.setPosition(other.key, at)
-        session?.action("other account → ${other.title}")
-        PlaybackQueue.items = PlaybackQueue.items.toMutableList().also { it[index] = other }
-        startPlayback(index, quiet = false, keepTweaks = false)
-    }
-
-    /** 📺 A channel with no picture after 10 s: the same channel in another quality, or on your other server. */
-    private fun offerOtherVersions(item: PlayItem) {
-        neverStartAsked = true
-        lifecycleScope.launch {
-            val found = runCatching {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.similarOnSameServer(app, item) }
-            }.getOrNull()?.found.orEmpty().filter { it.item.saved.key != item.saved.key }
-            val other = if (app.storage.accounts.size > 1) runCatching {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.sameChannelElsewhere(app, item) }
-            }.getOrNull() else null
-            if (current !== item || everReady || choiceOpen || otherAppOpen) return@launch
-            val server = app.storage.accounts.firstOrNull { it.id == item.saved.accountId }?.name ?: "this server"
-            fun state(p: PlayItem) = checkKey(p)?.let { StreamCheck.status(it).state }
-            // Versions that worked before first, ones that failed last.
-            val ranked = found.sortedBy { when (state(it.item)) { StreamCheck.State.OK -> 0; StreamCheck.State.BAD, StreamCheck.State.DEVICE -> 2; else -> 1 } }
-            val choices = mutableListOf<Choice>()
-            ranked.take(2).forEach { sim ->
-                val worked = if (state(sim.item) == StreamCheck.State.OK) " · worked before" else ""
-                choices += Choice("▶ ${sim.item.title}", "$server$worked", sim.item.title) {
-                    session?.action("you chose: ${sim.item.title}")
-                    playSimilar(item, sim)
-                }
-            }
-            other?.let { o ->
-                val acc = app.storage.accounts.firstOrNull { it.id == o.saved.accountId }?.name ?: "your other server"
-                choices += Choice("▶ ${o.title}", acc, "${o.title} on $acc") {
-                    session?.action("you chose: ${o.title} on $acc")
-                    playOther(item, o)
-                }
-            }
-            if (choices.isEmpty()) { session?.action("no picture after 10 s · no other version found"); return@launch }
-            choices += Choice("⏳ Keep trying ${item.title}", "", "") { session?.action("you chose: keep trying") }
-            choices += Choice("✕ Back to the list", "", "") { session?.action("you chose: back to the list"); showChannelPanel() }
-            val before = checkKey(item)?.let { StreamCheck.status(it).state == StreamCheck.State.BAD } == true
-            Log.i("NovaTest", "CHOICE channel ${item.title}: ${choices.joinToString(" | ") { it.label }}")
-            session?.action("no picture after 10 s → offered other versions")
-            showChoice("📺 ${item.title} isn't starting", "No picture after 10 s." + (if (before) " This channel also failed before." else ""), choices, forStart = true) {
-                session?.action("you chose: keep trying")
-            }
-        }
-    }
-
-    private class Choice(val label: String, val hint: String, val autoText: String, val run: () -> Unit)
-
-    private var choicePanel: LinearLayout? = null
-    private var choiceTask: Runnable? = null
-    private var choiceCountdown: TextView? = null
-    /** The popup is about a video that hasn't started: it closes by itself once the picture comes. */
-    private var choiceForStart = false
-    /** Back on the popup. */
-    private var choiceBack: (() -> Unit)? = null
-    private val choiceOpen: Boolean get() = choicePanel?.visibility == View.VISIBLE
-
-    /** A popup of choices, the first one focused and run by itself after 10 s (any key stops the countdown). */
-    private fun showChoice(title: String, sub: String, choices: List<Choice>, forStart: Boolean, auto: Boolean = true, onBack: () -> Unit) {
-        playerView.hideController()
-        if (::vod.isInitialized && vod.controlsVisible && !vod.pinned) vod.hide()
-        val panel = choicePanel ?: LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(18), dp(22), dp(18))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat(); setColor(0xF21B2130.toInt()); setStroke(dp(2), 0xFF3A4150.toInt())
-            }
-            layoutParams = FrameLayout.LayoutParams(
-                (resources.displayMetrics.widthPixels * 0.62f).toInt().coerceIn(dp(300), dp(640)),
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
-            )
-            elevation = dp(8).toFloat()
-            (playerView.parent as ViewGroup).addView(this)
-            choicePanel = this
-        }
-        panel.removeAllViews()
-        panel.addView(TextView(this).apply {
-            text = title; setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f); setTypeface(typeface, Typeface.BOLD)
-        })
-        panel.addView(TextView(this).apply {
-            text = sub; setTextColor(0xFFB4BCCB.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setPadding(0, dp(6), 0, dp(12))
-        })
-        fun bg(color: Int, stroke: Int) = GradientDrawable().apply {
-            cornerRadius = dp(12).toFloat(); setColor(color); if (stroke != 0) setStroke(dp(3), stroke)
-        }
-        var first: View? = null
-        choices.forEachIndexed { i, c ->
-            val sb = android.text.SpannableStringBuilder(c.label)
-            if (c.hint.isNotBlank()) {
-                val s0 = sb.length
-                sb.append("    ").append(c.hint)
-                sb.setSpan(android.text.style.RelativeSizeSpan(0.82f), s0, sb.length, 0)
-                sb.setSpan(android.text.style.StyleSpan(Typeface.NORMAL), s0, sb.length, 0)
-            }
-            val btn = TextView(this).apply {
-                text = sb; setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); setTypeface(typeface, Typeface.BOLD)
-                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(dp(14), dp(11), dp(14), dp(11))
-                isFocusable = true; isClickable = true
-                background = StateListDrawable().apply {
-                    addState(intArrayOf(android.R.attr.state_focused), bg(0xFF3DDC84.toInt(), 0xFFBFF5D6.toInt()))
-                    addState(intArrayOf(android.R.attr.state_pressed), bg(0xFF3DDC84.toInt(), 0))
-                    addState(intArrayOf(), bg(0xFF2A3346.toInt(), 0))
-                }
-                val colors = android.content.res.ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(0xFF06240F.toInt(), Color.WHITE),
-                )
-                setTextColor(colors)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) }
-                setOnClickListener { closeChoice(); c.run() }
-                setOnTouchListener { _, _ -> stopChoiceCountdown(); false }
-            }
-            panel.addView(btn)
-            if (i == 0) first = btn
-        }
-        val countdown = TextView(this).apply {
-            setTextColor(0xFFFFD27A.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setPadding(0, dp(10), 0, 0)
-        }
-        panel.addView(countdown)
-        choiceCountdown = countdown
-        choiceForStart = forStart
-        choiceBack = onBack
-        panel.visibility = View.VISIBLE
-        first?.requestFocus()
-        choiceTask?.let { handler.removeCallbacks(it) }
-        if (!auto) { countdown.text = "Choose below — Back keeps this one"; return }
-        val autoChoice = choices.first()
-        var left = 10
-        val task = object : Runnable {
-            override fun run() {
-                if (!choiceOpen) return
-                if (left <= 0) { Log.i("NovaTest", "CHOICE auto: ${autoChoice.label}"); closeChoice(); autoChoice.run(); return }
-                countdown.text = (autoChoice.autoText.ifBlank { autoChoice.label }) + " in $left s…   (press any key to choose)"
-                left--
-                handler.postDelayed(this, 1000)
-            }
-        }
-        choiceTask = task
-        task.run()
-    }
-
-    private fun stopChoiceCountdown() {
-        val t = choiceTask ?: return
-        handler.removeCallbacks(t)
-        choiceTask = null
-        choiceCountdown?.text = "Choose below — Back keeps waiting"
-    }
-
-    private fun closeChoice() {
-        choiceTask?.let { handler.removeCallbacks(it) }
-        choiceTask = null
-        choicePanel?.visibility = View.GONE
-        if (::keySink.isInitialized) keySink.requestFocus()
-    }
-
-    // ------------------------------------------------------------------ ↻ quiet reconnect note (fix 4)
-
-    private var quietChip: TextView? = null
-    private val hideQuietChip = Runnable { quietChip?.visibility = View.GONE }
-
-    /** "↻ Reconnecting quietly · 74 s stored" at the top right for a few seconds; the picture is not touched. */
-    private fun showQuietChip(storedSec: Int) {
-        val chip = quietChip ?: TextView(this).apply {
-            setTextColor(0xFFFFD27A.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setTypeface(typeface, Typeface.BOLD)
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(0xA6000000.toInt()) }
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
-                .apply { setMargins(dp(20), dp(60), dp(20), dp(20)) }
-            (playerView.parent as ViewGroup).addView(this)
-            quietChip = this
-        }
-        Log.i("NovaTest", "QUIET reconnect ${current?.title}: $storedSec s stored")
-        chip.text = "↻ Reconnecting quietly · $storedSec s stored"
-        chip.visibility = View.VISIBLE
-        chip.bringToFront()
-        handler.removeCallbacks(hideQuietChip)
-        handler.postDelayed(hideQuietChip, 6000)
-    }
-
 
     // ------------------------------------------------------------------ 🔊 Sound sync (Bluetooth earbuds)
 
@@ -3117,214 +2619,6 @@ class PlayerActivity : ComponentActivity() {
         dialog.window?.setDimAmount(0.15f)
     }
 
-
-    // ------------------------------------------------------------------ ⬇ speed on screen, 🪶 lighter version, film damage
-
-    private var speedBadge: TextView? = null
-    private var badgeLogged = ""
-    /** Set when this channel's picture froze for the full (build 19) time: quicker repairs from then on. */
-    private var damageSeen = false
-    private val stallTimes = ArrayDeque<Long>()
-    private var lighterAsked = false
-    private var lighterFrom: PlayItem? = null
-    private var lighterKey = ""
-    private var lighterSince = 0L
-    private var backOffered = false
-    private var filmRate = 0.0
-    private var filmLastBytes = -1L
-    private var filmLastAt = 0L
-    private var damageFixes = 0
-    private var damageAtMs = -1L
-
-    /** ⬇ Speed and what the video needs (live), or download speed and how far ahead (films): top-right corner. */
-    private fun updateSpeedBadge() {
-        val item = current
-        val p = player
-        val mode = PlayerPrefs.speedBadge(this)
-        val badge = speedBadge ?: TextView(this).apply {
-            // Only the text (no box): slightly see-through, with a thin dark outline so it stays readable on bright pictures.
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f); setTypeface(typeface, Typeface.BOLD)
-            setPadding(dp(4), dp(2), dp(4), dp(2))
-            setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat() / 2f, 0xE6000000.toInt())
-            alpha = 0.9f
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
-                .apply { setMargins(dp(16), dp(14), dp(16), dp(16)) }
-            (playerView.parent as ViewGroup).addView(this)
-            speedBadge = this
-        }
-        val buttonsShown = (::vod.isInitialized && vod.controlsVisible) || timeView.visibility == View.VISIBLE || playerView.isControllerFullyVisible
-        if (item == null || p == null || mode == "off" || (mode == "buttons" && !buttonsShown) || item.isLocal || pictureHidden()) {
-            badge.visibility = View.GONE; return
-        }
-        val green = 0xFF3DDC84.toInt(); val yellow = 0xFFFFD27A.toInt(); val red = 0xFFFF8A7A.toInt()
-        val now = android.os.SystemClock.elapsedRealtime()
-        val r = relay
-        val ra = readAhead
-        var text: String
-        var color: Int
-        if (item.isLive && r != null) {
-            val stored = behindLiveSeconds() ?: 0
-            val ratio = if (mediaBps > 0 && arrivalBps > 0) arrivalBps / mediaBps else 0.0
-            text = when {
-                mediaBps > 0 && arrivalBps > 0 -> "⬇ ${mbit(arrivalBps)} · needs ${mbit(mediaBps)} Mbit/s"
-                arrivalBps > 0 -> "⬇ ${mbit(arrivalBps)} Mbit/s"
-                else -> "⬇ waiting for the provider…"
-            } + "  · $stored s stored"
-            color = when {
-                arrivalBps <= 0 -> red
-                mediaBps <= 0 || ratio >= 1.15 || (ratio >= 0.95 && stored >= 20) -> green
-                ratio >= 0.9 -> yellow
-                else -> red
-            }
-        } else if (ra != null) {
-            // Films: download speed (2 s average) and how far ahead the film is already downloaded.
-            val got = ra.bytesArrived
-            if (filmLastBytes >= 0 && now > filmLastAt) {
-                val inst = (got - filmLastBytes) * 1000.0 / (now - filmLastAt)
-                filmRate = if (filmRate <= 0) inst else filmRate * 0.6 + inst * 0.4
-            }
-            filmLastBytes = got; filmLastAt = now
-            val total = ra.totalBytes
-            val dur = p.duration
-            val aheadSec = if (total > 0 && dur > 0) {
-                val bytesPerSec = total * 1000.0 / dur
-                val at = (total * (p.currentPosition.toDouble() / dur)).toLong().coerceAtLeast(0L)
-                (ra.contiguousFrom(at) / bytesPerSec).toInt()
-            } else (p.totalBufferedDuration / 1000).toInt()
-            val complete = total > 0 && dur > 0 && p.currentPosition + aheadSec * 1000L >= dur - 2000
-            val ahead = if (complete) "✓ downloaded to the end" else if (aheadSec >= 120) "${aheadSec / 60} min ahead" else "$aheadSec s ahead"
-            text = (if (filmRate > 1000) "⬇ ${mbit(filmRate)} Mbit/s" else "⬇ —") + "  · $ahead"
-            color = when { complete || aheadSec >= 60 -> green; aheadSec >= 15 -> yellow; else -> red }
-        } else {
-            val downloading = item.downloadId?.let { id -> com.nova.iptv.download.DownloadCenter.items.value.firstOrNull { it.id == id } }
-            val ahead = (p.totalBufferedDuration / 1000).toInt()
-            text = (downloading?.speed?.takeIf { it > 0 }?.let { "⬇ ${mbit(it.toDouble())} Mbit/s  · " } ?: "") + "$ahead s ahead"
-            color = when { ahead >= 30 -> green; ahead >= 8 -> yellow; else -> red }
-        }
-        val shown = "● $text"
-        if (badge.text.toString() != shown) badge.text = shown
-        if (badge.currentTextColor != color) badge.setTextColor(color)
-        if (badgeLogged != item.key && !text.contains("waiting")) { badgeLogged = item.key; Log.i("NovaTest", "SPEED ${item.title}: $text") }
-        // Below the clock when the clock sits in the top-right corner.
-        val lp = badge.layoutParams as FrameLayout.LayoutParams
-        val clockTop = ::clockView.isInitialized && clockView.visibility == View.VISIBLE &&
-            ((clockView.layoutParams as? FrameLayout.LayoutParams)?.gravity ?: 0) == (Gravity.TOP or Gravity.END)
-        val top = if (clockTop) dp(18) + clockView.height else dp(14)
-        if (lp.topMargin != top) { lp.topMargin = top; badge.layoutParams = lp }
-        if (badge.visibility != View.VISIBLE) { badge.visibility = View.VISIBLE; badge.bringToFront() }
-    }
-
-    /** A channel that really showed damage this time (its clock had to be repaired, or its picture froze for long). */
-    private fun channelDamaged(): Boolean = (relay?.repair?.clockFixes ?: 0) > 0 || damageSeen
-
-    private fun pictureHidden(): Boolean = ::hideCover.isInitialized && hideCover.visibility == View.VISIBLE
-
-    /** 🪶 Stalls again and again on a line with no spare speed: the same channel in a lighter version. */
-    private fun lighterTick() {
-        val item = current ?: return
-        if (!item.isLive) return
-        val now = android.os.SystemClock.elapsedRealtime()
-        // Back to the better version after 20 calm minutes on the lighter one (asked, never automatic).
-        val from = lighterFrom
-        if (from != null) {
-            if (item.key != lighterKey) { lighterFrom = null }
-            else if (!backOffered && now - lighterSince > 20 * 60_000L && stallTimes.isEmpty() && !choiceOpen && !otherAppOpen) {
-                backOffered = true
-                showChoice("↑ Back to the better quality?", "No stalls for 20 min on the lighter version.", listOf(
-                    Choice("▶ Back to ${from.title}", "", "") { session?.action("you chose: back to ${from.title}"); lighterFrom = null; playOther(item, from) },
-                    Choice("Stay on this one", "", "") { session?.action("you chose: stay on the lighter version") },
-                ), forStart = false, auto = false) {}
-            }
-        }
-        if (!everReady || lighterAsked || choiceOpen || otherAppOpen || similarOpen) return
-        val mode = PlayerPrefs.lighter(this)
-        if (mode == "never") return
-        while (stallTimes.isNotEmpty() && now - stallTimes.first() > 600_000) stallTimes.removeFirst()
-        if (stallTimes.size < 2) return
-        // Stalls with spare speed on the line are not the line's fault: no lighter version for those.
-        if (mediaBps > 0 && arrivalBps >= mediaBps * 1.15) return
-        lighterAsked = true
-        offerLighter(item, auto = mode == "auto")
-    }
-
-    private fun offerLighter(item: PlayItem, auto: Boolean) {
-        val stalls = stallTimes.size
-        val got = arrivalBps; val need = mediaBps
-        lifecycleScope.launch {
-            val here = runCatching {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.similarOnSameServer(app, item) }
-            }.getOrNull()?.found.orEmpty().filter { it.item.saved.key != item.saved.key }
-            val elsewhere = if (app.storage.accounts.size > 1) runCatching {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { LiveCatalog.sameChannelElsewhere(app, item) }
-            }.getOrNull() else null
-            if (current !== item) return@launch
-            val r0 = PlayerPrefs.qualityRank(item.title)
-            fun bad(p: PlayItem) = checkKey(p)?.let { StreamCheck.status(it).state == StreamCheck.State.BAD } == true
-            // The closest lighter version (best quality among the lighter ones), this server first.
-            val sim = here.filter { PlayerPrefs.qualityRank(it.item.title) < r0 && !bad(it.item) }
-                .maxByOrNull { PlayerPrefs.qualityRank(it.item.title) }
-            val other = elsewhere?.takeIf { PlayerPrefs.qualityRank(it.title) < r0 && !bad(it) }
-            if (sim == null && other == null) {
-                Log.i("NovaTest", "LIGHTER ${item.title}: none found")
-                session?.action("line too tight ($stalls stalls in 10 min) · no lighter version found")
-                return@launch
-            }
-            val target = sim?.item ?: other!!
-            val acc = app.storage.accounts.firstOrNull { it.id == target.saved.accountId }?.name.orEmpty()
-            Log.i("NovaTest", "LIGHTER ${item.title}: offer ${target.title}")
-            session?.action("line too tight ($stalls stalls in 10 min) → offered ${target.title}")
-            val go = {
-                session?.action("lighter version → ${target.title}")
-                logHealth(item, "line too tight ($stalls stalls in 10 min)", "lighter version “${target.title}”")
-                if (sim != null) playSimilar(item, sim) else playOther(item, target)
-                lighterFrom = item; lighterKey = target.key; lighterSince = android.os.SystemClock.elapsedRealtime(); backOffered = false
-            }
-            val speed = if (got > 0 && need > 0) " · the line gives ${mbit(got)}, the channel needs ${mbit(need)} Mbit/s" else ""
-            showChoice(
-                "🪶 Line too tight for this quality",
-                "$stalls stalls in 10 min$speed.\nA lighter version plays smoothly at lower quality.",
-                listOf(
-                    Choice("▶ ${target.title}", if (sim == null && acc.isNotBlank()) acc else "lighter", "Switching to ${target.title}") { go() },
-                    Choice("Keep this one", "", "") { session?.action("you chose: keep this quality") },
-                ),
-                forStart = false, auto = auto,
-            ) { session?.action("you chose: keep this quality") }
-        }
-    }
-
-    /**
-     * Films: a damaged part (broken data / a frame the decoder can't read) — first the part is downloaded again from
-     * the server and played at the same place; only if it is still broken, Nova steps over it by 1 s, then 3 s.
-     */
-    private fun filmDamage(item: PlayItem, error: PlaybackException?, code: Int?): Boolean {
-        val p = player ?: return false
-        val malformed = code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
-        val videoBroken = code == PlaybackException.ERROR_CODE_DECODING_FAILED &&
-            (error as? ExoPlaybackException)?.let { it.type == ExoPlaybackException.TYPE_RENDERER && MimeTypes.getTrackType(it.rendererFormat?.sampleMimeType) == C.TRACK_TYPE_VIDEO } == true
-        if (!malformed && !videoBroken) return false
-        val pos = p.currentPosition.coerceAtLeast(0L)
-        if (pos < 5_000) return false
-        // A new damaged spot (more than a minute away from the last one): start again from the first fix.
-        if (damageAtMs < 0 || kotlin.math.abs(pos - damageAtMs) > 60_000) { damageFixes = 0; damageAtMs = pos }
-        damageFixes++
-        val ra = readAhead
-        val action = when {
-            damageFixes == 1 && ra != null && ra.rangeSupported && ra.totalBytes > 0 && p.duration > 0 -> {
-                val at = (ra.totalBytes * (pos.toDouble() / p.duration)).toLong()
-                val n = ra.refetchAround(at)
-                restartAt(item, pos)
-                "damaged part at ${formatDuration(pos)} → downloaded again ($n MB), same place"
-            }
-            damageFixes <= 2 -> { restartAt(item, pos + 1_000); "damaged part at ${formatDuration(pos)} → stepped 1 s past it" }
-            damageFixes == 3 -> { restartAt(item, pos + 3_000); "damaged part at ${formatDuration(pos)} → stepped 3 s past it" }
-            else -> return false
-        }
-        Log.i("NovaTest", "FILMDAMAGE ${item.title}: $action")
-        session?.action(action)
-        logHealth(item, "damaged part ($lastErrorName)", action.substringAfter("→ "))
-        return true
-    }
-
     private var vpnAsked = false
 
     /** 🔒 The film's server is blocked on this line: open a VPN app, then ⟳ Retry. */
@@ -3453,7 +2747,6 @@ class PlayerActivity : ComponentActivity() {
         val duration = p.duration
         val pos = p.currentPosition
         if (duration <= 0) return
-        if (resumeKeptMs > 0 && pos < resumeKeptMs) return
         if (pos > 10_000 && pos < duration - 60_000) app.storage.setPosition(item.key, pos)
         else if (pos >= duration - 60_000) app.storage.setPosition(item.key, 0)
     }
@@ -4129,11 +3422,7 @@ class PlayerActivity : ComponentActivity() {
                     return
                 }
                 val allowed = if (item.isLive) limit else limit * 2
-                // Live: stuck although plenty is stored on disk ahead (more than the cushion): damaged feed — act after 4 s.
-                val rr = relay
-                val storedAhead = if (rr != null && mediaBps > 0) rr.bytesAhead() / mediaBps else 0.0
-                val damaged = item.isLive && everReady && channelDamaged() && storedAhead >= s.cushionSeconds + 5 && now - wdBufferingSince > 4000
-                if (damaged || now - wdBufferingSince > allowed) watchdogAct(item, "stuck loading for ${(now - wdBufferingSince) / 1000} s" + if (damaged) " (${storedAhead.toInt()} s stored ahead)" else "")
+                if (now - wdBufferingSince > allowed) watchdogAct(item, "stuck loading for ${(now - wdBufferingSince) / 1000} s")
                 return
             }
             Player.STATE_READY -> wdBufferingSince = 0L
@@ -4143,18 +3432,13 @@ class PlayerActivity : ComponentActivity() {
         val pos = p.currentPosition
         if (pos != wdLastPos) { wdLastPos = pos; wdPosSince = now }
         else if (now - wdPosSince > maxOf(5000L, limit * 3 / 4)) { watchdogAct(item, "clock frozen for ${(now - wdPosSince) / 1000} s"); return }
-        // Sound still moving (tracked every tick): a picture frozen while the sound plays is damaged video.
-        p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; if (n != wdAudioCount) { wdAudioCount = n; wdAudioMovedAt = now } }
-        val soundMoving = now - wdAudioMovedAt < 1500
         // New video frames.
         val counters = p.videoDecoderCounters
         if (counters != null && p.videoFormat != null) {
             counters.ensureUpdated()
             val frames = counters.renderedOutputBufferCount
             if (frames != wdLastFrames) { wdLastFrames = frames; wdFramesSince = now }
-            else if ((item.isLive && relay != null && channelDamaged() && soundMoving && frames > 50 && readyAt > 0 && now - readyAt > 15_000 && now - wdFramesSince > 3000) ||
-                now - wdFramesSince > maxOf(5000L, limit * 5 / 8)
-            ) {
+            else if (now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) {
                 val sound = p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; val moved = n != wdLastAudio; wdLastAudio = n; moved } ?: false
                 val ahead = relay?.let { r -> if (mediaBps > 0) " · ${(r.bytesAhead() / mediaBps).toInt()} s stored ahead" else "" } ?: ""
                 watchdogAct(item, "picture frozen for ${(now - wdFramesSince) / 1000} s" + (if (sound) " (sound kept playing)" else "") + ahead)
@@ -4186,10 +3470,6 @@ class PlayerActivity : ComponentActivity() {
     private val wdLiveFixes = ArrayDeque<Long>()
     private var repairBehindBefore: Int? = null
     private var wdLastAudio = -1
-    private var wdAudioCount = -1
-    private var wdAudioMovedAt = 0L
-    /** When the picture last started (quick damage checks only once it has played normally for a while). */
-    private var readyAt = 0L
     private var repairNote = ""
 
     private fun liveOnlyFix(item: PlayItem, problem: String) {
@@ -4200,21 +3480,8 @@ class PlayerActivity : ComponentActivity() {
             r != null && quietFor >= 30_000 -> {
                 r.reconnect()
                 notArrivingSince = 0L
-                val stored = behindLiveSeconds() ?: 0
-                val p = player
-                if (p != null && p.playbackState == Player.STATE_READY && p.isPlaying && stored >= 20) {
-                    // Enough stored video: the picture is not touched, the provider is reconnected in the background.
-                    showQuietChip(stored)
-                    "reconnected quietly (picture untouched, $stored s stored)"
-                } else if (p != null && p.playbackState == Player.STATE_BUFFERING && stored < 3) {
-                    // Nothing stored to play: restarting the picture can't help (it caused minutes of black before).
-                    // The player simply waits and goes on by itself ~3–6 s after the provider sends again.
-                    showQuietChip(stored)
-                    "reconnected quietly (waiting for the provider, no restart)"
-                } else {
-                    restartOnStoredVideo(item, newPlayer = false)
-                    "reconnected to the provider (stored video kept)"
-                }
+                restartOnStoredVideo(item, newPlayer = false)
+                "reconnected to the provider (stored video kept)"
             }
             // Nothing new stored to jump to: let the stream come back by itself (no needless restarts).
             r != null && notArrivingSince > 0 -> null
@@ -4229,19 +3496,7 @@ class PlayerActivity : ComponentActivity() {
             else -> {
                 while (wdLiveFixes.isNotEmpty() && now - wdLiveFixes.first() > 120_000) wdLiveFixes.removeFirst()
                 wdLiveFixes.addLast(now)
-                // Damaged video (frozen picture / stuck) with video stored ahead: jump just past the damage (2 s, then 3 s,
-                // then 5 s) instead of restarting on the same damaged part.
-                if (problem.startsWith("picture frozen")) damageSeen = true
-                val damage = channelDamaged() && (problem.startsWith("picture frozen") || problem.startsWith("stuck loading")) &&
-                    r != null && mediaBps > 0 && r.bytesAhead() / mediaBps >= 5
                 when {
-                    damage && wdLiveFixes.size <= 4 -> {
-                        val skip = when (wdLiveFixes.size) { 1 -> 2; 2 -> 3; else -> 5 }
-                        r!!.moveBy(skip)
-                        Log.i("NovaTest", "DAMAGE ${item.title}: skipped $skip s ($problem)")
-                        restartOnStoredVideo(item, newPlayer = wdLiveFixes.size >= 3)
-                        "skipped damaged part ($skip s ahead, cushion kept)"
-                    }
                     r != null && wdLiveFixes.size == 1 -> { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
                     r != null && wdLiveFixes.size == 2 -> { r.moveBy(10); restartOnStoredVideo(item, newPlayer = true); "skipped 10 s, new player (cushion kept)" }
                     // Plenty stored ahead (30 s or more): never throw it away — restart again a bit further on.
@@ -4254,7 +3509,7 @@ class PlayerActivity : ComponentActivity() {
         if (action == null) { Log.i("NovaTest", "WD ${item.title}: $problem -> waiting (quiet ${quietFor / 1000} s)"); return }
         wdGraceUntil = now + 20_000
         logHealth(item, problem, action)
-        if (app.storage.watchdogNotes && !action.startsWith("reconnected quietly")) Toast.makeText(this, "⟳ ${action.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
+        if (app.storage.watchdogNotes) Toast.makeText(this, "⟳ ${action.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
     }
 
     /** Is video still coming in from the provider (at least a fifth of what the channel needs)? */
@@ -4356,7 +3611,6 @@ class PlayerActivity : ComponentActivity() {
         val p = player
         val restart = p == null || p.playbackState != Player.STATE_READY || problem.contains("frozen")
         if (restart) restartOnStoredVideo(item, newPlayer = false)
-        else if (providerQuiet) showQuietChip(behindLiveSeconds() ?: 0)
         return when {
             providerQuiet && restart -> "reconnected to the provider and restarted the player (stored video kept)"
             providerQuiet -> "reconnected to the provider (stored video kept)"
@@ -4623,7 +3877,7 @@ class PlayerActivity : ComponentActivity() {
     private fun handleBack(item: PlayItem?) {
         when {
             item?.isLive == true && playerView.isControllerFullyVisible -> playerView.hideController()
-            item != null && !item.isLive && vod.controlsVisible && !vod.pinned -> { vod.hide(); keySink.requestFocus() }
+            item != null && !item.isLive && vod.controlsVisible -> { vod.hide(); keySink.requestFocus() }
             item?.isLive == true && app.storage.doubleBackLive -> {
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000) finish()
@@ -4658,17 +3912,6 @@ class PlayerActivity : ComponentActivity() {
             armSimilarClose(false) // you are choosing: it no longer closes by itself
             if (code == KeyEvent.KEYCODE_BACK) {
                 if (down) { swallowUp += code; closeSimilar() }
-                return true
-            }
-            return super.dispatchKeyEvent(event)
-        }
-
-        // Choice popup (film server not answering / channel not starting): arrows / OK choose, any key stops
-        // the countdown, Back = keep waiting.
-        if (choiceOpen) {
-            if (down && code != KeyEvent.KEYCODE_BACK) stopChoiceCountdown()
-            if (code == KeyEvent.KEYCODE_BACK) {
-                if (down) { swallowUp += code; choiceBack?.invoke(); closeChoice() }
                 return true
             }
             return super.dispatchKeyEvent(event)
@@ -4894,15 +4137,6 @@ class PlayerActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemBars()
-        if (retryAfterVpn) {
-            retryAfterVpn = false
-            current?.let { c ->
-                session?.action("back from the VPN app (VPN ${if (Vpn.isActive(this)) "on" else "off"}) → tried again")
-                vpnAsked = false; retryCount = 0
-                handler.postDelayed({ if (current === c) startPlayback(PlaybackQueue.index, quiet = false, keepTweaks = false) }, 800)
-                return
-            }
-        }
         val p = player ?: return
         // With the memory buffer, live TV jumps back to live after a pause.
         // With the disk buffer it continues where you paused (timeshift).

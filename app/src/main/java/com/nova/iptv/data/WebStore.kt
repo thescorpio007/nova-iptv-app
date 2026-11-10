@@ -80,15 +80,12 @@ object WebStore {
     /** ▶ Smart play for player buttons: "off", "ask" or "auto". */
     val smartPlay = MutableStateFlow("ask")
     fun setSmartPlay(v: String) { smartPlay.value = v; save() }
-    /** 🎬 When a page's video starts playing: "note" (▶ Play in Nova / ⬇ Download note), "play" (Nova's player at once) or "off". */
-    val onVideoPlay = MutableStateFlow("note")
-    fun setOnVideoPlay(v: String) { onVideoPlay.value = v; save() }
 
     /** ↺ Reset: Nova's defaults; [all] also clears bookmarks, own filter lists and own rules. */
     fun reset(all: Boolean) {
         adLevel.value = "maximum"; kidsMode.value = "adult"; flags.value = LinkedHashMap(FLAG_DEFAULTS)
         findVideos.value = true; startPage.value = "bookmarks"; allowSites.value = emptySet(); hideOffSites.value = emptySet()
-        newTab.value = "ask"; smartPlay.value = "ask"; onVideoPlay.value = "note"; badHosts.clear()
+        newTab.value = "ask"; smartPlay.value = "ask"; badHosts.clear()
         if (all) bookmarks.value = emptyList()
         runCatching { FilterLists.reset(all) }
         save()
@@ -138,7 +135,6 @@ object WebStore {
         hideOffSites.value = prefs.getStringSet("hide_off_sites", emptySet())?.toSet() ?: emptySet()
         newTab.value = prefs.getString("new_tab", "ask") ?: "ask"
         smartPlay.value = prefs.getString("smart_play", "ask") ?: "ask"
-        onVideoPlay.value = prefs.getString("on_video_play", "note") ?: "note"
     }
 
     private fun save() {
@@ -152,7 +148,6 @@ object WebStore {
             .putString("kids_mode", kidsMode.value)
             .putString("new_tab", newTab.value)
             .putString("smart_play", smartPlay.value)
-            .putString("on_video_play", onVideoPlay.value)
             .apply { flags.value.forEach { (k, v) -> putBoolean("f_$k", v) } }
             .putBoolean("has_data", true)
             .apply()
@@ -208,7 +203,6 @@ object WebStore {
         .put("kidsMode", kidsMode.value)
         .put("newTab", newTab.value)
         .put("smartPlay", smartPlay.value)
-        .put("onVideoPlay", onVideoPlay.value)
         .put("flags", JSONObject(flags.value as Map<*, *>))
         .put("filters", runCatching { FilterLists.toJson() }.getOrNull())
         .toString(2)
@@ -223,7 +217,6 @@ object WebStore {
         kidsMode.value = o.optString("kidsMode", "adult")
         newTab.value = o.optString("newTab", "ask")
         smartPlay.value = o.optString("smartPlay", "ask")
-        onVideoPlay.value = o.optString("onVideoPlay", "note")
         o.optJSONObject("flags")?.let { f -> flags.value = FLAG_DEFAULTS.keys.associateWith { f.optBoolean(it, FLAG_DEFAULTS[it]!!) } }
         findVideos.value = o.optBoolean("findVideos", true)
         startPage.value = o.optString("startPage", "bookmarks")

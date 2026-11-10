@@ -42,41 +42,15 @@ object DownloadCenter {
         }
     }
 
-    /** Set by the app: shows a short message (a finished file that isn't real video). */
-    var notify: ((String) -> Unit)? = null
-
     fun update(id: String, persist: Boolean = true, change: (DownloadItem) -> DownloadItem) {
-        var finished: DownloadItem? = null
         synchronized(lock) {
-            _items.value = _items.value.map {
-                if (it.id == id) change(it).also { n -> if (it.status != DownloadStatus.DONE && n.status == DownloadStatus.DONE) finished = n } else it
-            }
+            _items.value = _items.value.map { if (it.id == id) change(it) else it }
             val now = System.currentTimeMillis()
             if (persist || now - lastSave > 5000) {
                 storage.downloads = _items.value
                 lastSave = now
             }
         }
-        finished?.let { d -> Thread({ checkFinished(d) }, "nova-filecheck").apply { isDaemon = true }.start() }
-    }
-
-    /** A finished recording / download is checked once: a web page or an empty file is marked straight away. */
-    private fun checkFinished(d: DownloadItem) {
-        val f = File(d.path)
-        if (!f.isFile) return
-        // A recording of only a few seconds (stopped at once, or the channel never came): removed, with a note.
-        if (d.kind == "recording") {
-            val secs = if (d.createdAt > 0) (System.currentTimeMillis() - d.createdAt) / 1000 else -1L
-            if ((secs in 0..9) || f.length() < 1_000_000L) {
-                remove(d.id, deleteFile = true)
-                notify?.invoke("⏺ Recording “${d.title}” was too short (" + (if (secs in 0..9) "$secs s" else "${f.length() / 1024} KB") + ") — removed")
-                return
-            }
-        }
-        val problem = FileCheck.problem(f) ?: return
-        update(d.id) { it.copy(note = "⚠ Not real video: $problem · Delete it, then record / download again") }
-        val what = if (d.kind == "recording") "Recording" else "Download"
-        notify?.invoke("⚠ $what “${d.title}” didn't save real video ($problem)")
     }
 
     fun remove(id: String, deleteFile: Boolean) {

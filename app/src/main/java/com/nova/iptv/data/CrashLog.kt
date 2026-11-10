@@ -44,17 +44,8 @@ object CrashLog {
                 android.app.ApplicationExitInfo.REASON_CRASH -> null // already recorded by the handler above
                 else -> null
             } ?: return@runCatching
-            // Android's own record of the freeze: keep the part about Nova's main (screen) thread — that is what was blocked.
-            val full = runCatching { last.traceInputStream?.bufferedReader()?.use { it.readText() } }.getOrNull().orEmpty()
-            val mainPart = full.indexOf("\"main\"").takeIf { it >= 0 }?.let { full.substring(it).substringBefore("\n\n").take(5000) }
-            // Nova's own watch of the screen thread (works even when Android gives no record).
-            val hint = if (last.reason == android.app.ApplicationExitInfo.REASON_ANR) MainThreadWatch.lastStall(app, last.timestamp) else null
-            val trace = listOfNotNull(
-                hint?.let { "What the screen thread was doing (Nova's own watch):\n$it" },
-                mainPart?.let { "Android's record of the screen thread:\n$it" } ?: full.take(4000).takeIf { it.isNotBlank() },
-            ).joinToString("\n\n")
-            val mem = if (last.pss > 0) "memory used ${last.pss / 1024} MB" else "memory used: not known (Android didn't say)"
-            record(app, "$why\n${last.description.orEmpty()}\n$mem", Date(last.timestamp), trace)
+            val trace = runCatching { last.traceInputStream?.bufferedReader()?.use { it.readText().take(6000) } }.getOrNull().orEmpty()
+            record(app, "$why\n${last.description.orEmpty()}\nmemory ${last.pss / 1024} MB", Date(last.timestamp), trace)
         }
     }
 
@@ -72,9 +63,6 @@ object CrashLog {
                 ?.sortedByDescending { it.name }?.drop(10)?.forEach { it.delete() }
         }
     }
-
-    /** "03" from "Nova IPTV 4.0 · build 03 · 27/10/2026 18:09:46". */
-    fun buildOf(text: String?): String? = text?.lineSequence()?.firstOrNull()?.let { Regex("""build (\d+)""").find(it)?.groupValues?.get(1) }
 
     fun last(context: Context): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("last", null)
     fun isNew(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("new", false)

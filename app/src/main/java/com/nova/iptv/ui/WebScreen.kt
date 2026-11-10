@@ -48,8 +48,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.focus.focusRequester
-import android.util.Log
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -86,14 +84,6 @@ data class FoundVideo(
     val height: Int = 0, val info: String = "", val protectedDrm: Boolean = false,
     /** The page's title and when the video was grabbed. */
     val title: String = "", val at: Long = 0L,
-    /** "expired" when the site's link no longer answers. */
-    val status: String = "",
-    /** Length in seconds (0 = not known). */
-    val sec: Double = 0.0,
-    /** How it was found: "" (its name), "type" (the server said it is a video), "player" (the page's own player played it). */
-    val source: String = "",
-    /** From an ad address (checked once when found). */
-    val ad: Boolean = false,
 ) {
     val quality: String get() = when { protectedDrm -> "🔒"; height > 0 -> "${height}p"; else -> "?" }
     val key: String get() = url.substringBefore('?')
@@ -114,7 +104,7 @@ private object Grabbed {
             (0 until a.length()).map { i ->
                 a.getJSONObject(i).let { o ->
                     FoundVideo(o.getString("u"), o.optString("k"), o.optString("p"), o.optInt("h"), o.optString("i"),
-                        o.optBoolean("d"), o.optString("t"), o.optLong("a"), o.optString("s"), o.optDouble("sec", 0.0), o.optString("src"))
+                        o.optBoolean("d"), o.optString("t"), o.optLong("a"))
                 }
             }
         }.getOrDefault(emptyList())
@@ -128,7 +118,7 @@ private object Grabbed {
                 val a = org.json.JSONArray()
                 snap.forEach { v ->
                     a.put(org.json.JSONObject().put("u", v.url).put("k", v.kind).put("p", v.page).put("h", v.height).put("i", v.info)
-                        .put("d", v.protectedDrm).put("t", v.title).put("a", v.at).put("s", v.status).put("sec", v.sec).put("src", v.source))
+                        .put("d", v.protectedDrm).put("t", v.title).put("a", v.at))
                 }
                 val tmp = java.io.File(f.parentFile, f.name + ".tmp"); tmp.writeText(a.toString()); tmp.renameTo(f)
             }
@@ -190,18 +180,7 @@ private object WebState {
     /** Tabs opened by ▶ Smart play (a clean video player), and the ones whose video was already offered. */
     val playerTabs = HashSet<WebView>()
     val offered = HashSet<WebView>()
-    /** The page's own video player started (address it plays, its length in s or -1, muted autoplay = 1). Set by the Web tab. */
-    @Volatile var onMedia: ((String, Double, Int) -> Unit)? = null
 }
-
-/**
- * Every frame: tells Nova when the page's own video player starts, with the address it really plays and its length.
- * Only reads what the page plays openly — nothing is changed on the page.
- */
-private const val MEDIA_JS = "(function(){try{if(window.__novaMedia)return;window.__novaMedia=1;var N=window.NovaFilters;if(!N||!N.media)return;" +
-    "function rep(e){try{var v=e.target;if(!v||v.tagName!=='VIDEO')return;var s=v.currentSrc||v.src||'';" +
-    "var d=isFinite(v.duration)?v.duration:-1;N.media(s,d,e.type==='playing'?((v.muted&&v.autoplay)?1:0):2);}catch(x){}}" +
-    "document.addEventListener('playing',rep,true);document.addEventListener('durationchange',rep,true);}catch(e){}})();"
 
 /** ▶ Smart play: a player address caught after a tap ([blocked] = refused by the internet line). */
 private data class SmartCatch(val url: String, val host: String, val name: String, val page: String, val others: List<String>, val blocked: Boolean = false)
@@ -306,7 +285,6 @@ private fun newWebView(context: android.content.Context): WebView = WebView(cont
         if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
             androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, AdBlock.FRAME_JS, setOf("*"))
             androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, RETRY_JS, setOf("*"))
-            androidx.webkit.WebViewCompat.addDocumentStartJavaScript(this, MEDIA_JS, setOf("*"))
             WebState.frameScript = true
         }
     }
@@ -330,14 +308,9 @@ private object FilterBridge {
         WebState.tapName = name.orEmpty(); WebState.tapGroup = group.orEmpty().split('|').filter { it.isNotBlank() }; WebState.tapAt = System.currentTimeMillis()
     }
     @android.webkit.JavascriptInterface fun noReaction(text: String?) { if (!text.isNullOrBlank()) WebState.noReaction.value = text }
-    @android.webkit.JavascriptInterface fun media(src: String?, duration: Double, mutedAuto: Int) { WebState.onMedia?.invoke(src.orEmpty(), duration, mutedAuto) }
 }
 
 private val VIDEO_EXT = Regex("""\.(m3u8|mp4|mpd|webm|mkv|m4v|mov)$""", RegexOption.IGNORE_CASE)
-/** The site's link no longer answers (expired / refused). */
-private val EXPIRED_CODES = setOf(401, 403, 404, 410)
-/** Names checked "by type" (no extension, or a script-like one): the rest (images, scripts, styles, pieces) is never asked. */
-private val TYPE_CHECK_EXT = setOf("", "php", "aspx", "asp", "jsp", "cgi", "do", "bin", "stream", "video", "file", "get", "play", "m3u")
 private val DRM_HINT = Regex("""widevine|playready|fairplay|/license""", RegexOption.IGNORE_CASE)
 private val RESOLUTION = Regex("""RESOLUTION=\d+x(\d+)""")
 private val QUALITY_IN_URL = Regex("""(?<!\d)(2160|1440|1080|720|576|480|360|240)p?(?!\d)""")
@@ -424,20 +397,13 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         val i = found.indexOfFirst { it.url.substringBefore('?') == key }
         if (i >= 0) {
             val old = found[i]
-            if ((v.height > 0 && old.height == 0) || (v.info.isNotBlank() && old.info.isBlank()) || v.protectedDrm != old.protectedDrm ||
-                (v.sec > 0 && old.sec <= 0) || (v.source == "player" && old.source != "player")
-            ) {
+            if ((v.height > 0 && old.height == 0) || (v.info.isNotBlank() && old.info.isBlank()) || v.protectedDrm != old.protectedDrm) {
                 found[i] = old.copy(
                     height = if (v.height > 0) v.height else old.height,
                     info = v.info.ifBlank { old.info }, protectedDrm = old.protectedDrm || v.protectedDrm,
-                    sec = if (old.sec > 0) old.sec else v.sec, source = if (v.source == "player") "player" else old.source,
                 )
             }
-        } else if (found.size < 30) {
-            val h = Uri.parse(v.url).host
-            val ad = runCatching { AdBlock.isAd(h, "maximum") || com.nova.iptv.data.FilterLists.blocks(h) }.getOrDefault(false)
-            found += v.copy(at = if (v.at > 0) v.at else System.currentTimeMillis(), ad = ad)
-        }
+        } else if (found.size < 30) found += v.copy(at = if (v.at > 0) v.at else System.currentTimeMillis())
     }
 
     /** Asks the website about a found video: qualities of an HLS list, length, size of a file. */
@@ -448,8 +414,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
             ).execute()
             runCatching {
                 if (kind == "HLS") {
-                    val (code, text) = get(url).use { it.code to (if (it.isSuccessful) it.body?.string().orEmpty() else "") }
-                    if (code in EXPIRED_CODES) { main.post { found.replaceAll { if (it.url == url) it.copy(status = "expired") else it } }; return@runCatching }
+                    val text = get(url).use { it.body?.string().orEmpty() }
                     val drm = text.contains("SAMPLE-AES") || text.contains("KEYFORMAT=", ignoreCase = true)
                     if (text.contains("#EXT-X-STREAM-INF")) {
                         val lines = text.lines()
@@ -470,85 +435,21 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                             val sec = EXTINF.findAll(list).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }
                             if (sec > 30 && list.contains("#EXT-X-ENDLIST")) {
                                 val info = "HLS · " + durationText(sec)
-                                main.post { found.replaceAll { if (it.page == page && it.kind == "HLS") it.copy(info = info, sec = sec) else it } }
+                                main.post { found.replaceAll { if (it.page == page && it.kind == "HLS") it.copy(info = info) else it } }
                             }
                         }
                     } else {
                         val sec = EXTINF.findAll(text).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }
                         val info = if (text.contains("#EXT-X-ENDLIST") && sec > 30) "HLS · " + durationText(sec) else "HLS · live"
-                        val ended = text.contains("#EXT-X-ENDLIST")
-                        main.post { found.replaceAll { if (it.url == url) it.copy(info = info, protectedDrm = it.protectedDrm || drm, sec = if (ended) sec else it.sec) else it } }
+                        main.post { found.replaceAll { if (it.url == url) it.copy(info = info, protectedDrm = it.protectedDrm || drm) else it } }
                     }
                 } else if (kind != "DASH") {
-                    val (code, size) = get(url, head = true).use { it.code to (it.header("Content-Length")?.toLongOrNull() ?: 0L) }
-                    if (code in EXPIRED_CODES) { main.post { found.replaceAll { if (it.url == url) it.copy(status = "expired") else it } }; return@runCatching }
+                    val size = get(url, head = true).use { it.header("Content-Length")?.toLongOrNull() ?: 0L }
                     if (size > 0) main.post { found.replaceAll { if (it.url == url) it.copy(info = "$kind · " + sizeText(size)) else it } }
                 }
             }
         }
     }
-
-    /** Addresses already checked "by type" on this page (at most 60 per page). */
-    val typeChecked = remember { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
-
-    /**
-     * An address without ".m3u8 / .mp4…" in its name: asks the server once for its first bytes. A playlist or a whole video joins
-     * the 🎬 list; pieces of a video (TS / small parts) and everything else are ignored.
-     */
-    fun typeCheck(url: String, page: String, headers: Map<String, String>, fromPlayer: Boolean = false) {
-        val key = url.substringBefore('?')
-        if (typeChecked.size >= 60 || !typeChecked.add((if (fromPlayer) "p:" else "") + key)) return
-        CoroutineScope(Dispatchers.IO).launch {
-            runCatching {
-                val req = okhttp3.Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.header("Range", "bytes=0-4095").build()
-                app.http.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) return@use
-                    val ct = resp.header("Content-Type").orEmpty().lowercase()
-                    val total = resp.header("Content-Range")?.substringAfter('/')?.trim()?.toLongOrNull() ?: resp.header("Content-Length")?.toLongOrNull() ?: -1L
-                    val head = ByteArray(4096)
-                    var n = 0
-                    resp.body?.byteStream()?.let { input -> while (n < head.size) { val r = input.read(head, n, head.size - n); if (r < 0) break; n += r } }
-                    val text = String(head, 0, n, Charsets.ISO_8859_1)
-                    val src = if (fromPlayer) "player" else "type"
-                    when {
-                        text.trimStart().startsWith("#EXTM3U") || ct.contains("mpegurl") -> {
-                            if (!text.contains("#EXT-X-STREAM-INF") && !text.contains("#EXTINF")) return@use
-                            Log.i("NovaTest", "GRAB by type HLS ${key.takeLast(40)}")
-                            addFound(FoundVideo(url, "HLS", page, 0, info = "HLS", source = src))
-                            inspect(url, "HLS", page, headers)
-                        }
-                        ct.contains("dash+xml") || text.trimStart().startsWith("<MPD") -> {
-                            addFound(FoundVideo(url, "DASH", page, 0, info = "DASH", protectedDrm = true, source = src))
-                        }
-                        ct.startsWith("video/mp2t") || (n > 188 && head[0] == 0x47.toByte() && head[188] == 0x47.toByte()) -> Unit // a piece of a stream
-                        ct.startsWith("video/") || (n >= 8 && String(head, 4, 4, Charsets.ISO_8859_1) == "ftyp") ||
-                            (n >= 4 && head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() && head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte()) -> {
-                            // Small parts of a video (a few MB) are pieces, not the film.
-                            // (What the page's own player plays is the video, whatever its size.)
-                            if (!fromPlayer && total in 0 until 5_000_000L) return@use
-                            val k = when {
-                                ct.contains("webm") -> "WEBM"; ct.contains("matroska") || head[0] == 0x1A.toByte() -> "MKV"; else -> "MP4"
-                            }
-                            Log.i("NovaTest", "GRAB by type $k ${key.takeLast(40)}")
-                            addFound(FoundVideo(url, k, page, QUALITY_IN_URL.find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 0,
-                                info = if (total > 0) "$k · " + sizeText(total) else k, source = src))
-                        }
-                        else -> Unit
-                    }
-                }
-            }
-        }
-    }
-
-    /** 🎬 The note shown when the page's video starts (Play in Nova / Download), once per page visit. */
-    var playNote by remember { mutableStateOf<FoundVideo?>(null) }
-    var notedVisit by remember { mutableStateOf(-1L) }
-    /** Clips that are ads: from an ad address, or under 45 s. */
-    fun isAdClip(v: FoundVideo): Boolean = v.ad || v.sec in 1.0..44.9
-    /** The video to offer: not protected, not expired, not an ad; whole films before short previews; best quality. */
-    fun bestFound(): FoundVideo? = found.filter { !it.protectedDrm && it.status != "expired" && !isAdClip(it) }
-        .sortedWith(compareBy<FoundVideo> { it.sec in 45.0..299.9 }.thenByDescending { it.source == "player" }.thenByDescending { it.height }.thenBy { it.kind != "HLS" })
-        .firstOrNull()
 
     fun go(raw: String) {
         val t = raw.trim()
@@ -568,7 +469,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         WebState.userNavSite = AdBlock.siteOf(Uri.parse(url).host)
         // A clean start: the old page stops and is covered until the new one shows (never a stale page under a new address).
         navCover = url; navProblem = null
-        blocked = 0; WebState.removed.value = 0; found.clear(); seen.clear(); typeChecked.clear()
+        blocked = 0; WebState.removed.value = 0; found.clear(); seen.clear()
         WebState.webView?.stopLoading()
         WebState.webView?.loadUrl(url)
     }
@@ -641,7 +542,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
         WebState.pageSite = Uri.parse(u).host.orEmpty()
         address = u
         title = WebState.titles[wv].orEmpty(); pageName = ""
-        found.clear(); seen.clear(); typeChecked.clear(); blocked = 0; WebState.removed.value = 0
+        found.clear(); seen.clear(); blocked = 0; WebState.removed.value = 0
         WebState.visitStart = System.currentTimeMillis()
         canBack = wv.canGoBack()
         showPage = u.isNotBlank()
@@ -784,18 +685,6 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                         main.post { found.replaceAll { if (it.page == WebState.pageUrl) it.copy(protectedDrm = true) else it } }
                     }
                     val m = VIDEO_EXT.find(u.path.orEmpty())
-                    if (m == null && !request.isForMainFrame && request.method == "GET" && found.size < 30) {
-                        val last = u.lastPathSegment.orEmpty()
-                        val ext = last.substringAfterLast('.', "").lowercase()
-                        val accept = request.requestHeaders?.get("Accept").orEmpty()
-                        val isDocReq = accept.contains("text/html")
-                        if (!isDocReq && !accept.startsWith("image/") && !accept.contains("text/css") && ext in TYPE_CHECK_EXT && s.substringBefore('?') !in seen) {
-                            val hdr = HashMap<String, String>()
-                            request.requestHeaders?.forEach { (k, v) -> if (!k.equals("Range", true)) hdr[k] = v }
-                            CookieManager.getInstance().getCookie(s)?.let { hdr["Cookie"] = it }
-                            typeCheck(s, WebState.pageUrl, hdr)
-                        }
-                    }
                     if (m != null) {
                         val ext = m.groupValues[1].lowercase()
                         val page = WebState.pageUrl
@@ -922,7 +811,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 if (current()) canBack = view.canGoBack()
                 recordSoon(view, url)
                 if (current()) fetchName(view)
-                if (!WebState.frameScript) { view.evaluateJavascript(RETRY_JS, null); view.evaluateJavascript(MEDIA_JS, null) }
+                if (!WebState.frameScript) view.evaluateJavascript(RETRY_JS, null)
                 if (current()) pendingClick?.let { t ->
                     pendingClick = null
                     main.postDelayed({ view.evaluateJavascript(clickJs(t), null) }, 1500)
@@ -1115,49 +1004,6 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                 Toast.makeText(context, "⬇ Download started: $name — see it in ⬇ Downloads", Toast.LENGTH_LONG).show()
             }
         }
-    }
-
-    /** The page's video started: after 2.5 s (and once more after 6 s) offer the best video found, once per page visit. */
-    fun videoStarted() {
-        val mode = WebStore.onVideoPlay.value
-        if (mode == "off" || webView in WebState.playerTabs || notedVisit == WebState.visitStart || !WebStore.findVideos.value) return
-        val visit = WebState.visitStart
-        fun attempt(last: Boolean) {
-            if (WebState.visitStart != visit || notedVisit == visit || choose != null) return
-            val best = bestFound()
-            if (best == null) { if (!last) main.postDelayed({ attempt(true) }, 6000); return }
-            notedVisit = visit
-            Log.i("NovaTest", "GRAB note ${best.kind} ${best.height}p mode=$mode")
-            if (mode == "play") act(best, 0) else playNote = best
-        }
-        main.postDelayed({ attempt(false) }, 2500)
-    }
-    DisposableEffect(Unit) {
-        WebState.onMedia = { src, dur, flag ->
-            main.post {
-                val page = WebState.pageUrl
-                if (page.isBlank()) return@post
-                if (src.startsWith("http")) {
-                    val path = Uri.parse(src).path.orEmpty()
-                    val ext = VIDEO_EXT.find(path)?.groupValues?.get(1)?.lowercase()
-                    val pageUri = Uri.parse(page)
-                    val hdr = linkedMapOf("Referer" to page, "Origin" to "${pageUri.scheme}://${pageUri.host}")
-                    webView.settings.userAgentString?.let { hdr["User-Agent"] = it }
-                    CookieManager.getInstance().getCookie(src)?.let { hdr["Cookie"] = it }
-                    if (ext != null) {
-                        val kind = when (ext) { "m3u8" -> "HLS"; "mpd" -> "DASH"; else -> ext.uppercase() }
-                        addFound(FoundVideo(src, kind, page, QUALITY_IN_URL.find(src)?.groupValues?.get(1)?.toIntOrNull() ?: 0, info = kind,
-                            protectedDrm = ext == "mpd", sec = if (dur > 0) dur else 0.0, source = "player"))
-                        if (seen.add(src.substringBefore('?'))) inspect(src, kind, page, hdr)
-                    } else typeCheck(src, page, hdr, fromPlayer = true)
-                } else if (dur > 0) {
-                    // A temporary address (blob:): the player plays the pieces of the playlist it loaded — that playlist is this video.
-                    found.replaceAll { if (it.page == page && (it.kind == "HLS" || it.kind == "DASH")) it.copy(source = "player", sec = if (it.sec > 0) it.sec else dur) else it }
-                }
-                if (flag == 0 && (dur < 0 || dur >= 300)) videoStarted()
-            }
-        }
-        onDispose { WebState.onMedia = null }
     }
 
     if (!unlocked) {
@@ -1372,16 +1218,7 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
 
         // ---- 🎬 grabbed videos: this page first, then earlier pages (kept until you clear them)
         if (listOpen) {
-            /** READY / PROTECTED (DRM) / LINK EXPIRED / AD / ONLY A PREVIEW, with a short reason. */
-            fun labelOf(v: FoundVideo): Triple<String, Color, String> = when {
-                v.protectedDrm -> Triple("PROTECTED (DRM)", Color(0xFFFF8A80), "locked by the site — it can only be watched on the page")
-                v.status == "expired" -> Triple("LINK EXPIRED", Color(0xFFFFD27A), "the site's link was only valid a while — play it again on the page")
-                isAdClip(v) -> Triple("AD", Color(0xFFFF8A80), "ad clip" + if (v.sec > 0) " (${v.sec.toInt()} s)" else "")
-                v.sec in 45.0..299.9 -> Triple("ONLY A PREVIEW", Color(0xFFFFD27A), "a trailer / short extract (${durationText(v.sec).ifBlank { "${v.sec.toInt()} s" }}), not the whole film")
-                else -> Triple("READY", Color(0xFF2EE66B), v.info.ifBlank { v.kind } + when (v.source) { "type" -> " · recognised by its type"; "player" -> " · from the page's player"; else -> "" })
-            }
-            fun rank(v: FoundVideo) = when (labelOf(v).first) { "READY" -> 0; "ONLY A PREVIEW" -> 1; "LINK EXPIRED" -> 2; "PROTECTED (DRM)" -> 3; else -> 4 }
-            val cur = found.sortedWith(compareBy<FoundVideo> { rank(it) }.thenByDescending { it.height }.thenBy { it.kind != "HLS" })
+            val cur = found.sortedWith(compareBy<FoundVideo> { it.protectedDrm }.thenByDescending { it.height }.thenBy { it.kind != "HLS" })
             val curKeys = cur.map { it.key }.toSet()
             val earlier = grabbed.filter { it.key !in curKeys }.groupBy { it.page }
             val df = remember { java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.getDefault()) }
@@ -1400,15 +1237,11 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                             )
                             Column(Modifier.weight(1f).padding(start = 8.dp)) {
                                 Text(v.title.ifBlank { bestName() }.ifBlank { "Video" }, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                val (tag, tagColor, why) = labelOf(v)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(tag, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = tagColor, maxLines = 1,
-                                        modifier = Modifier.border(1.dp, tagColor, RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
-                                    Text(
-                                        "  🕒 " + (if (v.at > 0) df.format(java.util.Date(v.at)) else "now") + " · " + why,
-                                        fontSize = 11.sp, color = Color(0xFFAAAAAA), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
+                                Text(
+                                    "🕒 " + (if (v.at > 0) df.format(java.util.Date(v.at)) else "now") + " · " +
+                                        (if (v.protectedDrm) "only on the website" else v.info.ifBlank { v.kind }),
+                                    fontSize = 11.sp, color = Color(0xFFAAAAAA), maxLines = 1,
+                                )
                             }
                         }
                     }
@@ -1523,48 +1356,6 @@ fun WebScreen(vm: MainViewModel, onLeave: () -> Unit = { vm.setTab(Tab.LIVE) }) 
                     FocusBox(onClick = { shieldOpen = false }, modifier = Modifier.fillMaxWidth()) {
                         Text("✕  Close", fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                     }
-                }
-            }
-        }
-
-        // ---- 🎬 the page's video started: ▶ Play in Nova / ⬇ Download (hides after 10 s)
-        playNote?.let { v ->
-            var left by remember(v) { mutableIntStateOf(10) }
-            val fr = remember(v) { androidx.compose.ui.focus.FocusRequester() }
-            LaunchedEffect(v) {
-                kotlinx.coroutines.delay(100)
-                runCatching { fr.requestFocus() }
-                while (left > 0) { kotlinx.coroutines.delay(1000); left-- }
-                if (playNote === v) playNote = null
-            }
-            val usable = found.filter { !it.protectedDrm && it.status != "expired" && !isAdClip(it) && it.kind == v.kind }
-            val ads = found.count { isAdClip(it) }
-            Column(
-                Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().widthIn(max = 660.dp)
-                    .background(Color(0xF216264A), RoundedCornerShape(16.dp))
-                    .border(2.dp, Color(0xFF5FF2D6), RoundedCornerShape(16.dp)).padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text("🎬 Video found: " + v.title.ifBlank { bestName() }.ifBlank { "Video" }, fontWeight = FontWeight.Bold, fontSize = 16.sp,
-                    color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    listOfNotNull(
-                        v.kind, v.height.takeIf { it > 0 }?.let { "${it}p" }, v.sec.takeIf { it > 0 }?.let { durationText(it) },
-                        if (usable.size > 1) "best of ${usable.size} qualities" else null,
-                        if (ads > 0) "$ads ad clip${if (ads > 1) "s" else ""} left out" else null,
-                    ).joinToString(" · "),
-                    fontSize = 12.sp, color = Color(0xFFB4BCCB),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    FocusBox(onClick = { playNote = null; act(v, 0) }, shape = RoundedCornerShape(14.dp), modifier = Modifier.focusRequester(fr)) {
-                        Text("▶ Play in Nova", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF06240F),
-                            modifier = Modifier.background(Color(0xFF3DDC84), RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
-                    }
-                    SmallButton("⬇ Download", { playNote = null; act(v, 2) })
-                    SmallButton("📋 Copy link", { copyText(context, v.url, "✓ Link copied — paste it in another app") })
-                    SmallButton("✕", { playNote = null })
-                    Spacer(Modifier.weight(1f))
-                    Text("hides in $left s", fontSize = 12.sp, color = Color(0xFFFFD27A))
                 }
             }
         }
@@ -2102,13 +1893,6 @@ fun WebSettingsContent(page: String? = null, onPick: (() -> Unit)? = null) {
                 Text(if (findVideos) "● On" else "○ Off", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (findVideos) Color(0xFF2EE66B) else Color(0xFF999999))
             }
         }
-        val onPlay by WebStore.onVideoPlay.collectAsStateWithLifecycle()
-        Text("🎬 When a page's video starts playing", fontWeight = FontWeight.Medium, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
-        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("note" to "Show the note", "play" to "Play in Nova at once", "off" to "Off").forEach { (k, l) -> Chip(l, onPlay == k, { WebStore.setOnVideoPlay(k) }) }
-        }
-        Text("Nova offers the best quality it found (ads and short previews left out): ▶ Play in Nova · ⬇ Download. " +
-            "Protected (DRM) videos stay on the page.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SwitchRow("Look like a normal browser (sites that refuse “app browsers”)", "normalBrowser", flags)
         SwitchRow("Desktop site", "desktop", flags)
         SwitchRow("Dark pages", "dark", flags)

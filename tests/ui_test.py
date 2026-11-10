@@ -996,21 +996,6 @@ def stuck_picture():
     back_to_main("stuck-picture")
 
 
-def damaged_clock():
-    """A live feed whose clock jumps (damaged / switching source): Nova smooths the clock and keeps playing."""
-    n = count_log(r"READY Damaged Clock")
-    fixed = count_log(r"CLOCK repaired")
-    open_test_channel("Damaged Clock")
-    check("Damaged clock channel starts", wait_count(r"READY Damaged Clock", n + 1, 30))
-    # The jump comes 30 s into the feed (stored ahead of what you see): wait until it has played past it.
-    check("Play through damage: the clock jump is smoothed", wait_count(r"CLOCK repaired", fixed + 1, 60))
-    time.sleep(45)
-    log = test_log()
-    check("…and it keeps playing without the watchdog (no freeze, no restart)",
-          not re.search(r"WATCHDOG Damaged Clock: .*(frozen|stuck)", log))
-    back_to_main("damaged-clock")
-
-
 def open_section(title):
     """Settings sections are folded: open the one named [title] (Settings must be on screen)."""
     for attempt in range(2):
@@ -1302,65 +1287,6 @@ def double_ok_hide():
         pass
 
 
-def jump_mkv_without_index():
-    """An MKV with no index (no Cues): jumping forward must land near the wanted time, not go back to 00:00."""
-    # Opened as a link (no need to find its poster): same player, same disk read-ahead.
-    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/movie/alice/secret/305.mkv -t video/x-matroska {PKG}")
-    check("An MKV without index plays", wait_log(r"READY 305\.mkv", 45))
-    check("Nova notices the MKV has no index", wait_log(r"NOINDEX 305\.mkv", 15))
-    time.sleep(3)
-    adb("shell input keyevent 90 90 90 90")  # ⏩ four times = +40 s
-    ok = wait_log(r"SPLICE 305\.mkv target=\d+ landed=\d+", 45)
-    m = re.findall(r"SPLICE 305\.mkv target=(\d+) landed=(\d+)", test_log())
-    target, landed = (int(m[-1][0]), int(m[-1][1])) if m else (-1, -1)
-    check("Jumping forward in an MKV without index lands near the wanted time",
-          ok and landed >= 20000 and abs(landed - target) <= 15000, f"target {target} ms, landed {landed} ms")
-    wait_log(r"POSITION 305\.mkv \d+", 15)
-    p = re.findall(r"POSITION 305\.mkv (\d+)", test_log())
-    pos = int(p[-1]) if p else -1
-    check("…and the film keeps playing from there (not from 00:00)", pos >= 20000, f"position {pos} ms")
-    shot("mkv-no-index-jump")
-    close_opened_player("mkv-no-index")
-
-
-def silent_film_server():
-    """A film whose server sends nothing: after 12 s Nova says so and offers a choice (VPN, keep waiting, close)."""
-    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/movie/alice/secret/306.mkv -t video/x-matroska {PKG}")
-    ok = wait_log(r"CHOICE film 306\.mkv", 30)
-    check("A silent film server: Nova says it isn't answering and offers a choice", ok)
-    check("…the choice offers the VPN and keep waiting", ok and "Turn on my VPN" in test_log() and "Keep waiting" in test_log())
-    shot("film-server-not-answering")
-    adb("shell input keyevent 4")  # Back = keep waiting (closes the popup)
-    time.sleep(1)
-    check("…Back closes the choice (keep waiting), no automatic action", count_log(r"CHOICE auto") == 0)
-    close_opened_player("silent-film")
-
-
-def speed_badge():
-    """The speed shows on screen while a live channel plays (top-right corner)."""
-    n = count_log(r"READY Paced Channel")
-    open_test_channel("Paced Channel")
-    check("Paced channel plays", wait_count(r"READY Paced Channel", n + 1, 30))
-    # Default: the speed shows with the player buttons — OK (channel list), then Back shows the info and buttons.
-    time.sleep(3)
-    adb("shell input keyevent 23")
-    time.sleep(2)
-    adb("shell input keyevent 4")
-    check("⬇ Speed on screen (with the buttons): line speed of the channel", wait_log(r"SPEED Paced Channel: ⬇ .*Mbit/s", 20))
-    shot("speed-badge")
-    back_to_main("speed-badge")
-
-
-def web_grab_by_type():
-    """Web tab: a page's video whose address has no ".mp4" in its name is still found (recognised by its type)."""
-    adb(f"shell am start -a android.intent.action.VIEW -d {SERVER}/web/grab.html -n {PKG}/.ui.OpenWithActivity")
-    check("Web: the grab test page opens", find("Nova Grab page", 30) is not None)
-    check("Web: a video address without “.mp4” is recognised by its type", wait_log(r"GRAB by type MP4", 30))
-    shot("web-grab-by-type")
-    adb(f"shell am start -n {PKG}/.ui.MainActivity")
-    time.sleep(2)
-
-
 def open_link():
     """The "🔗 Link" tab plays any video link; Share → Nova offers Play / Download & watch / Download."""
     tap("Link", 15)
@@ -1395,7 +1321,6 @@ if os.environ.get("NOVA_MODE") == "stuck":
         ("First login", login_first),
         ("Software decoder", lambda: set_video_decoder("Software decoder")),
         ("Stuck picture: watchdog jumps to live", stuck_picture),
-        ("Damaged clock: played through", damaged_clock),
     ]
 
 def web_first_start():
@@ -1508,10 +1433,6 @@ if os.environ.get("NOVA_MODE") == "short":
         ("First login", login_first),
         ("Restart with an account", restart_check),
         ("Open link and Share", open_link),
-        ("Jump in an MKV without index", jump_mkv_without_index),
-        ("A film server that sends nothing", silent_film_server),
-        ("Web: grab a video by its type", web_grab_by_type),
-        ("Speed on screen", speed_badge),
         ("Double OK hides a film", double_ok_hide),
     ]
 

@@ -335,7 +335,7 @@ class VodControls(
                     if (d > 0) {
                         val target = limitSeek(d * progress / 1000)
                         timeNow.text = format(target)
-                        if (!userSeeking) seekTo(target) // remote keys: seek right away
+                        if (!userSeeking) p.seekTo(target) // remote keys: seek right away
                     }
                     touched()
                 }
@@ -344,7 +344,7 @@ class VodControls(
                 override fun onStopTrackingTouch(sb: SeekBar) {
                     userSeeking = false
                     val p = player() ?: return
-                    if (p.duration > 0) seekTo(limitSeek(p.duration * sb.progress / 1000))
+                    if (p.duration > 0) p.seekTo(limitSeek(p.duration * sb.progress / 1000))
                 }
             })
         }
@@ -455,25 +455,12 @@ class VodControls(
         return target
     }
 
-    /** MKV films without an index: the player can't jump by itself — the screen does it (true = handled). */
-    var seekHandler: ((Long) -> Boolean)? = null
-    /** A jump being prepared (several ⏩ presses add up). */
-    var pendingSeek: Long? = null
-
-    /** Every jump goes through here. */
-    private fun seekTo(target: Long) {
-        val p = player() ?: return
-        if (seekHandler?.invoke(target) == true) { pendingSeek = target; timeNow.text = format(target); return }
-        p.seekTo(target)
-    }
-
     fun seekBy(ms: Long) {
         val p = player() ?: return
-        val from = pendingSeek ?: p.currentPosition
-        var target = (from + ms).coerceAtLeast(0)
+        var target = (p.currentPosition + ms).coerceAtLeast(0)
         if (p.duration > 0) target = target.coerceAtMost(p.duration)
-        if (ms > 0) target = maxOf(limitSeek(target), minOf(from, target))
-        seekTo(target)
+        if (ms > 0) target = maxOf(limitSeek(target), minOf(p.currentPosition, target))
+        p.seekTo(target)
         update()
     }
 
@@ -596,7 +583,7 @@ class VodControls(
             v.text = t.orEmpty()
             v.visibility = if (t.isNullOrBlank()) View.GONE else View.VISIBLE
         }
-        if (!userSeeking) timeNow.text = format(pendingSeek ?: pos)
+        if (!userSeeking) timeNow.text = format(pos)
         timeTotal.text = if (d > 0) format(d) else "--:--"
         seekBar.keyProgressIncrement = if (d > 0) (10_000L * 1000 / d).toInt().coerceAtLeast(1) else 10
         if (controls.visibility == View.VISIBLE && !isPanelOpen && p.isPlaying && !pinned &&

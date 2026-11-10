@@ -81,10 +81,7 @@ class NovaApp : Application() {
         Folders.customRoot = storage.storageRoot
         com.nova.iptv.data.Locations.init(this, storage)
         DownloadCenter.init(storage)
-        val main = android.os.Handler(mainLooper)
-        DownloadCenter.notify = { msg -> main.post { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show() } }
         com.nova.iptv.data.CrashLog.install(this)
-        com.nova.iptv.data.MainThreadWatch.start(this)
         com.nova.iptv.data.StreamCheck.init(this)
         com.nova.iptv.data.PlaybackLog.init(this)
         storage.migrateLinkConnections()
