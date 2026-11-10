@@ -6,16 +6,16 @@ import android.content.Context
 object PlayerPrefs {
     private fun p(c: Context) = c.getSharedPreferences("player_ui", Context.MODE_PRIVATE)
 
-    /** "always" (default) / "buttons" (only while the player buttons show) / "off". */
-    fun speedBadge(c: Context): String = p(c).getString("speed_badge", "always") ?: "always"
+    /** "always" / "buttons" (default: only while the player buttons show) / "off". */
+    fun speedBadge(c: Context): String = p(c).getString("speed_badge", "buttons") ?: "buttons"
     fun setSpeedBadge(c: Context, v: String) = p(c).edit().putString("speed_badge", v).apply()
 
     /** Live: go on after only ~5 s once a stall is over (off by default — build 19 waited for a full cushion). */
     fun fastResume(c: Context): Boolean = p(c).getBoolean("fast_resume", false)
     fun setFastResume(c: Context, on: Boolean) = p(c).edit().putBoolean("fast_resume", on).apply()
 
-    /** "auto" (default: switch after a 10 s countdown) / "ask" / "never". */
-    fun lighter(c: Context): String = p(c).getString("lighter", "auto") ?: "auto"
+    /** "auto" (switch after a 10 s countdown) / "ask" (default) / "never". */
+    fun lighter(c: Context): String = p(c).getString("lighter", "ask") ?: "ask"
     fun setLighter(c: Context, v: String) = p(c).edit().putString("lighter", v).apply()
 
     /** How heavy a channel name sounds: 4 = UHD / 4K, 3 = FHD / 1080, 2 = HD / 720 (or nothing said), 1 = SD / 540 / 480. H265 = a bit lighter. */

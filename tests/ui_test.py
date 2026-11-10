@@ -1341,7 +1341,12 @@ def speed_badge():
     n = count_log(r"READY Paced Channel")
     open_test_channel("Paced Channel")
     check("Paced channel plays", wait_count(r"READY Paced Channel", n + 1, 30))
-    check("⬇ Speed on screen: line speed and what the channel needs", wait_log(r"SPEED Paced Channel: ⬇ .*needs .*Mbit/s", 30))
+    # Default: the speed shows with the player buttons — OK (channel list), then Back shows the info and buttons.
+    time.sleep(3)
+    adb("shell input keyevent 23")
+    time.sleep(2)
+    adb("shell input keyevent 4")
+    check("⬇ Speed on screen (with the buttons): line speed of the channel", wait_log(r"SPEED Paced Channel: ⬇ .*Mbit/s", 20))
     shot("speed-badge")
     back_to_main("speed-badge")
 

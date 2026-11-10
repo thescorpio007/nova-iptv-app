@@ -254,11 +254,15 @@ fun DisplaySettings(vm: MainViewModel) {
             if (!allowed) OutlinedButton(onClick = { openPermission() }) { Text("Open the Android screen") }
         }
         Text("When Nova opens", fontWeight = FontWeight.Medium)
-        Hint("Start the last channel or video you watched automatically when the app opens.")
+        Hint("Start the last channel or video you watched, your first ★ favourite channel, or just open the menu.")
         ChoiceRow(
-            listOf("on" to "Play last watched", "off" to "Open the menu"),
-            if (s.autoPlayLast) "on" else "off",
-        ) { vm.setAutoPlayLast(it == "on") }
+            listOf("last" to "Play last watched", "fav" to "★ First favourite channel", "menu" to "Open the menu"),
+            s.startupMode,
+        ) { vm.setStartupMode(it) }
+        if (s.startupMode == "fav") Hint(
+            if (s.firstFavorite.isNotBlank()) "Plays the first channel of your ★ Favorites list (in the order you set). Now: ${s.firstFavorite}."
+            else "Your ★ Favorites list has no channel yet: Nova plays the last watched channel instead."
+        )
         if (askPermission) androidx.compose.material3.AlertDialog(
             onDismissRequest = { askPermission = false },
             title = { Text("One permission needed") },

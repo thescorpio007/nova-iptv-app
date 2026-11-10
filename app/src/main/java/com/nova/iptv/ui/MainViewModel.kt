@@ -113,6 +113,10 @@ data class SettingsState(
     val startGroup: String = "first",
     val openGroupOnFocus: Boolean,
     val autoPlayLast: Boolean,
+    /** "last" / "fav" / "menu" (Start-up › When Nova opens). */
+    val startupMode: String = "menu",
+    /** The first ★ favourite channel (shown next to that choice), "" when there is none. */
+    val firstFavorite: String = "",
     val hasPin: Boolean,
     val playerMode: String,
     val externalPlayer: String?,
@@ -1504,6 +1508,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         startGroup = storage.startGroup,
         openGroupOnFocus = storage.openGroupOnFocus,
         autoPlayLast = storage.autoPlayLast,
+        startupMode = storage.startupMode,
+        firstFavorite = firstFavoriteChannels().firstOrNull()?.name.orEmpty(),
         hasPin = storage.hasPin,
         playerMode = storage.playerMode,
         externalPlayer = storage.externalPlayer,
@@ -1575,7 +1581,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setStartGroup(v: String) { storage.startGroup = v; settings.value = readSettings() }
     fun setGroupsAlwaysLeft(v: Boolean) { storage.groupsAlwaysLeft = v; settings.value = readSettings() }
     fun setOpenGroupOnFocus(v: Boolean) { storage.openGroupOnFocus = v; settings.value = readSettings() }
-    fun setAutoPlayLast(v: Boolean) { storage.autoPlayLast = v; settings.value = readSettings() }
+    fun setAutoPlayLast(v: Boolean) { storage.startupMode = if (v) "last" else "menu"; settings.value = readSettings() }
+    fun setStartupMode(v: String) { storage.startupMode = v; settings.value = readSettings() }
+
+    /** ★ Favourite channels in your order (only accounts that still exist). */
+    private fun firstFavoriteChannels(): List<SavedItem> =
+        storage.favorites.filter { it.type == ItemType.LIVE && account(it.accountId) != null }
     fun setPlayerMode(v: String) { storage.playerMode = v; settings.value = readSettings() }
     fun setExternalPlayer(v: String?) { storage.externalPlayer = v; settings.value = readSettings() }
     fun setAudioDecoder(v: String) { storage.audioDecoder = v; settings.value = readSettings() }
@@ -1776,7 +1787,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The last watched channel or video (channels come with the other recent channels for zapping). */
     fun autoPlayItems(): List<PlayItem>? {
-        if (!storage.autoPlayLast) return null
+        val mode = storage.startupMode
+        if (mode == "menu") return null
+        if (mode == "fav") {
+            // ★ The first favourite channel starts; the other favourites follow for zapping.
+            val favs = firstFavoriteChannels()
+            if (favs.isNotEmpty()) savedItemsToPlay(favs).takeIf { it.isNotEmpty() }?.let {
+                android.util.Log.i("NovaTest", "STARTUP first favourite ${favs.first().name}")
+                return it
+            }
+            // No favourite channel: the last watched instead.
+        }
         val recentList = storage.recent.filter { account(it.accountId) != null }
         val first = recentList.firstOrNull() ?: return null
         return if (first.type == ItemType.LIVE) {

@@ -3142,9 +3142,11 @@ class PlayerActivity : ComponentActivity() {
         val p = player
         val mode = PlayerPrefs.speedBadge(this)
         val badge = speedBadge ?: TextView(this).apply {
+            // Only the text (no box): slightly see-through, with a thin dark outline so it stays readable on bright pictures.
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f); setTypeface(typeface, Typeface.BOLD)
-            setPadding(dp(11), dp(5), dp(11), dp(5))
-            background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(0x9E000000.toInt()) }
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+            setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat() / 2f, 0xE6000000.toInt())
+            alpha = 0.9f
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
                 .apply { setMargins(dp(16), dp(14), dp(16), dp(16)) }
             (playerView.parent as ViewGroup).addView(this)

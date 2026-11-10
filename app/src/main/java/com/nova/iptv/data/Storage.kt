@@ -532,6 +532,11 @@ class Storage(context: Context) {
         get() = prefs.getBoolean("auto_play_last", false)
         set(value) = prefs.edit().putBoolean("auto_play_last", value).apply()
 
+    /** When Nova opens: "last" (play last watched), "fav" (first ★ favourite channel) or "menu". */
+    var startupMode: String
+        get() = prefs.getString("startup_mode", null) ?: if (autoPlayLast) "last" else "menu"
+        set(value) = prefs.edit().putString("startup_mode", value).putBoolean("auto_play_last", value != "menu").apply()
+
     /**
      * "builtin" (always the app's player), "fallback" (app's player, external app when a format
      * can't be played), "external_vod" (films & series in the external app) or "external_all".
