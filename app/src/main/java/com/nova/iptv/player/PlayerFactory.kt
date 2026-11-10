@@ -137,7 +137,10 @@ object PlayerFactory {
         else maxOf(s.maxBufferSeconds * 1000, cushionMs + 10_000, if (live) s.weakRefillSecs * 1000 + 15_000 else 0)
         // After a stall, live TV goes on as soon as ~5 s is back (waiting for 1.5× the cushion meant long black
         // pauses on lines with no spare speed, where the cushion can never refill quickly). Films keep the larger margin.
-        val rebufferMs = if (live) minOf((cushionMs * 3 / 2), 5_000).coerceAtLeast(2000) else (cushionMs * 3 / 2).coerceIn(2000, maxMs)
+        // After a stall: wait for a good cushion again (as in build 19). "Resume quickly" (Settings, off by default)
+        // goes on after only ~5 s on live TV — fewer seconds of waiting, but more frequent short stops on a tight line.
+        val rebufferMs = if (live && PlayerPrefs.fastResume(context)) minOf((cushionMs * 3 / 2), 5_000).coerceAtLeast(2000)
+            else (cushionMs * 3 / 2).coerceIn(2000, maxMs)
         // Live "fast start": begin with ~2 s near live; the player builds the rest of the cushion while playing.
         val startMs = if (live && s.liveStart == "fast") minOf(2000, cushionMs) else cushionMs
 

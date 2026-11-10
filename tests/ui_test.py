@@ -1338,10 +1338,10 @@ def silent_film_server():
 
 def speed_badge():
     """The speed shows on screen while a live channel plays (top-right corner)."""
-    n = count_log(r"READY Working Channel")
-    open_test_channel("Working Channel")
-    check("Working channel plays", wait_count(r"READY Working Channel", n + 1, 30))
-    check("⬇ Speed on screen: line speed and what the channel needs", wait_log(r"SPEED Working Channel: ⬇ .*needs .*Mbit/s", 30))
+    n = count_log(r"READY Paced Channel")
+    open_test_channel("Paced Channel")
+    check("Paced channel plays", wait_count(r"READY Paced Channel", n + 1, 30))
+    check("⬇ Speed on screen: line speed and what the channel needs", wait_log(r"SPEED Paced Channel: ⬇ .*needs .*Mbit/s", 30))
     shot("speed-badge")
     back_to_main("speed-badge")
 

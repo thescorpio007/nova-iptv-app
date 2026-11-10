@@ -18,6 +18,9 @@ class TsClockRepair {
     private var pcrOffset = 0L
     private val pidAdjust = HashMap<Int, Long>()
 
+    /** Streams are only re-placed on a channel whose clock really jumped. */
+    private val havePcrJumped get() = clockFixes > 0
+
     /** How many repairs were made (for the report). */
     @Volatile var clockFixes = 0
         private set
@@ -74,7 +77,8 @@ class TsClockRepair {
                 var out = wrap(pcr + pcrOffset)
                 if (havePcr) {
                     val d = signed(out - lastPcrOut)
-                    if (d < -27_000 || d > 270_000) {
+                    // Only real, large jumps (backwards more than 2 s, forwards more than 10 s): normal channels are never touched.
+                    if (d < -180_000 || d > 900_000) {
                         // Clock jump: continue 40 ms after the last value instead.
                         pcrOffset = wrap(pcrOffset + signed(wrap(lastPcrOut + 3_600) - out))
                         out = wrap(pcr + pcrOffset)
@@ -99,7 +103,7 @@ class TsClockRepair {
         var adj = pidAdjust[pid] ?: 0L
         var out = wrap(pts + pcrOffset + adj)
         val d = signed(out - lastPcrOut)
-        if (d < -450_000 || d > 450_000) {
+        if (havePcrJumped && (d < -900_000 || d > 900_000)) {
             // This stream drifted away from the clock: put it back 0.5 s ahead of the clock (where streams normally sit).
             adj = signed(wrap(lastPcrOut + 45_000) - wrap(pts + pcrOffset))
             pidAdjust[pid] = adj

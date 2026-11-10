@@ -907,7 +907,7 @@ class PlayerActivity : ComponentActivity() {
         audioFixTried = 0
         boxAudioPending = false
         jumpAt = 0L; bufferingIsJump = false
-        if (!quiet) { filmBlockedAsked = false; neverStartAsked = false; lighterAsked = false; stallTimes.clear(); damageFixes = 0; damageAtMs = -1L; filmRate = 0.0; filmLastBytes = -1L }
+        if (!quiet) { filmBlockedAsked = false; neverStartAsked = false; lighterAsked = false; stallTimes.clear(); damageSeen = false; damageFixes = 0; damageAtMs = -1L; filmRate = 0.0; filmLastBytes = -1L }
         externalSuggested = false
         hideStatus()
 
@@ -3122,6 +3122,8 @@ class PlayerActivity : ComponentActivity() {
 
     private var speedBadge: TextView? = null
     private var badgeLogged = ""
+    /** Set when this channel's picture froze for the full (build 19) time: quicker repairs from then on. */
+    private var damageSeen = false
     private val stallTimes = ArrayDeque<Long>()
     private var lighterAsked = false
     private var lighterFrom: PlayItem? = null
@@ -3197,8 +3199,9 @@ class PlayerActivity : ComponentActivity() {
             text = (downloading?.speed?.takeIf { it > 0 }?.let { "⬇ ${mbit(it.toDouble())} Mbit/s  · " } ?: "") + "$ahead s ahead"
             color = when { ahead >= 30 -> green; ahead >= 8 -> yellow; else -> red }
         }
-        badge.text = "● $text"
-        badge.setTextColor(color)
+        val shown = "● $text"
+        if (badge.text.toString() != shown) badge.text = shown
+        if (badge.currentTextColor != color) badge.setTextColor(color)
         if (badgeLogged != item.key && !text.contains("waiting")) { badgeLogged = item.key; Log.i("NovaTest", "SPEED ${item.title}: $text") }
         // Below the clock when the clock sits in the top-right corner.
         val lp = badge.layoutParams as FrameLayout.LayoutParams
@@ -3206,9 +3209,11 @@ class PlayerActivity : ComponentActivity() {
             ((clockView.layoutParams as? FrameLayout.LayoutParams)?.gravity ?: 0) == (Gravity.TOP or Gravity.END)
         val top = if (clockTop) dp(18) + clockView.height else dp(14)
         if (lp.topMargin != top) { lp.topMargin = top; badge.layoutParams = lp }
-        badge.visibility = View.VISIBLE
-        badge.bringToFront()
+        if (badge.visibility != View.VISIBLE) { badge.visibility = View.VISIBLE; badge.bringToFront() }
     }
+
+    /** A channel that really showed damage this time (its clock had to be repaired, or its picture froze for long). */
+    private fun channelDamaged(): Boolean = (relay?.repair?.clockFixes ?: 0) > 0 || damageSeen
 
     private fun pictureHidden(): Boolean = ::hideCover.isInitialized && hideCover.visibility == View.VISIBLE
 
@@ -4125,7 +4130,7 @@ class PlayerActivity : ComponentActivity() {
                 // Live: stuck although plenty is stored on disk ahead (more than the cushion): damaged feed — act after 4 s.
                 val rr = relay
                 val storedAhead = if (rr != null && mediaBps > 0) rr.bytesAhead() / mediaBps else 0.0
-                val damaged = item.isLive && everReady && storedAhead >= s.cushionSeconds + 5 && now - wdBufferingSince > 4000
+                val damaged = item.isLive && everReady && channelDamaged() && storedAhead >= s.cushionSeconds + 5 && now - wdBufferingSince > 4000
                 if (damaged || now - wdBufferingSince > allowed) watchdogAct(item, "stuck loading for ${(now - wdBufferingSince) / 1000} s" + if (damaged) " (${storedAhead.toInt()} s stored ahead)" else "")
                 return
             }
@@ -4145,7 +4150,7 @@ class PlayerActivity : ComponentActivity() {
             counters.ensureUpdated()
             val frames = counters.renderedOutputBufferCount
             if (frames != wdLastFrames) { wdLastFrames = frames; wdFramesSince = now }
-            else if ((item.isLive && relay != null && soundMoving && frames > 50 && readyAt > 0 && now - readyAt > 15_000 && now - wdFramesSince > 3000) ||
+            else if ((item.isLive && relay != null && channelDamaged() && soundMoving && frames > 50 && readyAt > 0 && now - readyAt > 15_000 && now - wdFramesSince > 3000) ||
                 now - wdFramesSince > maxOf(5000L, limit * 5 / 8)
             ) {
                 val sound = p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; val moved = n != wdLastAudio; wdLastAudio = n; moved } ?: false
@@ -4224,7 +4229,8 @@ class PlayerActivity : ComponentActivity() {
                 wdLiveFixes.addLast(now)
                 // Damaged video (frozen picture / stuck) with video stored ahead: jump just past the damage (2 s, then 3 s,
                 // then 5 s) instead of restarting on the same damaged part.
-                val damage = (problem.startsWith("picture frozen") || problem.startsWith("stuck loading")) &&
+                if (problem.startsWith("picture frozen")) damageSeen = true
+                val damage = channelDamaged() && (problem.startsWith("picture frozen") || problem.startsWith("stuck loading")) &&
                     r != null && mediaBps > 0 && r.bytesAhead() / mediaBps >= 5
                 when {
                     damage && wdLiveFixes.size <= 4 -> {

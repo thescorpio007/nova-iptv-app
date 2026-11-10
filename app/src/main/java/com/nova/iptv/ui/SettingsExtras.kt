@@ -1627,6 +1627,12 @@ private fun SpeedAndLighterCard() {
         Text("🪶 Lighter version when the line is too tight", fontWeight = FontWeight.Medium)
         Hint("After 2 stalls in 10 min on a line with no spare speed: the same channel in a lower quality (SD / 540p / H265, on this or your other server). Smooth instead of stopping. After 20 calm minutes Nova offers to go back.")
         ChoiceRow(lighterLabel.toList(), lighter) { lighter = it; P.setLighter(context, it) }
+        var fast by remember { mutableStateOf(P.fastResume(context)) }
+        Text("⏯ After a stall (live TV)", fontWeight = FontWeight.Medium)
+        Hint("Wait for a good cushion (smoothest, as in build 19) or go on after only ~5 s (shorter waits, but more frequent short stops on a tight line).")
+        ChoiceRow(listOf("cushion" to "Wait for a good cushion", "fast" to "Resume quickly"), if (fast) "fast" else "cushion") {
+            fast = it == "fast"; P.setFastResume(context, fast)
+        }
     }
 }
 

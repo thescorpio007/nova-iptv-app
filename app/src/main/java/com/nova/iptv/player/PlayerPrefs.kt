@@ -10,6 +10,10 @@ object PlayerPrefs {
     fun speedBadge(c: Context): String = p(c).getString("speed_badge", "always") ?: "always"
     fun setSpeedBadge(c: Context, v: String) = p(c).edit().putString("speed_badge", v).apply()
 
+    /** Live: go on after only ~5 s once a stall is over (off by default — build 19 waited for a full cushion). */
+    fun fastResume(c: Context): Boolean = p(c).getBoolean("fast_resume", false)
+    fun setFastResume(c: Context, on: Boolean) = p(c).edit().putBoolean("fast_resume", on).apply()
+
     /** "auto" (default: switch after a 10 s countdown) / "ask" / "never". */
     fun lighter(c: Context): String = p(c).getString("lighter", "auto") ?: "auto"
     fun setLighter(c: Context, v: String) = p(c).edit().putString("lighter", v).apply()
