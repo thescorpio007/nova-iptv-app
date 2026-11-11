@@ -124,6 +124,7 @@ jobs:
           path: |
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Setup.exe
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Portable.zip
+          retention-days: 3
 
       - name: Checksums signed with Nova's key (Nova checks them before updating itself)
         shell: bash
