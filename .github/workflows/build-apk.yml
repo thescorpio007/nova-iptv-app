@@ -20,6 +20,8 @@ permissions:
 
 jobs:
   build:
+    # Builds run only in the public app repository (free there); the private code repository never builds.
+    if: ${{ github.repository == 'thescorpio007/nova-iptv-app' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Get the code
@@ -137,7 +139,7 @@ jobs:
         with:
           name: NovaIPTV-apk
           path: out/NovaIPTV-*.apk
-          retention-days: 3
+          retention-days: 7
 
       - name: Checksums signed with the app's own key (the app checks them before updating)
         run: |

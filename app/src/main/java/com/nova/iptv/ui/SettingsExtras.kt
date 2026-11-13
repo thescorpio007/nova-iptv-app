@@ -611,6 +611,8 @@ fun PlayerSettings(vm: MainViewModel) {
 
     SoundSyncCard()
 
+    CatWatchCard()
+
     HidePictureCard()
 
     PhoneOrientationCard(vm)
@@ -1592,6 +1594,27 @@ private fun NightModeCard() {
         Text("Applies to", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("all" to "Everything", "vod" to "Films & series", "live" to "Live TV"), scope) { scope = it; st.nightScope = it }
         Hint("Works with Nova's own sound decoding (the default). Not applied to Dolby / DTS sent untouched to a soundbar. The player's 🌙 button always wins for the video you are watching.")
+    }
+}
+
+
+/** Settings › 🐈 CATWATCH: damaged parts of live TV stepped over at the next good key picture, before they play. */
+@Composable
+private fun CatWatchCard() {
+    val context = LocalContext.current
+    val C = com.nova.iptv.player.CatWatch
+    var on by remember { mutableStateOf(C.on(context)) }
+    var note by remember { mutableStateOf(C.note(context)) }
+    val today = remember { C.todayText(context) }
+    SettingsCard("🐈 CATWATCH", summary = if (on) "On · $today" else "Off") {
+        Hint("Checks the stored live video ahead of what you watch. A damaged part is skipped to the next good key picture " +
+            "(usually 0.5–2 s) before the picture freezes. Nova never jumps to live while stored video remains.")
+        Text("CATWATCH", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("on" to "On", "off" to "Off (as build 33)"), if (on) "on" else "off") { on = it == "on"; C.setOn(context, on) }
+        Text("Show a small note when it skips", fontWeight = FontWeight.Medium)
+        Hint("A note at the top right for 3 s: \"🐈 skipped 0.8 s (damaged part)\".")
+        ChoiceRow(listOf("yes" to "Yes", "no" to "No"), if (note) "yes" else "no") { note = it == "yes"; C.setNote(context, note) }
+        Hint("Today: $today")
     }
 }
 

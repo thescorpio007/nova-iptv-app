@@ -983,6 +983,18 @@ def weak_signal():
     set_watchdog_mode("Live button only")
 
 
+def catwatch_damaged():
+    """🐈 CATWATCH: a feed with lost video packets — the damaged parts are stepped over before they are played."""
+    n = count_log(r"READY Damaged Packets")
+    open_test_channel("Damaged Packets")
+    check("Damaged channel starts", wait_count(r"READY Damaged Packets", n + 1, 30))
+    check("🐈 CATWATCH skips a damaged part at the next key picture", wait_log(r"CATWATCH Damaged Packets: skipped", 60))
+    shot("catwatch")
+    time.sleep(10)
+    check("…and Nova never jumps to live", not re.search(r"WATCHDOG Damaged Packets: .*jumped to live", test_log()))
+    back_to_main("catwatch")
+
+
 def stuck_picture():
     """The picture stops while data keeps arriving: the watchdog does what the Live button does, once."""
     n = count_log(r"READY Stuck Channel")
@@ -1432,6 +1444,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("Install and open", install),
         ("First login", login_first),
         ("Restart with an account", restart_check),
+        ("CATWATCH: damaged packets", catwatch_damaged),
         ("Open link and Share", open_link),
         ("Double OK hides a film", double_ok_hide),
     ]

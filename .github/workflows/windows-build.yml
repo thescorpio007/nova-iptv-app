@@ -14,6 +14,8 @@ permissions:
 
 jobs:
   build:
+    # Builds run only in the public app repository (free there); the private code repository never builds.
+    if: ${{ github.repository == 'thescorpio007/nova-iptv-app' }}
     runs-on: windows-2022
     defaults:
       run:
@@ -124,7 +126,7 @@ jobs:
           path: |
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Setup.exe
             dist/NovaIPTV-Windows-2.0-build-${{ github.run_number }}-Portable.zip
-          retention-days: 3
+          retention-days: 7
 
       - name: Checksums signed with Nova's key (Nova checks them before updating itself)
         shell: bash

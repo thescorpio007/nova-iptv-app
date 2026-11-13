@@ -86,6 +86,12 @@ class LiveRelay(
 
     private val thread = Thread({ downloadLoop() }, "LiveRelay")
 
+    /** 🐈 CATWATCH: finds damaged parts as video is stored; the player is handed the next good key picture instead. */
+    val catWatch = CatWatch()
+    @Volatile var catOn = true
+    /** A damaged part was skipped while reading: (seconds of stream skipped). Called on the player's loading thread. */
+    @Volatile var onCatSkip: ((Double) -> Unit)? = null
+
     init {
         dir.mkdirs()
         dir.listFiles()?.forEach { if (it.name.startsWith("seg_")) it.delete() }
@@ -112,6 +118,7 @@ class LiveRelay(
                     // the player then says "stream not recognised" and the connection was restarted again and again.
                     // Instead, keep only what starts at the first real MPEG-TS packet of each connection.
                     val start = java.io.ByteArrayOutputStream()
+                    catWatch.newConnection()
                     var aligned = false
                     while (running) {
                         val n = input.read(buf)
@@ -194,6 +201,7 @@ class LiveRelay(
                 segments.addLast(seg)
                 writer = FileOutputStream(seg.file)
             }
+            if (catOn) runCatching { catWatch.scan(b, from, n, written) }
             writer?.write(b, from, n)
             seg.length += n
             written += n
@@ -236,12 +244,32 @@ class LiveRelay(
                 val first = segments.firstOrNull()
                 if (first != null && readPos < first.start) readPos = first.start
                 var n = 0
-                if (readPos < written) {
+                // 🐈 Inside a damaged part: continue at the next good key picture (only once it is stored).
+                if (catOn) {
+                    val to = catWatch.skipTarget(readPos)
+                    if (to > readPos && to <= written) {
+                        val skipped = to - readPos
+                        readPos = to
+                        val bps = mediaBytesPerSec
+                        onCatSkip?.invoke(if (bps > 0) skipped / bps else 0.0)
+                    }
+                }
+                // 🐈 The newest ~2.5 s (one picture group) is held back while CATWATCH can still find damage in it,
+                // unless the provider has paused (then everything stored is handed over, no waiting).
+                val hold = if (catOn && mediaBytesPerSec > 0 && android.os.SystemClock.elapsedRealtime() - lastDataAt < 3000)
+                    (2.5 * mediaBytesPerSec).toLong() else 0L
+                val readable = written - hold
+                if (readPos < readable) {
                     val seg = segments.lastOrNull { it.start <= readPos }
                     val raf = if (seg != null) openReader(seg) else null
                     if (seg != null && raf != null) {
                         val inSeg = readPos - seg.start
-                        val count = minOf(seg.length - inSeg, len.toLong()).toInt()
+                        var count = minOf(seg.length - inSeg, len.toLong(), readable - readPos).toInt()
+                        // Stop just before a damaged part, so the next read can step over it.
+                        if (catOn) {
+                            val d = catWatch.nextDamageAfter(readPos)
+                            if (d > readPos && d - readPos < count) count = (d - readPos).toInt()
+                        }
                         if (count > 0) {
                             raf.seek(inSeg)
                             n = raf.read(dst, off, count)
@@ -321,6 +349,21 @@ class LiveRelay(
     /** Renews only the connection to the provider: everything stored stays, the player keeps reading. */
     fun reconnect() {
         runCatching { call?.cancel() }
+    }
+
+    /**
+     * 🐈 Puts the read position so that, after a restart that steps back [memBytes] (what the player had in memory),
+     * playing continues at the first stored key picture at least [minAheadBytes] past the current picture.
+     * Returns the bytes skipped, or -1 when there is no stored key picture to go to.
+     */
+    fun skipToKeyPicture(memBytes: Long, minAheadBytes: Long): Long {
+        synchronized(lock) {
+            val playAt = (readPos - memBytes.coerceAtLeast(0)).coerceAtLeast(segments.firstOrNull()?.start ?: 0L)
+            val k = catWatch.nextKeyPictureAfter(playAt + minAheadBytes.coerceAtLeast(0))
+            if (k <= playAt || k >= written) return -1L
+            readPos = (k + memBytes.coerceAtLeast(0)).coerceAtMost(written)
+            return k - playAt
+        }
     }
 
     /** Moves the read position; the player must be restarted afterwards. */

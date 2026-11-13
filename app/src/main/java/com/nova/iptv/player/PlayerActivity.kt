@@ -917,6 +917,10 @@ class PlayerActivity : ComponentActivity() {
             ).also {
                 it.maxSeconds = app.storage.liveDiskMinutes * 60
                 it.balanced = false
+                // 🐈 CATWATCH: damaged parts are stepped over at the next good key picture, before they are played.
+                it.catOn = CatWatch.on(this)
+                val forItem = item
+                it.onCatSkip = { secs -> handler.post { catSkipped(forItem, secs) } }
             }
         }
 
@@ -2312,6 +2316,37 @@ class PlayerActivity : ComponentActivity() {
         restartFromRelay()
     }
 
+
+    // ------------------------------------------------------------------ 🐈 CATWATCH
+
+    private var catNote: TextView? = null
+    private val hideCatNote = Runnable { catNote?.visibility = View.GONE }
+
+    /** A damaged part was stepped over before it was played: report line + a small note (3 s, text only). */
+    private fun catSkipped(item: PlayItem, secs: Double) {
+        CatWatch.record(this, secs)
+        val txt = "%.1f".format(secs)
+        Log.i("NovaTest", "CATWATCH ${item.title}: skipped $txt s")
+        session?.action("🐈 CATWATCH: damaged part skipped $txt s (before it was played)")
+        logHealth(item, "damaged part found ahead (CATWATCH)", "skipped $txt s to the next key picture")
+        if (current !== item || !CatWatch.note(this)) return
+        val note = catNote ?: TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f); setTypeface(typeface, Typeface.BOLD)
+            setTextColor(0xF2FFD27A.toInt())
+            setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat() / 2f, 0xE6000000.toInt())
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
+                .apply { setMargins(dp(16), dp(44), dp(16), dp(16)) }
+            (playerView.parent as ViewGroup).addView(this)
+            catNote = this
+        }
+        val stored = behindLiveSeconds()
+        note.text = "🐈 skipped $txt s (damaged part)" + (stored?.let { " · $it s stored" } ?: "")
+        note.visibility = View.VISIBLE
+        note.bringToFront()
+        handler.removeCallbacks(hideCatNote)
+        handler.postDelayed(hideCatNote, 3000)
+    }
+
     private fun goLive() {
         val r = relay
         if (r == null) {
@@ -3496,12 +3531,27 @@ class PlayerActivity : ComponentActivity() {
             else -> {
                 while (wdLiveFixes.isNotEmpty() && now - wdLiveFixes.first() > 120_000) wdLiveFixes.removeFirst()
                 wdLiveFixes.addLast(now)
+                val catSkip = if (r != null && r.catOn && mediaBps > 0) {
+                    { minAheadSec: Double ->
+                        val p = player
+                        val memBytes = if (p != null) ((p.bufferedPosition - p.currentPosition).coerceAtLeast(0) / 1000.0 * mediaBps).toLong() else 0L
+                        val skipped = r.skipToKeyPicture(memBytes, (minAheadSec * mediaBps).toLong())
+                        if (skipped >= 0) { restartOnStoredVideo(item, newPlayer = wdLiveFixes.size >= 2); skipped / mediaBps } else -1.0
+                    }
+                } else null
                 when {
                     r != null && wdLiveFixes.size == 1 -> { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
+                    // 🐈 CATWATCH: instead of 10 s / 5 s / live, go to the next good key picture (the smallest step that works),
+                    // a little further each time; never to live while stored video remains.
+                    catSkip != null && r!!.bytesAhead() / mediaBps >= 3 -> {
+                        val secs = catSkip(0.5 * (wdLiveFixes.size - 1))
+                        if (secs >= 0) { CatWatch.record(this, secs); "🐈 skipped ${"%.1f".format(secs)} s to the next key picture (cushion kept)" }
+                        else { CatWatch.recordLiveJump(this); goLive(); "jumped to live (no key picture stored ahead)" }
+                    }
                     r != null && wdLiveFixes.size == 2 -> { r.moveBy(10); restartOnStoredVideo(item, newPlayer = true); "skipped 10 s, new player (cushion kept)" }
                     // Plenty stored ahead (30 s or more): never throw it away — restart again a bit further on.
                     r != null && mediaBps > 0 && r.bytesAhead() / mediaBps >= 30 -> { r.moveBy(5); restartOnStoredVideo(item, newPlayer = true); "skipped 5 s, new player (cushion kept)" }
-                    else -> { goLive(); "jumped to live" }
+                    else -> { if (r?.catOn == true) CatWatch.recordLiveJump(this); goLive(); "jumped to live" }
                 }
             }
         }

@@ -43,6 +43,7 @@ LIVE = {
             {"num": 7, "name": "Cold Channel", "stream_id": 107, "stream_icon": "", "category_id": "3"},
             {"num": 8, "name": "Weak Channel", "stream_id": 108, "stream_icon": "", "category_id": "3"},
             {"num": 9, "name": "Stuck Channel", "stream_id": 109, "stream_icon": "", "category_id": "3"},
+            {"num": 10, "name": "Damaged Packets", "stream_id": 111, "stream_icon": "", "category_id": "3"},
         ],
     },
     "bob": {"7": [{"num": 1, "name": "Bob Channel A", "stream_id": 201, "category_id": "7"}]},
@@ -377,6 +378,10 @@ class Handler(BaseHTTPRequestHandler):
                 # A provider that keeps the connection open but stops sending after ~10 s (no error).
                 path = os.path.join(MEDIA, "sample.ts")
                 return self.send_file(path, "video/mp2t", stall_at=40.0 / 90, stall_secs=120, trickle=True)
+            if kind == "live" and sid == "111":
+                # A feed with lost video packets every 10 s (CATWATCH must step over them).
+                rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90
+                return self.send_file(os.path.join(MEDIA, "damaged.ts"), "video/mp2t", rate=rate, burst=rate * 3)
             if kind == "live" and sid == "109":
                 # The picture stops after 20 s while sound and data keep arriving (real-time pace).
                 rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90

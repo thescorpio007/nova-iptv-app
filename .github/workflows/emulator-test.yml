@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   test:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.repository == 'thescorpio007/nova-iptv-app' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ (github.event.inputs.mode || 'short') == 'full' && 75 || 20 }}
     env:
@@ -82,6 +82,7 @@ jobs:
           ffmpeg -loglevel error -ss 30 -i tests/media/sample.ts -map 0 -c copy -output_ts_offset 5000 -f mpegts tests/media/jumpb.ts
           cat tests/media/jumpa.ts tests/media/jumpb.ts > tests/media/jump.ts
           # An MKV with its index (Cues) at the end, like most provider films.
+          python3 tests/make_damaged.py tests/media/sample.ts tests/media/damaged.ts
           ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy tests/media/sample.mkv
           # An MKV with no index at all (written to a pipe: ffmpeg can't add Cues), like many provider films.
           ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy -f matroska - > tests/media/noindex.mkv
