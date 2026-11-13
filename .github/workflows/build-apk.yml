@@ -139,7 +139,7 @@ jobs:
         with:
           name: NovaIPTV-apk
           path: out/NovaIPTV-*.apk
-          retention-days: 7
+          retention-days: 3
 
       - name: Checksums signed with the app's own key (the app checks them before updating)
         run: |
