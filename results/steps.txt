@@ -1,0 +1,48 @@
+
+=== Install and open ===
+PASS  APK installs  (Performing Streamed Install
+Success)
+PASS  App opens without crashing
+
+=== First login ===
+PASS  Welcome screen appears on the first start
+FAIL  Welcome screen offers restore, the accounts link and the web browser
+PASS  Login screen appears
+PASS  Signature note on the sign-in page
+PASS  Login with Xtream account works, zones appear
+PASS  Live TV zone shows channels
+PASS  Signature note on the main page
+
+=== Restart with an account ===
+PASS  Restart: the start-up check runs
+PASS  Restart: Live TV opens
+PASS  Restart: no crash
+
+=== CATWATCH: damaged packets ===
+PASS  Damaged channel starts
+PASS  🐈 CATWATCH skips a damaged part at the next key picture
+PASS  …and Nova never jumps to live
+PASS  Main screen comes back after closing the player (catwatch)
+
+=== Open link and Share ===
+FAIL  Open link and Share  (error: "Link" not found on screen)
+Traceback (most recent call last):
+  File "/home/runner/work/nova-iptv-app/nova-iptv-app/tests/ui_test.py", line 224, in step
+    fn()
+  File "/home/runner/work/nova-iptv-app/nova-iptv-app/tests/ui_test.py", line 1304, in open_link
+    tap("Link", 15)
+  File "/home/runner/work/nova-iptv-app/nova-iptv-app/tests/ui_test.py", line 114, in tap
+    raise AssertionError(f'"{text}" not found on screen')
+AssertionError: "Link" not found on screen
+
+resumed: topResumedActivity=ActivityRecord{572031c u0 com.nova.iptv/.ui.MainActivity} t6}
+focus: mCurrentFocus=Window{389d49b u0 com.nova.iptv/com.nova.iptv.ui.MainActivity} | mFocusedApp=ActivityRecord{572031c u0 com.nova.iptv/.ui.MainActivity} t6}
+
+=== Double OK hides a film ===
+PASS  Double OK on a poster asks to hide it
+PASS  The window offers No / Yes, hide
+PASS  Double OK does not open the film page
+PASS  OK right away = No: the film is kept
+PASS  …and the remote is back on the same poster
+PASS  Yes hides it at once, without any code
+PASS  No crash in the whole test

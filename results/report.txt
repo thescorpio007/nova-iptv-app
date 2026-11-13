@@ -1,0 +1,27 @@
+22/24 checks passed
+
+PASS  APK installs  (Performing Streamed Install
+Success)
+PASS  App opens without crashing
+PASS  Welcome screen appears on the first start
+FAIL  Welcome screen offers restore, the accounts link and the web browser
+PASS  Login screen appears
+PASS  Signature note on the sign-in page
+PASS  Login with Xtream account works, zones appear
+PASS  Live TV zone shows channels
+PASS  Signature note on the main page
+PASS  Restart: the start-up check runs
+PASS  Restart: Live TV opens
+PASS  Restart: no crash
+PASS  Damaged channel starts
+PASS  🐈 CATWATCH skips a damaged part at the next key picture
+PASS  …and Nova never jumps to live
+PASS  Main screen comes back after closing the player (catwatch)
+FAIL  Open link and Share  (error: "Link" not found on screen)
+PASS  Double OK on a poster asks to hide it
+PASS  The window offers No / Yes, hide
+PASS  Double OK does not open the film page
+PASS  OK right away = No: the film is kept
+PASS  …and the remote is back on the same poster
+PASS  Yes hides it at once, without any code
+PASS  No crash in the whole test
