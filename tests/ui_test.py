@@ -1021,7 +1021,7 @@ def background_recording():
     check("It keeps recording after leaving the player", still and len(parts_after) > len(parts_before),
           f"{parts_before[-1:] } -> {parts_after[-1:]}")
     try:
-        tap("Downloads", 10)
+        tap("⬇", 10, exact=True)  # the Downloads tab (icon on a phone)
         time.sleep(2)
         shot("recording-list")
         tap("■ Stop", 10)
