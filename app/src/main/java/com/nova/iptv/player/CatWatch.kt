@@ -39,6 +39,9 @@ class CatWatch {
     /** ● Background recording: told of each key picture (stream offset, its PTS or -1, start of the damaged part before it or -1). */
     var onKeyPicture: ((at: Long, pts: Long, skipFrom: Long) -> Unit)? = null
     private var pesPts = -1L
+    /** Where the last PAT packet was stored (a recording's part starts there, so each part carries PAT/PMT). */
+    var lastPatAt = -1L
+        private set
 
     /** Damaged parts found ahead / skipped by the relay, and how many seconds of stream were skipped. */
     @Volatile var found = 0
@@ -109,7 +112,7 @@ class CatWatch {
             payload = o + 5 + al
         }
         if (pusi && afc != 2 && payload < o + 188) {
-            if (pid == 0) { readPat(p, payload, o + 188); return }
+            if (pid == 0) { lastPatAt = at; readPat(p, payload, o + 188); return }
             if (pid == pmtPid) { readPmt(p, payload, o + 188); return }
         }
         if (pid != videoPid) return

@@ -194,8 +194,34 @@ object PlayerFactory {
             )
             .setConstantBitrateSeekingEnabled(true)
 
-        val mediaSources = DefaultMediaSourceFactory(dataSource, extractors)
+        val defaultSources = DefaultMediaSourceFactory(dataSource, extractors)
             .setLoadErrorHandlingPolicy(RetryPolicy(live))
+        // ● Recordings / streaming downloads watched while they grow are read as a list of parts (HLS). Broadcast channels
+        // often have no "IDR" pictures, only ordinary key pictures: the parts' reader must accept them as start points
+        // too (as the live player does), or the picture never starts.
+        val mediaSources: androidx.media3.exoplayer.source.MediaSource.Factory = if (mode != SourceMode.GROWING) defaultSources
+        else object : androidx.media3.exoplayer.source.MediaSource.Factory {
+            private val hls = androidx.media3.exoplayer.hls.HlsMediaSource.Factory(dataSource)
+                .setExtractorFactory(
+                    androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory(
+                        DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS,
+                        true,
+                    )
+                )
+                .setLoadErrorHandlingPolicy(RetryPolicy(live))
+            override fun setDrmSessionManagerProvider(p: androidx.media3.exoplayer.drm.DrmSessionManagerProvider): androidx.media3.exoplayer.source.MediaSource.Factory {
+                hls.setDrmSessionManagerProvider(p); defaultSources.setDrmSessionManagerProvider(p); return this
+            }
+            override fun setLoadErrorHandlingPolicy(p: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy): androidx.media3.exoplayer.source.MediaSource.Factory {
+                hls.setLoadErrorHandlingPolicy(p); defaultSources.setLoadErrorHandlingPolicy(p); return this
+            }
+            override fun getSupportedTypes(): IntArray = defaultSources.supportedTypes
+            override fun createMediaSource(mediaItem: androidx.media3.common.MediaItem): androidx.media3.exoplayer.source.MediaSource {
+                val isHls = mediaItem.localConfiguration?.mimeType == androidx.media3.common.MimeTypes.APPLICATION_M3U8 ||
+                    mediaItem.localConfiguration?.uri?.toString().orEmpty().endsWith(".m3u8")
+                return if (isHls) hls.createMediaSource(mediaItem) else defaultSources.createMediaSource(mediaItem)
+            }
+        }
 
         // Decoders: the box's hardware first for video (4K/HDR). For audio, either the box first
         // (keeps Dolby/DTS passthrough to a soundbar) or the built-in FFmpeg decoders first, which

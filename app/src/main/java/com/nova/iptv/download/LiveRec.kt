@@ -531,11 +531,20 @@ internal class Segmenter(private val indexFile: File) {
         }
     }
 
-    private fun ptsSecs(a: Long, b: Long): Double {
+    /** Seconds between two PTS, or -1 when the clock jumped (a long gap that the arrival time doesn't confirm). */
+    private fun ptsSecs(a: Long, b: Long, wall: Double): Double {
         if (a < 0 || b < 0) return -1.0
         val d = (b - a) and ((1L shl 33) - 1)
         val s = d / 90_000.0
-        return if (s > 30.0) -1.0 else s
+        if (s <= 30.0) return s
+        // Far apart key pictures (long picture groups): fine when about that much time really passed.
+        return if (s <= 120.0 && kotlin.math.abs(s - wall) < 10.0) s else -1.0
+    }
+
+    /** Start parts at the PAT just before the key picture: each part then carries PAT/PMT (and SPS) itself. */
+    private fun cutFor(at: Long): Long {
+        val pat = cat.lastPatAt
+        return if (pat in (segStart + 1) until at && at - pat <= 64L * 1024) pat else at
     }
 
     private fun estimate(bytes: Long, wall: Double): Double =
@@ -544,31 +553,36 @@ internal class Segmenter(private val indexFile: File) {
     private fun onKey(at: Long, pts: Long, skipFrom: Long) {
         keysSeen++
         val now = SystemClock.elapsedRealtime()
-        if (segStart < 0) { segStart = at; segPts = pts; segWall = now; return } // the part before the first key picture is left out
+        if (segStart < 0) { // the part before the first key picture is left out
+            val pat = cat.lastPatAt
+            segStart = if (pat in 0 until at && at - pat <= 64L * 1024) pat else at
+            segPts = pts; segWall = now; return
+        }
         if (at <= segStart) return
         val wall = (now - segWall) / 1000.0
-        val dur = ptsSecs(segPts, pts)
+        val dur = ptsSecs(segPts, pts, wall)
+        val cut = cutFor(at)
         if (skipFrom > segStart) {
             // Damaged: this part ends where the damage starts, the broken bit up to this key picture is left out.
             val total = if (dur >= 0) dur else estimate(at - segStart, wall)
             emit(segStart, skipFrom - segStart, total * (skipFrom - segStart) / (at - segStart))
             skips++
             if (dur < 0) pendingDisc = true
-            segStart = at; segPts = pts; segWall = now
+            segStart = if (cut > skipFrom) cut else at; segPts = pts; segWall = now
             return
         }
         if (dur < 0 && segPts >= 0 && pts >= 0) {
             // The clock jumped (new connection, the channel restarted): the next part starts a new timeline.
-            emit(segStart, at - segStart, estimate(at - segStart, wall))
+            emit(segStart, cut - segStart, estimate(cut - segStart, wall))
             pendingDisc = true
-            segStart = at; segPts = pts; segWall = now
+            segStart = cut; segPts = pts; segWall = now
             return
         }
         val secs = if (dur >= 0) dur else wall
         if (secs >= 4.0) {
-            if (dur > 0) bytesPerSec = if (bytesPerSec == 0.0) (at - segStart) / dur else bytesPerSec * 0.8 + (at - segStart) / dur * 0.2
-            emit(segStart, at - segStart, secs)
-            segStart = at; segPts = pts; segWall = now
+            if (dur > 0) bytesPerSec = if (bytesPerSec == 0.0) (cut - segStart) / dur else bytesPerSec * 0.8 + (cut - segStart) / dur * 0.2
+            emit(segStart, cut - segStart, secs)
+            segStart = cut; segPts = pts; segWall = now
         }
     }
 

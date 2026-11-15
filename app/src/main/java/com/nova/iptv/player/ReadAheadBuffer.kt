@@ -85,9 +85,20 @@ class ReadAheadBuffer(
     private val thread = Thread({ runLoop() }, "nova-readahead").apply { isDaemon = true }
 
     fun start() {
-        dir.deleteRecursively()
+        // Clearing the old segments (up to 1000 MB) on the screen's thread froze Nova (ANR): set them aside, delete in the background.
+        clearAsync(dir)
         dir.mkdirs()
         thread.start()
+    }
+
+    private fun clearAsync(d: File) {
+        val parent = d.parentFile
+        val old = parent?.listFiles { f -> f.name.startsWith(d.name + ".old-") }.orEmpty().toMutableList()
+        if (d.exists()) {
+            val aside = File(parent, d.name + ".old-" + System.nanoTime())
+            if (d.renameTo(aside)) old += aside else d.deleteRecursively()
+        }
+        if (old.isNotEmpty()) Thread({ old.forEach { runCatching { it.deleteRecursively() } } }, "nova-readahead-clear").apply { isDaemon = true }.start()
     }
 
     fun close() {
@@ -97,7 +108,7 @@ class ReadAheadBuffer(
         }
         call?.cancel()
         thread.interrupt()
-        runCatching { dir.deleteRecursively() }
+        runCatching { clearAsync(dir) }
     }
 
     val totalBytes: Long get() = total

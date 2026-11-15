@@ -1679,6 +1679,11 @@ class PlayerActivity : ComponentActivity() {
         lastErrorName = error?.let { e ->
             e.errorCodeName.removePrefix("ERROR_CODE_") + (generateSequence(e.cause) { it.cause }.lastOrNull()?.let { c -> " (${c.javaClass.simpleName}: ${c.message?.take(80)})" } ?: "")
         }
+        // ● A recording that doesn't play: say why in the report (the first few errors).
+        if (LiveRec.isRecordingItem(item) && retryCount < 3) {
+            Log.i("NovaTest", "LIVEREC play error ${item.title}: $lastErrorName")
+            session?.action("recording read error: $lastErrorName")
+        }
         // "Stream not recognised": usually the first data arrived broken or empty (server hiccup), not this device.
         // Retry quietly; only after that is it reported as a file the player can't read.
         if (code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED) {
@@ -2563,7 +2568,8 @@ class PlayerActivity : ComponentActivity() {
         vod.extraViews["■ Stop rec"]?.setTextColor(0xFFFF6B6B.toInt())
         if (::recButton.isInitialized) updateRecButton()
         if (rec == null) { recBadge?.visibility = View.GONE; return }
-        val badge = recBadge ?: recText(15f, 0xFFFF6B6B.toInt(), 16).also { recBadge = it }
+        // Below the round 🔒 / ⚙ buttons of the film controls (they share the top right corner).
+        val badge = recBadge ?: recText(15f, 0xFFFF6B6B.toInt(), 84).also { recBadge = it }
         val p = player
         val behind = if (live && p != null && p.duration > 0) ((p.duration - p.currentPosition) / 1000).coerceAtLeast(0) else -1L
         badge.text = if (live) "● REC ${LiveRec.clock(rec.seconds)}" + (if (behind >= 60) " · watching −${behind / 60} min" else "")
@@ -2573,7 +2579,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun showRecNote(text: String) {
-        val note = recNote ?: recText(13.5f, 0xF2FFD27A.toInt(), 72).also { recNote = it }
+        val note = recNote ?: recText(13.5f, 0xF2FFD27A.toInt(), 112).also { recNote = it }
         note.text = text
         note.visibility = View.VISIBLE
         note.bringToFront()
