@@ -73,6 +73,11 @@ jobs:
             -f lavfi -i sine=frequency=660:sample_rate=48000 -t 60 \
             -c:v libx264 -preset veryfast -pix_fmt yuv420p -g 25 -c:a aac -b:a 128k \
             -movflags +faststart tests/media/sample.mp4
+          # A broadcast-like channel: key pictures that aren't IDR (open picture groups), SD 720×576.
+          ffmpeg -loglevel error -f lavfi -i testsrc=size=720x576:rate=25 \
+            -f lavfi -i sine=frequency=500:sample_rate=48000 -t 90 \
+            -c:v libx264 -preset veryfast -pix_fmt yuv420p -x264-params "keyint=25:open-gop=1:scenecut=0" -bf 2 -c:a aac -b:a 128k \
+            -f mpegts tests/media/broadcast.ts
           # A live stream whose picture stops after 20 s while the sound and data keep coming (stuck picture).
           ffmpeg -loglevel error -i tests/media/sample.ts -t 20 -map 0 -c copy -streamid 0:256 -streamid 1:257 -f mpegts tests/media/part1.ts
           ffmpeg -loglevel error -copyts -ss 20 -i tests/media/sample.ts -map 0:a -c copy -streamid 0:257 -f mpegts tests/media/part2.ts

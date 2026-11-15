@@ -1028,6 +1028,26 @@ def background_recording():
     except AssertionError as e:
         note(str(e))
     check("■ Stop in Downloads stops and saves it", wait_log(r"LIVEREC saved Paced Channel", 20))
+    back_to_main("recording-list")
+    # A broadcast-like channel (key pictures without IDR): its recording must play too.
+    n = count_log(r"READY Broadcast Channel")
+    open_test_channel("Broadcast Channel")
+    check("Broadcast channel starts", wait_count(r"READY Broadcast Channel", n + 1, 30))
+    time.sleep(3)
+    adb("shell input keyevent --longpress 23")
+    if not wait_log(r"LIVEREC start Broadcast Channel", 8):
+        adb("shell input tap 540 960")
+        time.sleep(1)
+        try:
+            tap("● Rec", 8)
+        except AssertionError:
+            pass
+    check("Broadcast channel: recording starts", wait_log(r"LIVEREC start Broadcast Channel", 15))
+    check("Broadcast channel: its recording plays (key pictures without IDR)", wait_log(r"READY Broadcast Channel · \d{4}", 75))
+    shot("recording-broadcast")
+    time.sleep(8)
+    check("…and keeps playing (no read errors)", not re.search(r"LIVEREC play error Broadcast", test_log()))
+    back_to_main("recording-broadcast")
 
 
 def stuck_picture():

@@ -44,6 +44,7 @@ LIVE = {
             {"num": 8, "name": "Weak Channel", "stream_id": 108, "stream_icon": "", "category_id": "3"},
             {"num": 9, "name": "Stuck Channel", "stream_id": 109, "stream_icon": "", "category_id": "3"},
             {"num": 10, "name": "Damaged Packets", "stream_id": 111, "stream_icon": "", "category_id": "3"},
+            {"num": 11, "name": "Broadcast Channel", "stream_id": 112, "stream_icon": "", "category_id": "3"},
         ],
     },
     "bob": {"7": [{"num": 1, "name": "Bob Channel A", "stream_id": 201, "category_id": "7"}]},
@@ -382,6 +383,11 @@ class Handler(BaseHTTPRequestHandler):
                 # A feed with lost video packets every 10 s (CATWATCH must step over them).
                 rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90
                 return self.send_file(os.path.join(MEDIA, "damaged.ts"), "video/mp2t", rate=rate, burst=rate * 3)
+            if kind == "live" and sid == "112":
+                # Like a broadcast channel: no IDR pictures after the first one, at real time.
+                path = os.path.join(MEDIA, "broadcast.ts")
+                rate = os.path.getsize(path) // 90
+                return self.send_file(path, "video/mp2t", rate=rate, burst=rate * 3)
             if kind == "live" and sid == "109":
                 # The picture stops after 20 s while sound and data keep arriving (real-time pace).
                 rate = os.path.getsize(os.path.join(MEDIA, "sample.ts")) // 90
