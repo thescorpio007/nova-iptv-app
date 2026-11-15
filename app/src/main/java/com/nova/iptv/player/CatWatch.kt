@@ -36,6 +36,10 @@ class CatWatch {
     private val keys = LongArray(4096)
     private var keyCount = 0       // total written (ring index = count % size)
 
+    /** ● Background recording: told of each key picture (stream offset, its PTS or -1, start of the damaged part before it or -1). */
+    var onKeyPicture: ((at: Long, pts: Long, skipFrom: Long) -> Unit)? = null
+    private var pesPts = -1L
+
     /** Damaged parts found ahead / skipped by the relay, and how many seconds of stream were skipped. */
     @Volatile var found = 0
         private set
@@ -114,12 +118,15 @@ class CatWatch {
             if (lastCc >= 0 && !disc && cc != lastCc && cc != ((lastCc + 1) and 15)) damage(at, false)
             lastCc = cc
         }
+        if (pusi && onKeyPicture != null) pesPts = ptsOf(p, payload, o + 188)
         if (pusi && (rai || startsKeyPicture(p, payload, o + 188))) keyPicture(at)
     }
 
     private fun keyPicture(at: Long) {
         // A damaged group (2+ lost packets, or anything marked broken): skip from the damage to this key picture.
+        var skipFrom = -1L
         if (damageAt in 0 until at && (lost >= 2 || hard)) {
+            skipFrom = damageAt
             synchronized(skips) {
                 skips.addLast(Skip(damageAt, at))
                 while (skips.size > 500) skips.removeFirst()
@@ -128,6 +135,15 @@ class CatWatch {
         }
         damageAt = -1L; lost = 0; hard = false
         synchronized(keys) { keys[keyCount % keys.size] = at; keyCount++ }
+        onKeyPicture?.invoke(at, pesPts, skipFrom)
+    }
+
+    /** The PTS (90 kHz) of the PES starting in this packet, or -1. */
+    private fun ptsOf(p: ByteArray, i: Int, end: Int): Long {
+        if (i + 14 > end || p[i] != 0.toByte() || p[i + 1] != 0.toByte() || p[i + 2] != 1.toByte()) return -1L
+        if (p[i + 7].toInt() and 0x80 == 0) return -1L
+        fun b(k: Int) = (p[i + k].toInt() and 0xFF).toLong()
+        return ((b(9) shr 1) and 7 shl 30) or (b(10) shl 22) or ((b(11) shr 1) shl 15) or (b(12) shl 7) or (b(13) shr 1)
     }
 
     private fun readPat(p: ByteArray, payload: Int, end: Int) {

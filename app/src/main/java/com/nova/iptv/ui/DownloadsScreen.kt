@@ -44,7 +44,7 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
             Text(
                 "Saved in: ${vm.downloadsFolder()}\n" +
                     "Each IPTV server downloads one film at a time (one connection of your account); other links download up to 4 at once. " +
-                    "Recordings are made from the Rec button in the player while you watch a channel.",
+                    "Recordings are made from the ● Rec button (or a long press on OK) while you watch a channel; they continue in the background.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(bottom = 4.dp),
@@ -58,7 +58,30 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
         if (items.isEmpty()) {
             item { EmptyText("No downloads or recordings yet.\nOpen a movie or a series episode and choose Download.") }
         }
-        val split = items.partition { com.nova.iptv.download.DownloadCenter.isServer(it.url) }
+        // ● Recordings first: resume one after coming back home, even while it still records.
+        val recordings = items.filter { it.kind == "recording" }
+        if (recordings.isNotEmpty()) item(key = "rec-title") {
+            Text("● RECORDINGS", fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold,
+                color = androidx.compose.ui.graphics.Color(0xFFFF8A8A), modifier = Modifier.padding(top = 6.dp, start = 2.dp))
+        }
+        itemsIndexed(recordings, key = { _, d -> d.id }) { _, d ->
+            val resumeAt = vm.resumePosition(com.nova.iptv.data.SavedItem("file", d.id, d.title, d.icon))
+            RecordingRow(
+                d, resumeAt,
+                onPlay = { startAt ->
+                    val item = com.nova.iptv.download.LiveRec.playItem(d, startAt)
+                    if (item != null) onPlay(listOf(item), 0)
+                    else Toast.makeText(context, "The file is no longer on the device.", Toast.LENGTH_LONG).show()
+                },
+                onStop = { com.nova.iptv.download.LiveRec.stop(context, "stopped by you (Downloads)") },
+                onTv = if (com.nova.iptv.data.Cast.isTv(context) || d.status == DownloadStatus.RECORDING) null else ({
+                    val item = vm.localPlayItem(d)
+                    if (item != null) com.nova.iptv.data.Cast.open(context, item, resumeAt)
+                }),
+                onDelete = { vm.deleteDownload(d) },
+            )
+        }
+        val split = items.filter { it.kind != "recording" }.partition { com.nova.iptv.download.DownloadCenter.isServer(it.url) }
         listOf(
             "🖥  YOUR IPTV SERVERS · 1 at a time per server (never blocks your watching)" to split.first,
             "🔗  OTHER LINKS · up to ${com.nova.iptv.download.DownloadCenter.LINK_SLOTS} at the same time" to split.second,
@@ -89,6 +112,54 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
                 onDelete = { vm.deleteDownload(d) },
             )
         }
+        }
+    }
+}
+
+/** ● A recording: Resume / From start, and ■ Stop while it records (Delete once saved). */
+@Composable
+private fun RecordingRow(
+    d: DownloadItem,
+    resumeAt: Long,
+    onPlay: (Long) -> Unit,
+    onStop: () -> Unit,
+    onTv: (() -> Unit)?,
+    onDelete: () -> Unit,
+) {
+    val L = com.nova.iptv.download.LiveRec
+    val recording = d.status == DownloadStatus.RECORDING
+    val dur = L.words(d.durationSec)
+    val gaps = if (d.gaps > 0) " · ${d.gaps} gap${if (d.gaps == 1) "" else "s"} (${d.gapSec} s)" else ""
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface).padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Logo(d.icon, d.title, Modifier.size(width = 56.dp, height = 80.dp).clip(RoundedCornerShape(8.dp)))
+            Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                Text(d.title, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (recording) {
+                    Row {
+                        Text("● Recording", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFFFF8A8A))
+                        Text(" · $dur · ${L.size(d.doneBytes)}" + (if (d.endsAt > 0) " · ends ${L.hhmm(d.endsAt)}" else "") + gaps,
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    Text("Recording · Ready · " + (if (d.durationSec > 0) "$dur · " else "") + L.size(d.doneBytes) + gaps,
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (d.durationSec > 0 && resumeAt > 0) {
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicator(progress = { (resumeAt / 1000f / d.durationSec).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+            if (resumeAt > 0) TextButton(onClick = { onPlay(com.nova.iptv.player.PlayItem.START_RESUME) }) { Text("▶ Resume ${L.clock(resumeAt / 1000)}") }
+            else TextButton(onClick = { onPlay(if (recording) com.nova.iptv.player.PlayItem.START_NEWEST else 0L) }) { Text(if (recording) "▶ Watch" else "▶ Play") }
+            TextButton(onClick = { onPlay(0L) }) { Text("⏮ From start") }
+            if (onTv != null) TextButton(onClick = onTv) { Text("📺 TV") }
+            if (recording) TextButton(onClick = onStop) { Text("■ Stop", color = MaterialTheme.colorScheme.error) }
+            else TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
         }
     }
 }

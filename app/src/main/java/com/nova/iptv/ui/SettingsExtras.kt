@@ -612,6 +612,7 @@ fun PlayerSettings(vm: MainViewModel) {
     SoundSyncCard()
 
     CatWatchCard()
+    RecordingCard()
 
     HidePictureCard()
 
@@ -1615,6 +1616,43 @@ private fun CatWatchCard() {
         Hint("A note at the top right for 3 s: \"🐈 skipped 0.8 s (damaged part)\".")
         ChoiceRow(listOf("yes" to "Yes", "no" to "No"), if (note) "yes" else "no") { note = it == "yes"; C.setNote(context, note) }
         Hint("Today: $today")
+    }
+}
+
+/** Settings › ● Recording: background recording, its time limit, watching from it, free space and box restarts. */
+@Composable
+private fun RecordingCard() {
+    val context = LocalContext.current
+    val L = com.nova.iptv.download.LiveRec
+    var hours by remember { mutableStateOf(L.hours(context)) }
+    var fromRec by remember { mutableStateOf(L.fromRecording(context)) }
+    var minGb by remember { mutableStateOf(L.minFreeGb(context)) }
+    var boot by remember { mutableStateOf(L.continueAfterBoot(context)) }
+    val free = remember { L.freeBytes(context) }
+    val now by L.state.collectAsStateWithLifecycle()
+    val freeText = if (free >= 0) " · ${L.size(free)} free" else ""
+    SettingsCard("● Recording", summary = "Background · $hours h$freeText") {
+        Hint("Recording continues in the background: when you change channel, watch films, go to the home screen, turn the TV off " +
+            "or leave home. Open the channel or the recording to watch from the saved file.")
+        Text("Record for", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("1" to "1 h", "2" to "2 h", "3" to "3 h", "4" to "4 h"), hours.toString()) { hours = it.toInt(); L.setHours(context, hours) }
+        Hint("When the time is up you're asked \"Keep recording?\" (10 s). If nobody answers, the recording is stopped and saved.")
+        Text("Watching a recording channel", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("rec" to "From the recording (no extra connection)", "live" to "Live stream"), if (fromRec) "rec" else "live") {
+            fromRec = it == "rec"; L.setFromRecording(context, fromRec)
+        }
+        Text("Stop when free space is below", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("1" to "1 GB", "2" to "2 GB", "5" to "5 GB"), minGb.toString()) { minGb = it.toInt(); L.setMinFreeGb(context, minGb) }
+        Text("After a power cut / box restart", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("yes" to "Continue the recording", "no" to "Don't continue"), if (boot) "yes" else "no") {
+            boot = it == "yes"; L.setContinueAfterBoot(context, boot)
+        }
+        val s = now
+        Hint(
+            (if (s != null) "Now: ● ${s.title} · ${L.words(s.seconds)} · ${L.size(s.bytes)} · ends ${L.hhmm(s.endsAt)}" +
+                (if (s.gaps > 0) " · ${s.gaps} reconnection${if (s.gaps == 1) "" else "s"}" else "") + "  |  " else "") +
+                "4 h ≈ 3.6 GB (SD) · 6 GB (HD)"
+        )
     }
 }
 

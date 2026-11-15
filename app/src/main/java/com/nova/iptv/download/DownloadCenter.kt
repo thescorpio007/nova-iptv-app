@@ -60,6 +60,7 @@ object DownloadCenter {
             storage.downloads = _items.value
         }
         if (deleteFile) runCatching { File(item.path).delete() }
+        if (deleteFile && item.kind == "recording") runCatching { HlsDownload.indexFile(item.path).delete() }
     }
 
     /** A download being watched while it downloads: it goes first. */

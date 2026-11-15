@@ -210,6 +210,12 @@ data class DownloadItem(
     val connections: Int = 0,
     val speed: Long = 0L,
     val note: String? = null,
+    /** ● Recordings: seconds saved, when the recording time ends (ms), connection gaps, and the account it uses. */
+    val durationSec: Long = 0L,
+    val endsAt: Long = 0L,
+    val gaps: Int = 0,
+    val gapSec: Long = 0L,
+    val accountId: String = "",
 )
 
 object DownloadStatus {

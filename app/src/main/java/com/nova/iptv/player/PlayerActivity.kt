@@ -49,6 +49,7 @@ import com.nova.iptv.data.PlaybackLog
 import com.nova.iptv.data.XtreamApi
 import com.nova.iptv.download.DownloadCenter
 import com.nova.iptv.download.Recorder
+import com.nova.iptv.download.LiveRec
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -662,6 +663,9 @@ class PlayerActivity : ComponentActivity() {
                 override fun setBoost(percent: Int) { boostSession = percent; applyBoost() }
             },
             extraButtons = listOf(
+                "⏮ From start" to { player?.let { it.seekTo(0L); it.playWhenReady = true } },
+                "⏭ Newest" to { player?.let { it.seekToDefaultPosition(); it.playWhenReady = true } },
+                "■ Stop rec" to { showStopRecPopup() },
                 "🌙 Night mode: Off" to { toggleNight() },
                 "🔊 Boost" to { showBoost() },
                 "🔊 Sound sync" to { showSoundSync() },
@@ -675,6 +679,7 @@ class PlayerActivity : ComponentActivity() {
             ),
         )
         if (!PlayerUi.compact(this)) vod.extraViews["⟲ Rotate"]?.visibility = View.GONE
+        listOf("⏮ From start", "⏭ Newest", "■ Stop rec").forEach { vod.extraViews[it]?.visibility = View.GONE }
         if (com.nova.iptv.data.Cast.isTv(this)) vod.extraViews["📺 Play on TV"]?.visibility = View.GONE
         vod.addBottomView(linkLine())
         // Keep the controls clear of the camera cut-out.
@@ -751,6 +756,10 @@ class PlayerActivity : ComponentActivity() {
         root.addView(keySink)
         setContentView(root)
         keySink.requestFocus()
+        // ● Background recording: the time-up popup, short notes, and the REC badge.
+        RecPopups.watch(this)
+        lifecycleScope.launch { LiveRec.notes.collect { showRecNote(it) } }
+        handler.post(recTick)
     }
 
     // ================================================================== playback
@@ -839,6 +848,9 @@ class PlayerActivity : ComponentActivity() {
     private fun startPlayback(index: Int, quiet: Boolean, keepTweaks: Boolean) {
         val items = PlaybackQueue.items
         if (items.isEmpty()) return
+        // ● Another live channel of the account that is recording, with no connection left: ask first.
+        val asked = items[index.coerceIn(0, items.lastIndex)]
+        if (!quiet && noFreeConnection(asked)) { askNoConnection(index.coerceIn(0, items.lastIndex)); return }
         saveResumePosition()
         cancelTimers()
         if (Recorder.isRecording) {
@@ -849,7 +861,13 @@ class PlayerActivity : ComponentActivity() {
         val i = index.coerceIn(0, items.lastIndex)
         if (current != null && PlaybackQueue.index != i) previousIndex = PlaybackQueue.index
         PlaybackQueue.index = i
-        val item = items[i]
+        var item = items[i]
+        // ● A channel that is recording: watched from the recording (no second connection), at its newest part.
+        val rec = LiveRec.state.value
+        if (item.isLive && rec != null && rec.url == item.url && LiveRec.fromRecording(this)) {
+            DownloadCenter.get(rec.id)?.let { d -> LiveRec.playItem(d, recStartAt)?.let { item = it } }
+        }
+        recStartAt = PlayItem.START_NEWEST
         current = item
         linkTexts.forEach { it.text = "🔗 " + item.url }
         applySoundSync(announce = !quiet)
@@ -950,9 +968,15 @@ class PlayerActivity : ComponentActivity() {
         }
 
         val p = ensurePlayer(mode)
-        val growingHls = item.url.startsWith("nova-dl://") && item.url.endsWith(".m3u8")
+        val isRecording = LiveRec.isRecordingItem(item)
+        val growingHls = item.url.startsWith("nova-dl://") && item.url.endsWith(".m3u8") && !isRecording
         // Streaming download while it runs: always from the beginning (jump anywhere inside the saved part).
-        val resumeAt = if (growingHls) 0L else if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.VOD_HLS_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
+        // ● A recording: from where you left it, from the start, or its newest part.
+        val resumeAt = if (isRecording) when (item.startAt) {
+            PlayItem.START_RESUME -> app.storage.getPosition(item.key)
+            PlayItem.START_NEWEST -> -1L
+            else -> item.startAt.coerceAtLeast(0L)
+        } else if (item.startAt == 0L) 0L else if (growingHls) 0L else if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.VOD_HLS_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
             app.storage.getPosition(item.key)
         } else 0L
         if (!quiet) resumeFallbackDone = false
@@ -960,7 +984,7 @@ class PlayerActivity : ComponentActivity() {
             if (!resumeFallbackDone) handler.postDelayed(resumeTimeoutTask, 25_000)
             p.setMediaItem(buildMediaItem(item), resumeAt)
             if (!quiet) Toast.makeText(this, "Resuming from ${formatDuration(resumeAt)}", Toast.LENGTH_SHORT).show()
-        } else if (growingHls) {
+        } else if (growingHls || (isRecording && resumeAt == 0L)) {
             // The list grows like a live one: start explicitly at its beginning, not at its end.
             p.setMediaItem(buildMediaItem(item), 0L)
         } else {
@@ -1006,6 +1030,7 @@ class PlayerActivity : ComponentActivity() {
             vod.resetForNewItem(titleView.text.toString(), resizeNames[resizeIndex])
             vod.showAndFocus()
         }
+        updateRecViews()
         if (layoutDone) applyOrientationLayout()
     }
 
@@ -2397,25 +2422,164 @@ class PlayerActivity : ComponentActivity() {
 
     // ================================================================== recording & downloads
 
+    /**
+     * ● Rec: the channel is recorded in the background (its own connection, a foreground service) and you watch it
+     * from the recording. ■ Stop rec asks: play from the recording, or stop the recording.
+     */
     private fun toggleRecording() {
         val item = current ?: return
-        if (Recorder.isRecording) {
-            val f = Recorder.stop()
-            Toast.makeText(this, "Recording saved to ${f?.parent ?: "Recordings"}", Toast.LENGTH_LONG).show()
-        } else {
-            if (playerMode == SourceMode.LIVE_HLS_DISK || item.isHls) {
-                Toast.makeText(this, "Recording needs the MPEG-TS live format (Settings).", Toast.LENGTH_LONG).show()
-                return
-            }
-            val f = Recorder.start(this, item.title, item.saved.icon)
-            Toast.makeText(this, "Recording to ${f.absolutePath}", Toast.LENGTH_LONG).show()
+        val rec = LiveRec.state.value
+        if (rec != null && (item.downloadId == rec.id || item.url == rec.url)) { showStopRecPopup(); return }
+        if (rec != null) {
+            Toast.makeText(this, "Already recording ${rec.title}. Stop it first (■ Stop in its notification or in Downloads › Recordings).", Toast.LENGTH_LONG).show()
+            return
         }
-        updateRecButton()
+        if (!item.isLive) return
+        if (playerMode == SourceMode.LIVE_HLS_DISK || item.isHls) {
+            Toast.makeText(this, "Recording needs the MPEG-TS live format (Settings).", Toast.LENGTH_LONG).show()
+            return
+        }
+        // The player's own connection is closed first: the recording takes it (one connection for both).
+        player?.stop()
+        relay?.close()
+        relay = null
+        val d = LiveRec.start(this, item.title, item.url, item.saved.accountId, item.saved.icon) ?: return
+        val h = LiveRec.hours(this)
+        session?.action("● Recording started (background, $h h)")
+        Toast.makeText(this, "● Recording ${item.title} for $h h in the background — now playing from the recording", Toast.LENGTH_LONG).show()
+        Log.i("NovaTest", "LIVEREC watching ${item.title} from the recording (${d.id.take(8)})")
+        recStartAt = PlayItem.START_NEWEST
+        handler.postDelayed({ startPlayback(PlaybackQueue.index, quiet = false, keepTweaks = false) }, 400)
+    }
+
+    /** ■ Stop rec: keep recording and watch it (chosen after 10 s), or stop and save. */
+    private fun showStopRecPopup() {
+        val rec = LiveRec.state.value ?: return
+        val watching = current?.downloadId == rec.id
+        val pos = player?.currentPosition ?: 0L
+        RecPopups.choose(
+            this, "● Recording ${rec.title}",
+            "${LiveRec.words(rec.seconds)} saved · ${LiveRec.size(rec.bytes)} · ends ${LiveRec.hhmm(rec.endsAt)}",
+            listOf(
+                RecPopups.Choice("▶ Play from the recording", "Keep recording and watch" + (if (watching && pos > 0) " from where you are (${formatDuration(pos)})" else "")) { playRecording(PlayItem.START_RESUME) },
+                RecPopups.Choice("■ Stop the recording", "Save the file (${LiveRec.words(rec.seconds)}) and close the connection") {
+                    LiveRec.stop(this, "stopped by you")
+                    session?.action("● Recording stopped by you (${LiveRec.words(rec.seconds)})")
+                    Toast.makeText(this, "● Recording saved — Downloads › Recordings", Toast.LENGTH_LONG).show()
+                },
+            ),
+            default = 0,
+        ) { playRecording(PlayItem.START_RESUME) }
+    }
+
+    /** Opens the recording that is running (unless it is already what you watch). */
+    private fun playRecording(startAt: Long) {
+        val rec = LiveRec.state.value ?: return
+        if (current?.downloadId == rec.id) return
+        val items = PlaybackQueue.items
+        val idx = items.indexOfFirst { it.isLive && it.url == rec.url }
+        recStartAt = startAt
+        if (idx >= 0) { startPlayback(idx, quiet = false, keepTweaks = false); return }
+        val d = DownloadCenter.get(rec.id) ?: return
+        val it = LiveRec.playItem(d, startAt) ?: return
+        PlaybackQueue.items = listOf(it)
+        startPlayback(0, quiet = false, keepTweaks = false)
+    }
+
+    /** Where a recording opened from a live channel starts (newest, unless asked otherwise). */
+    private var recStartAt = PlayItem.START_NEWEST
+
+    /** Another live channel on the account that is recording, and that account allows only one connection. */
+    private fun noFreeConnection(item: PlayItem): Boolean {
+        if (!item.isLive) return false
+        val rec = LiveRec.state.value ?: return false
+        if (rec.url == item.url) return false
+        if (rec.accountId.isBlank() || rec.accountId != item.saved.accountId) return false
+        return app.storage.maxConnections(rec.accountId) < 2
+    }
+
+    private fun askNoConnection(index: Int) {
+        val rec = LiveRec.state.value ?: return
+        val want = PlaybackQueue.items.getOrNull(index) ?: return
+        val acc = app.storage.account(rec.accountId)?.name ?: "this account"
+        val max = app.storage.maxConnections(rec.accountId).coerceAtLeast(1)
+        Log.i("NovaTest", "LIVEREC no free connection for ${want.title}")
+        RecPopups.choose(
+            this, "No free connection",
+            "${rec.title} is recording on $acc ($max of $max connection${if (max == 1) "" else "s"} in use). ${want.title} would need another one.",
+            listOf(
+                RecPopups.Choice("▶ Watch the recording instead", "Keeps recording · chosen in 10 s") {
+                    if (current?.downloadId != rec.id) playRecording(PlayItem.START_NEWEST)
+                },
+                RecPopups.Choice("■ Stop the recording and watch ${want.title}") {
+                    LiveRec.stop(this, "stopped to watch ${want.title}")
+                    handler.postDelayed({ startPlayback(index, quiet = true, keepTweaks = false) }, 1500)
+                },
+            ),
+            default = 0,
+        ) { if (current?.downloadId != rec.id) playRecording(PlayItem.START_NEWEST) }
     }
 
     private fun updateRecButton() {
-        recButton.text = if (Recorder.isRecording) "■ Stop rec" else "● Rec"
-        recButton.setTextColor(if (Recorder.isRecording) 0xFFFF6B6B.toInt() else Color.WHITE)
+        val rec = LiveRec.state.value
+        val mine = rec != null && current?.let { it.url == rec.url || it.downloadId == rec.id } == true
+        recButton.text = if (mine) "■ Stop rec" else "● Rec"
+        recButton.setTextColor(if (mine) 0xFFFF6B6B.toInt() else Color.WHITE)
+    }
+
+    // ------------------------------------------------------------------ ● REC badge, notes, recording controls
+
+    private var recBadge: TextView? = null
+    private var recNote: TextView? = null
+    private val hideRecNote = Runnable { recNote?.visibility = View.GONE }
+
+    private fun recText(size: Float, color: Int, top: Int) = TextView(this).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, size); setTypeface(typeface, Typeface.BOLD)
+        setTextColor(color)
+        setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat() / 2f, 0xE6000000.toInt())
+        layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP)
+            .apply { setMargins(dp(16), dp(top), dp(16), dp(16)) }
+        visibility = View.GONE
+        (playerView.parent as ViewGroup).addView(this)
+    }
+
+    private val recTick = object : Runnable {
+        override fun run() {
+            updateRecViews()
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    /** The ● REC badge (top right), the recording buttons of the film controls and the Rec button. */
+    private fun updateRecViews() {
+        if (!::vod.isInitialized) return
+        val rec = LiveRec.state.value
+        val item = current
+        val isRec = LiveRec.isRecordingItem(item)
+        val live = rec != null && item?.downloadId == rec.id
+        vod.extraViews["⏮ From start"]?.visibility = if (isRec) View.VISIBLE else View.GONE
+        vod.extraViews["⏭ Newest"]?.visibility = if (live) View.VISIBLE else View.GONE
+        vod.extraViews["■ Stop rec"]?.visibility = if (live) View.VISIBLE else View.GONE
+        vod.extraViews["■ Stop rec"]?.setTextColor(0xFFFF6B6B.toInt())
+        if (::recButton.isInitialized) updateRecButton()
+        if (rec == null) { recBadge?.visibility = View.GONE; return }
+        val badge = recBadge ?: recText(15f, 0xFFFF6B6B.toInt(), 16).also { recBadge = it }
+        val p = player
+        val behind = if (live && p != null && p.duration > 0) ((p.duration - p.currentPosition) / 1000).coerceAtLeast(0) else -1L
+        badge.text = if (live) "● REC ${LiveRec.clock(rec.seconds)}" + (if (behind >= 60) " · watching −${behind / 60} min" else "")
+        else "● REC ${rec.title} ${LiveRec.clock(rec.seconds)}"
+        badge.visibility = View.VISIBLE
+        badge.bringToFront()
+    }
+
+    private fun showRecNote(text: String) {
+        val note = recNote ?: recText(13.5f, 0xF2FFD27A.toInt(), 72).also { recNote = it }
+        note.text = text
+        note.visibility = View.VISIBLE
+        note.bringToFront()
+        current?.let { session?.action(text) }
+        handler.removeCallbacks(hideRecNote)
+        handler.postDelayed(hideRecNote, 3000)
     }
 
     /** Plays the current channel / video in the external player app and closes this one. */
@@ -2781,6 +2945,8 @@ class PlayerActivity : ComponentActivity() {
         if (item.isLive) return
         val duration = p.duration
         val pos = p.currentPosition
+        // ● A recording (still growing or not): always remember where you were.
+        if (LiveRec.isRecordingItem(item)) { if (pos > 10_000) app.storage.setPosition(item.key, pos); return }
         if (duration <= 0) return
         if (pos > 10_000 && pos < duration - 60_000) app.storage.setPosition(item.key, pos)
         else if (pos >= duration - 60_000) app.storage.setPosition(item.key, 0)
@@ -3873,6 +4039,17 @@ class PlayerActivity : ComponentActivity() {
                 val d = DownloadCenter.get(id)
                 if (d == null) {
                     vod.diskStatus = null; vod.seekLimitMs = null; vod.diskFraction = null
+                } else if (d.kind == "recording") {
+                    // ● A recording: the bar is what is saved; while it records, jumping stops just before its newest part.
+                    vod.diskFraction = 1f
+                    if (d.status == com.nova.iptv.data.DownloadStatus.RECORDING) {
+                        vod.seekLimitMs = if (dur > 0) maxOf(0L, dur - 4_000) else null
+                        vod.diskStatus = "● Recording · saved ${formatDuration(d.durationSec * 1000)} · ends ${LiveRec.hhmm(d.endsAt)}" +
+                            (if (d.gaps > 0) " · ${d.gaps} reconnection${if (d.gaps == 1) "" else "s"}" else "")
+                    } else {
+                        vod.seekLimitMs = null
+                        vod.diskStatus = "✓ Recording saved · ${formatDuration(d.durationSec * 1000)}" + (if (d.gaps > 0) " · ${d.gaps} gap${if (d.gaps == 1) "" else "s"} (${d.gapSec} s)" else "")
+                    }
                 } else if (d.status == com.nova.iptv.data.DownloadStatus.DONE) {
                     vod.diskStatus = "✓ Downloaded — saved in Downloads"
                     vod.seekLimitMs = null
@@ -4053,6 +4230,7 @@ class PlayerActivity : ComponentActivity() {
                 okSinglePending?.let { handler.removeCallbacks(it) }; okSinglePending = null
                 when {
                     item.isLive -> toggleRecording()
+                    LiveRec.state.value?.id == item.downloadId -> showStopRecPopup()
                     !item.isLocal && item.downloadExt != null -> downloadCurrent()
                 }
             }

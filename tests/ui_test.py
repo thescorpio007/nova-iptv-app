@@ -995,6 +995,41 @@ def catwatch_damaged():
     back_to_main("catwatch")
 
 
+def background_recording():
+    """● Rec: the channel records in the background (its own connection) and is watched from the recording."""
+    n = count_log(r"READY Paced Channel")
+    open_test_channel("Paced Channel")
+    check("Paced channel starts", wait_count(r"READY Paced Channel", n + 1, 30))
+    time.sleep(3)
+    adb("shell input keyevent --longpress 23")
+    if not wait_log(r"LIVEREC start Paced Channel", 8):
+        adb("shell input tap 540 960")  # show the controls, then the Rec button
+        time.sleep(1)
+        try:
+            tap("● Rec", 8)
+        except AssertionError:
+            pass
+    check("● Rec starts a background recording", wait_log(r"LIVEREC start Paced Channel", 15))
+    check("…and the channel is watched from the recording", wait_log(r"READY Paced Channel · \d{4}", 75))
+    check("The recording is cut into parts (jump anywhere)", wait_log(r"LIVEREC parts Paced Channel[^:]*: [1-9]", 40))
+    shot("recording-watching")
+    back_to_main("recording")
+    parts_before = re.findall(r"LIVEREC parts Paced Channel[^:]*: (\d+)", test_log())
+    time.sleep(25)
+    parts_after = re.findall(r"LIVEREC parts Paced Channel[^:]*: (\d+)", test_log())
+    still = not re.search(r"LIVEREC stopped Paced Channel", test_log())
+    check("It keeps recording after leaving the player", still and len(parts_after) > len(parts_before),
+          f"{parts_before[-1:] } -> {parts_after[-1:]}")
+    try:
+        tap("Downloads", 10)
+        time.sleep(2)
+        shot("recording-list")
+        tap("■ Stop", 10)
+    except AssertionError as e:
+        note(str(e))
+    check("■ Stop in Downloads stops and saves it", wait_log(r"LIVEREC saved Paced Channel", 20))
+
+
 def stuck_picture():
     """The picture stops while data keeps arriving: the watchdog does what the Live button does, once."""
     n = count_log(r"READY Stuck Channel")
@@ -1445,6 +1480,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("First login", login_first),
         ("Restart with an account", restart_check),
         ("CATWATCH: damaged packets", catwatch_damaged),
+        ("Background recording", background_recording),
         ("Open link and Share", open_link),
         ("Double OK hides a film", double_ok_hide),
     ]

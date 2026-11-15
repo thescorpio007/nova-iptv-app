@@ -12,6 +12,8 @@ class BootReceiver : BroadcastReceiver() {
         val a = intent.action ?: return
         if (a != Intent.ACTION_BOOT_COMPLETED && a != "android.intent.action.QUICKBOOT_POWERON" && a != "com.htc.intent.action.QUICKBOOT_POWERON") return
         val storage = (context.applicationContext as com.nova.iptv.NovaApp).storage
+        // ● A recording that was running when the box went off: continued only when chosen in Settings.
+        runCatching { com.nova.iptv.download.LiveRec.onBoot(context) }
         if (!storage.startOnBoot) return
         // Android 10+ lets an app open itself in the background only with "Display over other apps".
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(context)) {

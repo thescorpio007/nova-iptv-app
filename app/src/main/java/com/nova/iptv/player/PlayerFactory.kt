@@ -44,7 +44,14 @@ data class PlayItem(
     val sidecarSubtitle: String? = null,
     /** An episode: its series (auto-play next episode, remembered per series). */
     val seriesKey: String? = null,
+    /** ● A recording: where to start — [START_RESUME], 0 (from the start) or [START_NEWEST]. */
+    val startAt: Long = START_RESUME,
 ) {
+    companion object {
+        const val START_RESUME = -1L
+        const val START_NEWEST = Long.MAX_VALUE
+    }
+
     /** Which "Player selection" setting applies: live, catchup, movie, series or recordings. */
     val kind: String
         get() = when {

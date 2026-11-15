@@ -258,9 +258,12 @@ class GrowingHlsList(
             val lines = runCatching { com.nova.iptv.download.HlsDownload.indexFile(d.path).readLines().filter { it.isNotBlank() } }
                 .getOrDefault(emptyList())
             val init = lines.firstOrNull()?.takeIf { it.startsWith("init") }?.substringAfter(' ')?.trim()?.toLongOrNull()
+            // "<offset> <len> <seconds>", plus " d" on a recording's part that starts a new timeline (reconnection).
+            val disc = HashSet<Long>()
             val parts = lines.filterNot { it.startsWith("init") }.mapNotNull { l ->
                 val f = l.trim().split(' ')
                 if (f.size < 3) null else Triple(f[0].toLongOrNull() ?: return@mapNotNull null, f[1].toLongOrNull() ?: return@mapNotNull null, f[2].toDoubleOrNull() ?: 0.0)
+                    .also { if (f.getOrNull(3) == "d") disc += it.first }
             }
             val done = d.status == DownloadStatus.DONE
             if (parts.isNotEmpty()) {
@@ -268,7 +271,8 @@ class GrowingHlsList(
                 val sb = StringBuilder("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:$target\n#EXT-X-MEDIA-SEQUENCE:0\n")
                 sb.append(if (done) "#EXT-X-PLAYLIST-TYPE:VOD\n" else "#EXT-X-PLAYLIST-TYPE:EVENT\n")
                 if (init != null) sb.append("#EXT-X-MAP:URI=\"video.ts\",BYTERANGE=\"$init@0\"\n")
-                parts.forEach { (off, len, sec) ->
+                parts.forEachIndexed { n, (off, len, sec) ->
+                    if (n > 0 && off in disc) sb.append("#EXT-X-DISCONTINUITY\n")
                     sb.append("#EXTINF:").append(String.format(java.util.Locale.US, "%.3f", if (sec > 0) sec else 1.0)).append(",\n")
                     sb.append("#EXT-X-BYTERANGE:$len@$off\nvideo.ts\n")
                 }

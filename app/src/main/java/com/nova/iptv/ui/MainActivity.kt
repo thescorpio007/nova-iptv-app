@@ -126,9 +126,23 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleWebIntent(intent)
+        handleWatchRec(intent)
+    }
+
+    /** ● "▶ Watch" in the recording's notification: open the recording from where you left it. */
+    private fun handleWatchRec(intent: android.content.Intent?): Boolean {
+        if (intent?.action != ACTION_WATCH_REC) return false
+        val id = intent.getStringExtra("id") ?: return false
+        intent.action = null
+        val d = com.nova.iptv.download.DownloadCenter.get(id) ?: return false
+        val item = com.nova.iptv.download.LiveRec.playItem(d, com.nova.iptv.player.PlayItem.START_RESUME) ?: return false
+        android.util.Log.i("NovaTest", "LIVEREC watch from the notification")
+        play(listOf(item), 0)
+        return true
     }
 
     companion object {
+        const val ACTION_WATCH_REC = "com.nova.iptv.WATCH_REC"
         const val ACTION_OPEN_WEB = "com.nova.iptv.OPEN_WEB"
         const val EXTRA_FROM_BOOT = "from_boot"
     }
@@ -141,6 +155,9 @@ class MainActivity : ComponentActivity() {
             android.widget.Toast.makeText(this, "Nova started with the box", android.widget.Toast.LENGTH_SHORT).show()
         }
         if (savedInstanceState == null && intent?.action == ACTION_OPEN_WEB) { handleWebIntent(intent); autoPlayed = true }
+        if (savedInstanceState == null && intent?.action == ACTION_WATCH_REC) { autoPlayed = true; lifecycleScope.launch { kotlinx.coroutines.delay(600); handleWatchRec(intent) } }
+        // ● "Recording time is up — keep recording?" over Nova's screens too.
+        com.nova.iptv.player.RecPopups.watch(this)
         // Start the last watched channel / video when the app opens (Settings → Start-up).
         if (savedInstanceState == null && !autoPlayed) {
             autoPlayed = true
