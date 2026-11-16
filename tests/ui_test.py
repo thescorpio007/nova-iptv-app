@@ -1042,7 +1042,7 @@ def background_recording():
         tap("Schedule a recording", 8)
         time.sleep(2)
         shot("schedule-screen")
-        tap("Save schedule", 8)
+        tap("SAVE SCHEDULE", 8)  # dialog buttons are shown in capitals
     except AssertionError as e:
         note(str(e))
     check("⏰ A recording can be scheduled from the ● Rec popup", wait_log(r"SCHEDULE saved Paced Channel", 10))
