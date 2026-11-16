@@ -1646,7 +1646,7 @@ private fun LiveEngineCard() {
         Text("Saved on", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("internal" to "Internal storage", "rec" to "Same as recordings"), place) { place = it; L.setPlace(context, it) }
         Text("Start a channel", fontWeight = FontWeight.Medium)
-        ChoiceRow(listOf("fast" to "Quick start (12 s behind live)", "steady" to "With a 20 s cushion (steadier)"), start) { start = it; L.setStartMode(context, it) }
+        ChoiceRow(listOf("fast" to "Quick start (6 s behind live)", "steady" to "With a 20 s cushion (steadier)"), start) { start = it; L.setStartMode(context, it) }
     }
 }
 

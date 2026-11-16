@@ -54,14 +54,14 @@ object LiveBuffer {
     /** "internal" (default) or "rec" (same place as recordings). */
     fun place(c: Context): String = prefs(c).getString("place", "internal") ?: "internal"
     fun setPlace(c: Context, v: String) = prefs(c).edit().putString("place", v).apply()
-    /** "fast" (12 s behind live) or "steady" (20 s). */
+    /** "fast" (6 s behind live) or "steady" (20 s). */
     fun startMode(c: Context): String = prefs(c).getString("start", "fast") ?: "fast"
     fun setStartMode(c: Context, v: String) = prefs(c).edit().putString("start", v).apply()
     /**
      * How far behind the newest saved part playback starts. Parts are only listed once complete (about 4 s each), so
      * the player must stay about 3 parts behind, or it reaches the end and waits for every new part (stalls).
      */
-    fun startOffsetMs(c: Context): Long = if (startMode(c) == "steady") 20_000L else 12_000L
+    fun startOffsetMs(c: Context): Long = if (startMode(c) == "steady") 20_000L else 6_000L
     /** Seconds per file (30 min; the emulator test uses 1 min to cross many file joins). */
     fun fileSec(c: Context): Int = prefs(c).getInt("file_sec", 1800)
     fun setFileSec(c: Context, v: Int) = prefs(c).edit().putInt("file_sec", v.coerceIn(60, 1800)).apply()
@@ -251,6 +251,7 @@ class LiveBufferService : Service() {
         runCatching { index.delete() }
         val seg = Segmenter(index)
         seg.splitSec = LiveBuffer.fileSec(this).toDouble()
+        seg.partSec = 2.0
         // Every part written: kept in order (file, seconds, new timeline) for deleting the oldest.
         class Part(val file: Int, val sec: Double, val disc: Boolean)
         val parts = ArrayDeque<Part>()

@@ -568,6 +568,8 @@ internal class Segmenter(private val indexFile: File) {
     private var lastEnd = -1L
     /** FAT32 drive: a new file is started at a part boundary once the current file reaches this size. */
     var splitAt = Long.MAX_VALUE
+    /** Part length (seconds) once the first 3 short parts are written: 4 s for recordings, 2 s for the Live engine. */
+    var partSec = 4.0
     /** 📼 Live engine: a new file every this many seconds (30 min), at a part boundary. */
     var splitSec = Double.MAX_VALUE
     private var fileStartSec = 0.0
@@ -652,7 +654,7 @@ internal class Segmenter(private val indexFile: File) {
         }
         val secs = if (dur >= 0) dur else wall
         // The first parts are short (1 s), so playback can start sooner; then about 4 s each.
-        if (secs >= (if (count < 3) 1.0 else 4.0)) {
+        if (secs >= (if (count < 3) 1.0 else partSec)) {
             if (dur > 0) bytesPerSec = if (bytesPerSec == 0.0) (cut - segStart) / dur else bytesPerSec * 0.8 + (cut - segStart) / dur * 0.2
             emit(segStart, cut - segStart, secs)
             segStart = cut; segPts = pts; segWall = now
