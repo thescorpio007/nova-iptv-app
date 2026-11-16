@@ -995,6 +995,19 @@ def catwatch_damaged():
     back_to_main("catwatch")
 
 
+def catwatch_missing_picture():
+    """🐈 CATWATCH: ~5 s without picture while the sound continues — stepped over, no restart, never to live."""
+    n = count_log(r"READY Missing Picture")
+    open_test_channel("Missing Picture")
+    check("Missing-picture channel starts", wait_count(r"READY Missing Picture", n + 1, 30))
+    check("🐈 CATWATCH steps over the missing picture", wait_log(r"CATWATCH Missing Picture: skipped", 70))
+    time.sleep(8)
+    log = test_log()
+    check("…without a full restart or a jump to live",
+          not re.search(r"WATCHDOG Missing Picture: .*(jumped to live|restarted the picture)", log))
+    back_to_main("catwatch-gap")
+
+
 def background_recording():
     """● Rec: the channel records in the background (its own connection) and is watched from the recording."""
     n = count_log(r"READY Paced Channel")
@@ -1532,6 +1545,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("First login", login_first),
         ("Restart with an account", restart_check),
         ("CATWATCH: damaged packets", catwatch_damaged),
+        ("CATWATCH: missing picture", catwatch_missing_picture),
         ("Background recording", background_recording),
         ("Open link and Share", open_link),
         ("Double OK hides a film", double_ok_hide),

@@ -28,9 +28,20 @@ class CatWatch {
     private var lastCc = -1
     private var joinPending = false
 
-    private var damageAt = -1L
-    private var lost = 0
-    private var hard = false
+    @Volatile private var damageAt = -1L
+    @Volatile private var lost = 0
+    @Volatile private var hard = false
+    /** When the open damaged part was found (wall clock), for [pendingDamage]. */
+    @Volatile private var damageSince = 0L
+
+    // Missing picture: the picture stream stops while the sound keeps coming (e.g. 7 s without picture).
+    private var otherSinceVideo = 0
+    private var lastVideoEndAt = -1L
+    /** Share of video packets in the stream (low on radio-like channels: then no "missing picture" check). */
+    private var videoShare = 0.0
+    /** Missing-picture parts found (part of [found]). */
+    @Volatile var gaps = 0
+        private set
 
     private val skips = ArrayDeque<Skip>()
     private val keys = LongArray(4096)
@@ -85,7 +96,7 @@ class CatWatch {
     }
 
     private fun damage(at: Long, isHard: Boolean) {
-        if (damageAt < 0) damageAt = at
+        if (damageAt < 0) { damageAt = at; damageSince = android.os.SystemClock.elapsedRealtime() }
         lost++
         if (isHard) hard = true
     }
@@ -115,7 +126,21 @@ class CatWatch {
             if (pid == 0) { lastPatAt = at; readPat(p, payload, o + 188); return }
             if (pid == pmtPid) { readPmt(p, payload, o + 188); return }
         }
-        if (pid != videoPid) return
+        if (pid != videoPid) {
+            if (videoPid >= 0 && pid != pmtPid) {
+                videoShare = videoShare * 0.999
+                otherSinceVideo++
+                // ~1–1.5 s of sound without any picture, on a channel that normally sends picture: a missing picture.
+                if (otherSinceVideo == GAP_PACKETS && videoShare > 0.4 && lastVideoEndAt >= 0 && damageAt < 0) {
+                    damage(lastVideoEndAt, true)
+                    gaps++
+                }
+            }
+            return
+        }
+        videoShare = videoShare * 0.999 + 0.001
+        otherSinceVideo = 0
+        lastVideoEndAt = at + 188
         if (joinPending) { joinPending = false; damage(at, true) }
         if (afc and 1 != 0) {
             if (lastCc >= 0 && !disc && cc != lastCc && cc != ((lastCc + 1) and 15)) damage(at, false)
@@ -210,7 +235,19 @@ class CatWatch {
     fun nextDamageAfter(pos: Long): Long = synchronized(skips) {
         var best = -1L
         for (s in skips) if (s.from > pos && (best < 0 || s.from < best)) best = s.from
+        val p = pendingDamage()
+        if (p > pos && (best < 0 || p < best)) best = p
         best
+    }
+
+    /**
+     * A damaged part found but not closed yet (its next good key picture hasn't arrived): reading waits before it
+     * (at most 10 s), so the player never plays it. -1 when there is none.
+     */
+    fun pendingDamage(): Long {
+        val at = damageAt
+        if (at < 0 || !(hard || lost >= 2) || keyCount == 0) return -1L
+        return if (android.os.SystemClock.elapsedRealtime() - damageSince < 10_000) at else -1L
     }
 
     /** The first key picture stored after [pos], or -1. */
@@ -223,6 +260,8 @@ class CatWatch {
 
     companion object {
         private const val SYNC = 0x47.toByte()
+        /** Packets of sound / other data in a row without picture that count as a missing picture (~1–1.5 s). */
+        private const val GAP_PACKETS = 200
 
         private fun prefs(c: Context) = c.getSharedPreferences("catwatch", Context.MODE_PRIVATE)
         fun on(c: Context): Boolean = prefs(c).getBoolean("on", true)
@@ -239,7 +278,7 @@ class CatWatch {
             if (p.getString("day", "") != d) e.putString("day", d).putInt("skips", 0).putString("secs", "").putInt("live", 0)
             val n = (if (p.getString("day", "") == d) p.getInt("skips", 0) else 0) + 1
             val secs = (if (p.getString("day", "") == d) p.getString("secs", "") ?: "" else "")
-            e.putInt("skips", n).putString("secs", (if (secs.isBlank()) "" else "$secs,") + "%.1f".format(java.util.Locale.US, skippedSec))
+            e.putInt("skips", n).putString("secs", (if (secs.isBlank()) "" else "$secs,") + "%.2f".format(java.util.Locale.US, skippedSec))
             e.apply()
         }
         fun recordLiveJump(c: Context) {
@@ -249,6 +288,16 @@ class CatWatch {
             if (p.getString("day", "") != d) e.putString("day", d).putInt("skips", 0).putString("secs", "").putInt("live", 0)
             e.putInt("live", (if (p.getString("day", "") == d) p.getInt("live", 0) else 0) + 1).apply()
         }
+        /** For the report: "6 fixes · 3.4 s skipped · smallest 0.3 s · largest 1.1 s · 0 jumps to live" (today). */
+        fun reportText(c: Context): String {
+            val p = prefs(c)
+            if (p.getString("day", "") != today()) return "no fixes needed today · 0 jumps to live"
+            val v = (p.getString("secs", "") ?: "").split(',').mapNotNull { it.trim().toDoubleOrNull() }
+            if (v.isEmpty()) return "no fixes needed today · ${p.getInt("live", 0)} jumps to live"
+            return "${v.size} fix${if (v.size == 1) "" else "es"} · %.1f s skipped · smallest %.2f s · largest %.2f s · %d jumps to live"
+                .format(java.util.Locale.US, v.sum(), v.min(), v.max(), p.getInt("live", 0))
+        }
+
         /** "2 damaged parts skipped (0.8 s and 1.4 s) · 0 jumps to live" for today. */
         fun todayText(c: Context): String {
             val p = prefs(c)

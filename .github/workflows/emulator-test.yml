@@ -88,6 +88,7 @@ jobs:
           cat tests/media/jumpa.ts tests/media/jumpb.ts > tests/media/jump.ts
           # An MKV with its index (Cues) at the end, like most provider films.
           python3 tests/make_damaged.py tests/media/sample.ts tests/media/damaged.ts
+          python3 tests/make_damaged.py tests/media/sample.ts tests/media/gap.ts gap
           ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy tests/media/sample.mkv
           # An MKV with no index at all (written to a pipe: ffmpeg can't add Cues), like many provider films.
           ffmpeg -loglevel error -i tests/media/sample.mp4 -c copy -f matroska - > tests/media/noindex.mkv

@@ -133,6 +133,7 @@ object PlaybackLog {
         sb.appendLine("NOVA IPTV PLAYBACK REPORT · $period · made ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())}")
         sb.appendLine("Nova $version · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · ${dm.widthPixels}×${dm.heightPixels}")
         sb.appendLine("Settings: $settings")
+        runCatching { sb.appendLine("CATWATCH: " + com.nova.iptv.player.CatWatch.reportText(context)) }
         // Every drive Nova found (and how) — shows why a USB stick was or wasn't used.
         runCatching {
             val drives = Locations.drives().filter { it.removable }

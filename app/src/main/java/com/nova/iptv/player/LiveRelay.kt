@@ -258,7 +258,12 @@ class LiveRelay(
                 // unless the provider has paused (then everything stored is handed over, no waiting).
                 val hold = if (catOn && mediaBytesPerSec > 0 && android.os.SystemClock.elapsedRealtime() - lastDataAt < 3000)
                     (2.5 * mediaBytesPerSec).toLong() else 0L
-                val readable = written - hold
+                var readable = written - hold
+                // 🐈 Reading has reached a damaged part that isn't closed yet: wait for its next good key picture.
+                if (catOn) {
+                    val pd = catWatch.pendingDamage()
+                    if (pd in 0..readPos) readable = readPos
+                }
                 if (readPos < readable) {
                     val seg = segments.lastOrNull { it.start <= readPos }
                     val raf = if (seg != null) openReader(seg) else null

@@ -1,4 +1,5 @@
-"""Makes a damaged live feed for the CATWATCH test: drops a few video packets every 10 s (like packet loss)."""
+"""Makes a damaged live feed for the CATWATCH test: drops a few video packets every 10 s (like packet loss),
+or with "gap": no picture for ~5 s while the sound continues."""
 import sys
 
 src, dst = sys.argv[1], sys.argv[2]
@@ -23,9 +24,13 @@ for p in pk:
             i += 5 + (((p[i + 3] & 0x0F) << 8) | p[i + 4])
 vids = [k for k, p in enumerate(pk) if (((p[1] & 0x1F) << 8) | p[2]) == vpid]
 drop = set()
-for frac in [x / 9 for x in range(1, 9)]:  # 8 damaged spots over 90 s
-    j = int(len(vids) * frac)
-    for n in range(6):
-        drop.add(vids[min(j + n * 4, len(vids) - 1)])
+if len(sys.argv) > 3 and sys.argv[3] == "gap":
+    # A missing picture: no video at all for ~5 s (35 %–41 % of the feed) while the sound keeps coming.
+    drop.update(vids[int(len(vids) * 0.35):int(len(vids) * 0.41)])
+else:
+    for frac in [x / 9 for x in range(1, 9)]:  # 8 damaged spots over 90 s
+        j = int(len(vids) * frac)
+        for n in range(6):
+            drop.add(vids[min(j + n * 4, len(vids) - 1)])
 open(dst, "wb").write(b"".join(p for k, p in enumerate(pk) if k not in drop))
 print("video pid", vpid, "dropped", len(drop), "packets")

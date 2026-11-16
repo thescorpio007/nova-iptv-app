@@ -157,7 +157,14 @@ class PlayerActivity : ComponentActivity() {
             // kept) instead of a fresh start at live.
             if (item != null && storedRestart && relay != null && storedRestartTries < 2) {
                 storedRestartTries++
-                logHealth(item, "restart on stored video took long", "tried again on stored video (cushion kept)")
+                val r = relay!!
+                // 🐈 Not the same place again: the next good key picture a little further on (smallest step).
+                val skipped = if (r.catOn && mediaBps > 0) r.skipToKeyPicture(0L, (0.25 * (storedRestartTries + 1) * mediaBps).toLong()) else -1L
+                if (skipped >= 0) {
+                    val secs = skipped / mediaBps
+                    CatWatch.record(this, secs)
+                    logHealth(item, "restart on stored video took long", "🐈 next key picture +${"%.2f".format(secs)} s (cushion kept)")
+                } else logHealth(item, "restart on stored video took long", "tried again on stored video (cushion kept)")
                 restartOnStoredVideo(item, newPlayer = storedRestartTries == 2)
                 return@Runnable
             }
@@ -785,13 +792,22 @@ class PlayerActivity : ComponentActivity() {
             SourceMode.VOD_DISK, SourceMode.GROWING -> diskSource
             else -> relaySource
         }
-        val p = PlayerFactory.create(this, app, mode, source, tweaks)
+        val p = PlayerFactory.create(this, app, mode, source, tweaks, quickStart = LiveRec.isRecordingItem(current))
         playerTweaks = tweaks
         playerAvoid = avoidNow
         p.addListener(listener)
         p.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
                 videoDecoderName = decoderName
+            }
+            // The sound path ran dry (often Bluetooth earbuds): counted for the report.
+            override fun onAudioUnderrun(eventTime: AnalyticsListener.EventTime, bufferSize: Int, bufferSizeMs: Long, elapsedSinceLastFeedMs: Long) {
+                soundUnderruns++
+                if (soundUnderruns == 1 || soundUnderruns % 20 == 0) {
+                    val dev = SoundSync.device(this@PlayerActivity)
+                    Log.i("NovaTest", "SOUND underrun #$soundUnderruns on $dev (buffer ${bufferSizeMs} ms, fed ${elapsedSinceLastFeedMs} ms ago)")
+                    session?.action("sound ran dry ${soundUnderruns}× on $dev")
+                }
             }
         })
         updateBadge()
@@ -869,6 +885,11 @@ class PlayerActivity : ComponentActivity() {
         }
         recStartAt = PlayItem.START_NEWEST
         current = item
+        // ● Another live channel while a recording runs: both share your line (asked once per recording).
+        if (rec != null && item.isLive && item.url != rec.url) {
+            val other = item
+            handler.postDelayed({ if (current === other) recordingSharesLine(other) }, 2500)
+        }
         linkTexts.forEach { it.text = "🔗 " + item.url }
         applySoundSync(announce = !quiet)
         if (otherAppOpen) closeOtherApp()
@@ -1933,20 +1954,24 @@ class PlayerActivity : ComponentActivity() {
     /** "Stream not recognised" retries for the item playing. */
     private var containerRetries = 0
     private var bufferingAt = 0L
+    /** Times the sound path ran dry in this session (Bluetooth check). */
+    private var soundUnderruns = 0
 
     private fun startSession(item: PlayItem, quiet: Boolean) {
         // A quiet restart of the same channel / film (retry, watchdog) stays in the same report line.
         if (quiet && session?.key == item.key) return
         endSession()
         val server = app.storage.accounts.firstOrNull { it.id == item.saved.accountId }?.name
-            ?: if (item.isLocal) "this device" else "link"
+            ?: if (item.isLocal || LiveRec.isRecordingItem(item)) "this device" else "link"
         val group = if (item.isLive) LiveCatalog.groupName(PlaybackQueue.groupKey) else null
         if (item.isLive && group == null && PlaybackQueue.groupKey?.contains('|') == true) lifecycleScope.launch {
             runCatching { LiveCatalog.groups(app) }
             val ss = session ?: return@launch
             if (ss.title == item.title) ss.group = LiveCatalog.groupName(PlaybackQueue.groupKey)
         }
-        session = PlaybackLog.Session(item.title, item.kind, server, group, item.key).also {
+        soundUnderruns = 0
+        val kindLabel = if (LiveRec.isRecordingItem(item)) "recording" else item.kind
+        session = PlaybackLog.Session(item.title, kindLabel, server, group, item.key).also {
             // Only the file type, never the address (it holds the login).
             it.container = item.url.substringBefore('?').substringAfterLast('.', "").takeIf { e -> e.length in 2..5 }?.uppercase().orEmpty()
         }
@@ -2514,6 +2539,31 @@ class PlayerActivity : ComponentActivity() {
             com.nova.iptv.download.RecSchedule.startNow(this, s)
             handler.postDelayed({ playRecording(PlayItem.START_NEWEST) }, 400)
         }, 800)
+    }
+
+    private val shareAsked = HashSet<String>()
+
+    /** A recording in the background takes part of your line: say so in the report, and ask once what to do. */
+    private fun recordingSharesLine(item: PlayItem) {
+        val rec = LiveRec.state.value ?: return
+        val secs = rec.seconds.coerceAtLeast(1)
+        val mbit = rec.bytes * 8.0 / secs / 1_000_000
+        val mb = String.format(java.util.Locale.US, "%.1f", mbit)
+        session?.action("● ${rec.title} recording in the background ($mb Mbit/s of your line)")
+        if (!shareAsked.add(rec.id)) return
+        Log.i("NovaTest", "LIVEREC shares the line with ${item.title}")
+        RecPopups.choose(
+            this, "● ${rec.title} is recording",
+            "The recording uses about $mb Mbit/s of your line. ${item.title} and the recording now share it, so either can stall if the line is slow.",
+            listOf(
+                RecPopups.Choice("Continue (both share the line)", "Chosen in 10 s") { },
+                RecPopups.Choice("▶ Watch the recording instead") { playRecording(PlayItem.START_NEWEST) },
+                RecPopups.Choice("■ Stop the recording", "Save it (${LiveRec.words(rec.seconds)}) and keep watching ${item.title}") {
+                    LiveRec.stop(this, "stopped to free the line for ${item.title}")
+                },
+            ),
+            default = 0,
+        ) { }
     }
 
     /** ■ Stop rec: keep recording and watch it (chosen after 10 s), or stop and save. */
@@ -3773,14 +3823,15 @@ class PlayerActivity : ComponentActivity() {
                     }
                 } else null
                 when {
-                    r != null && wdLiveFixes.size == 1 -> { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
-                    // 🐈 CATWATCH: instead of 10 s / 5 s / live, go to the next good key picture (the smallest step that works),
-                    // a little further each time; never to live while stored video remains.
-                    catSkip != null && r!!.bytesAhead() / mediaBps >= 3 -> {
-                        val secs = catSkip(0.5 * (wdLiveFixes.size - 1))
-                        if (secs >= 0) { CatWatch.record(this, secs); "🐈 skipped ${"%.1f".format(secs)} s to the next key picture (cushion kept)" }
+                    // 🐈 CATWATCH first, with the smallest jump that works: the nearest good key picture at least
+                    // 0.25 s ahead, then 0.5 s, 0.75 s… (one more step each time); never to live while stored video remains.
+                    catSkip != null && r!!.bytesAhead() / mediaBps >= 1 -> {
+                        val secs = catSkip(0.25 * wdLiveFixes.size)
+                        if (secs >= 0) { CatWatch.record(this, secs); "🐈 skipped ${"%.2f".format(secs)} s to the next key picture (cushion kept)" }
+                        else if (wdLiveFixes.size == 1) { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
                         else { CatWatch.recordLiveJump(this); goLive(); "jumped to live (no key picture stored ahead)" }
                     }
+                    r != null && wdLiveFixes.size == 1 -> { restartOnStoredVideo(item, newPlayer = false); "restarted the picture (cushion kept)" }
                     r != null && wdLiveFixes.size == 2 -> { r.moveBy(10); restartOnStoredVideo(item, newPlayer = true); "skipped 10 s, new player (cushion kept)" }
                     // Plenty stored ahead (30 s or more): never throw it away — restart again a bit further on.
                     r != null && mediaBps > 0 && r.bytesAhead() / mediaBps >= 30 -> { r.moveBy(5); restartOnStoredVideo(item, newPlayer = true); "skipped 5 s, new player (cushion kept)" }

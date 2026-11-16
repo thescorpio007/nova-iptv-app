@@ -125,6 +125,8 @@ object PlayerFactory {
         mode: SourceMode,
         relaySource: DataSource.Factory? = null,
         tweaks: Tweaks = Tweaks(),
+        /** ● A recording on this device: start after 3 s (the video is already here, no 15 s cushion needed). */
+        quickStart: Boolean = false,
     ): ExoPlayer {
         val s = app.storage
         val live = mode.isLive
@@ -142,7 +144,8 @@ object PlayerFactory {
         else maxOf(s.maxBufferSeconds * 1000, cushionMs + 10_000, if (live) s.weakRefillSecs * 1000 + 15_000 else 0)
         val rebufferMs = (cushionMs * 3 / 2).coerceIn(2000, maxMs)
         // Live "fast start": begin with ~2 s near live; the player builds the rest of the cushion while playing.
-        val startMs = if (live && s.liveStart == "fast") minOf(2000, cushionMs) else cushionMs
+        val startMs = if (quickStart && mode == SourceMode.GROWING) minOf(3000, cushionMs)
+        else if (live && s.liveStart == "fast") minOf(2000, cushionMs) else cushionMs
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(maxMs, maxMs, startMs, rebufferMs)
