@@ -2042,7 +2042,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val indexExportTick = MutableStateFlow(0)
 
     private fun appVersion(): String =
-        runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "4.0"
+        runCatching { nova.packageManager.getPackageInfo(nova.packageName, 0).versionName }.getOrNull() ?: "5.0"
 
     /**
      * Writes index-latest.novaindex (all accounts) — only when something changed since the last export.

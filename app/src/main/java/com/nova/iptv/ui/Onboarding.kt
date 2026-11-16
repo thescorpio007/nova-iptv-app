@@ -125,10 +125,7 @@ fun StartCover() {
             Spacer(Modifier.height(10.dp))
             Text("Loading your channels…", color = Color(0xFF9FB2D8), fontSize = 14.sp)
         }
-        Text(
-            "Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
-        )
+        SignatureBlock(13, 0.6f, Alignment.CenterHorizontally, Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp))
     }
 }
 
@@ -222,7 +219,7 @@ fun WelcomeScreen(vm: MainViewModel, isTv: Boolean) {
                     Row(verticalAlignment = Alignment.CenterVertically) { NovaMark(34); Spacer(Modifier.width(8.dp)); NovaName(26)
                         Text("  · IPTV player", color = Color(0xFF9FB2D8), fontSize = 13.sp) }
                     iptvTile(Modifier.height(190.dp)); ReceiveNovaQr(inline = true); smallTiles(); about(); webTile(); DownloadsTile(vm)
-                    Text("Nova IPTV · version " + appVersion() + "   ·   Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.45f), fontSize = 11.sp)
+                    SignatureBlock(11, 0.45f, Alignment.Start)
                 }
             }
         }
@@ -696,7 +693,7 @@ fun AccountsCheckScreen(vm: MainViewModel, state: MainViewModel.Startup.AllFaile
             OutlinedButton(onClick = { restore = true }) { Text("Restore backup") }
             OutlinedButton(onClick = { vm.continueAnyway() }) { Text("Continue anyway") }
         }
-        Text("Designed by A.Hamrouni", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+        SignatureBlock(12, 0.5f, Alignment.CenterHorizontally)
     }
     editing?.let { acc -> EditAccountDialog(vm, acc) { editing = null; vm.runStartup() } }
     if (restore) RestoreDialog(vm) { restore = false }

@@ -639,6 +639,22 @@ fun ClockOverlay(position: String) {
 /** The designer's signature, shown everywhere in the same words. */
 const val SIGNATURE = "Designed by A.Hamrouni"
 
+/** "Nova IPTV 5.0 · build 01": always shown in small letters right under the signature. */
+@Composable
+fun buildLabel(): String = "Nova IPTV " + appVersion()
+
+/** The signature with the build name under it (smaller), as one block. */
+@Composable
+fun SignatureBlock(
+    size: Int = 10, alpha: Float = 0.45f,
+    align: Alignment.Horizontal = Alignment.End, modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.Column(modifier, horizontalAlignment = align) {
+        Text(SIGNATURE, color = Color.White.copy(alpha = alpha), fontSize = size.sp, lineHeight = (size + 1).sp)
+        Text(buildLabel(), color = Color.White.copy(alpha = alpha * 0.85f), fontSize = (size * 0.75f).sp, lineHeight = (size * 0.75f + 1).sp)
+    }
+}
+
 /**
  * Thin strip along the bottom of every page: the clock (when it is set to a bottom corner) and the
  * signature on the opposite side. Pages end above it, so neither ever covers a button or a list row.
@@ -661,14 +677,14 @@ fun FooterStrip(clockPosition: String, showClock: Boolean = true) {
         )
     }
     val signature: @Composable () -> Unit = {
-        Text(SIGNATURE, color = Color.White.copy(alpha = 0.45f), fontSize = 10.sp)
+        SignatureBlock(10, 0.45f, if (clockPosition == "br" && showClock) Alignment.Start else Alignment.End)
     }
     val clockLeft = showClock && clockPosition == "bl"
     val clockRight = showClock && clockPosition == "br"
     androidx.compose.foundation.layout.Row(
         Modifier
             .fillMaxWidth()
-            .height(24.dp)
+            .height(28.dp)
             .background(MaterialTheme.colorScheme.background)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -802,6 +818,6 @@ fun ConfirmOverlay(title: String, text: String, yesLabel: String, onYes: () -> U
 fun appVersion(): String {
     val context = androidx.compose.ui.platform.LocalContext.current
     return remember {
-        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "4.0"
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "5.0"
     }
 }

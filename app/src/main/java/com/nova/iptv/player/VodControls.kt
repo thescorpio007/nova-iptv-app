@@ -381,6 +381,12 @@ class VodControls(
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setPadding(0, dp(4), 0, 0)
         })
+        // The build name, smaller, right under the signature.
+        col.addView(text("Nova IPTV " + runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty(), 7.5f).apply {
+            alpha = 0.5f
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        })
         return col
     }
 

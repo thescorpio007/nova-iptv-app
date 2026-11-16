@@ -52,7 +52,7 @@ object LiveBuffer {
     private fun prefs(c: Context) = c.getSharedPreferences("livebuffer", Context.MODE_PRIVATE)
     fun on(c: Context): Boolean = prefs(c).getBoolean("on", true)
     fun setOn(c: Context, v: Boolean) = prefs(c).edit().putBoolean("on", v).apply()
-    fun keepMin(c: Context): Int = prefs(c).getInt("keep_min", 60)
+    fun keepMin(c: Context): Int = prefs(c).getInt("keep_min", 240)
     fun setKeepMin(c: Context, v: Int) = prefs(c).edit().putInt("keep_min", v).apply()
     /** "internal" (default) or "rec" (same place as recordings). */
     fun place(c: Context): String = prefs(c).getString("place", "internal") ?: "internal"
@@ -70,8 +70,8 @@ object LiveBuffer {
     fun setFileSec(c: Context, v: Int) = prefs(c).edit().putInt("file_sec", v.coerceIn(60, 1800)).apply()
 
     // 🎬 New engine › films & series save-ahead (section 6).
-    /** MB saved ahead while a film plays: 500, 1000 (default), 2000, or -1 = the whole film (as far as free space allows). */
-    fun filmMb(c: Context): Int = prefs(c).getInt("film_mb", 1000)
+    /** MB saved ahead while a film plays: 500, 1000, 2000, or -1 = the whole film (default) (as far as free space allows). */
+    fun filmMb(c: Context): Int = prefs(c).getInt("film_mb", -1)
     fun setFilmMb(c: Context, v: Int) = prefs(c).edit().putInt("film_mb", v).apply()
     /** When you close the film: "delete" (default) the saved copy, or "keep" it (Nova finishes it in Downloads). */
     fun filmKeep(c: Context): String = prefs(c).getString("film_keep", "delete") ?: "delete"
