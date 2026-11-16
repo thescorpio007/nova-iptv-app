@@ -60,6 +60,7 @@ object LiveBuffer {
     fun startOffsetMs(c: Context): Long = if (startMode(c) == "steady") 15_000L else 4_000L
     /** Seconds per file (30 min; the emulator test uses 1 min to cross many file joins). */
     fun fileSec(c: Context): Int = prefs(c).getInt("file_sec", 1800)
+    fun setFileSec(c: Context, v: Int) = prefs(c).edit().putInt("file_sec", v.coerceIn(60, 1800)).apply()
 
     private fun dirs(c: Context): List<File> {
         val internal = File(c.getExternalFilesDir(null) ?: c.filesDir, "livebuffer")

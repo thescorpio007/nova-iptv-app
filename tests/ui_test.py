@@ -996,18 +996,9 @@ def catwatch_damaged():
 
 
 def set_live_engine(on, file_sec=1800):
-    """Switches the Live engine (📼 new / classic) through Nova's settings file, with Nova stopped (like a power cut)."""
+    """Switches the Live engine (📼 new / classic) with Nova stopped first (like a power cut)."""
     adb(f"shell am force-stop {PKG}")
-    xml = ("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n"
-           f"    <boolean name=\"on\" value=\"{'true' if on else 'false'}\" />\n"
-           f"    <int name=\"file_sec\" value=\"{file_sec}\" />\n</map>\n")
-    path = os.path.join(OUT, "livebuffer.xml")
-    with open(path, "w") as f:
-        f.write(xml)
-    # Written through run-as's own input (the app can't read /data/local/tmp).
-    sh(f"adb exec-in run-as {PKG} sh -c 'mkdir -p shared_prefs && cat > shared_prefs/livebuffer.xml' < {path}")
-    note("livebuffer prefs: " + adb(f"shell run-as {PKG} cat shared_prefs/livebuffer.xml").replace("\n", " "))
-    adb(f"shell am start -n {PKG}/.ui.MainActivity")
+    adb(f"shell am start -n {PKG}/.ui.MainActivity --ez nova_live_engine {'true' if on else 'false'} --ei nova_live_file_sec {file_sec}")
     time.sleep(8)
 
 
