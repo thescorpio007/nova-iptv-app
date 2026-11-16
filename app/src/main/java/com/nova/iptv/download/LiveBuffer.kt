@@ -277,9 +277,9 @@ class LiveBufferService : Service() {
                 title = d?.title ?: ""
                 ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(),
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
-                if (d != null) begin(d) else stopSelf()
+                if (d != null) begin(d) else stopSelfResult(startId)
             }
-            else -> end()
+            else -> end(startId)
         }
         return START_NOT_STICKY
     }
@@ -299,7 +299,12 @@ class LiveBufferService : Service() {
         worker = Thread({ save(d) }, "LiveBuffer").apply { isDaemon = true; start() }
     }
 
-    private fun end() {
+    /**
+     * Stops the saver — but never while a new channel's start is already on its way: [stopSelfResult] with this stop's
+     * [startId] only stops the service when no newer start was asked for. (A plain stopSelf() in that gap made Android
+     * close Nova: "startForegroundService() did not then call startForeground()", seen when zapping quickly / Back + new channel.)
+     */
+    private fun end(startId: Int) {
         running = false
         activeId = null
         runCatching { call?.cancel() }
@@ -309,9 +314,13 @@ class LiveBufferService : Service() {
             runCatching { w?.join(5000) }
             // A new channel started meanwhile: keep the service.
             if (gen != g || running) return@Thread
-            runCatching { wifi?.release() }
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                if (gen != g || running) return@post
+                if (stopSelfResult(startId)) {
+                    runCatching { wifi?.release() }
+                    Log.i("NovaTest", "LIVEBUF service stopped")
+                } else Log.i("NovaTest", "LIVEBUF service kept: a new channel is starting")
+            }
         }.start()
     }
 

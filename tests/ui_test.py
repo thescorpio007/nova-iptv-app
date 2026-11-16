@@ -1059,6 +1059,25 @@ def live_engine():
     check("🐈 …and the missing picture was left out of the parts", wait_log(r"LIVEBUF ended Missing Picture: .* [1-9]\d* damaged left out", 15))
 
 
+def fast_zapping():
+    """📼 Live engine: 5 channel changes in ~3 s, then Back and a new channel at once — Nova must not close."""
+    set_live_engine(True)
+    n = count_log(r"READY ")
+    open_test_channel("Paced Channel")
+    wait_count(r"READY ", n + 1, 40)
+    for _ in range(5):
+        adb("shell input keyevent 87")  # next channel
+        time.sleep(0.6)
+    time.sleep(8)
+    check("Fast zapping on the Live engine: Nova keeps running", "PlayerActivity" in resumed_activity())
+    back_to_main("fast-zapping")
+    open_test_channel("Paced Channel")
+    time.sleep(10)
+    log = test_log()
+    check("…no “did not start in time” error from the saver", "ForegroundServiceDidNotStartInTimeException" not in adb("logcat -d -b crash", 30))
+    back_to_main("fast-zapping-2")
+
+
 def catwatch_missing_picture():
     """🐈 CATWATCH: ~5 s without picture while the sound continues — stepped over, no restart, never to live."""
     n = count_log(r"READY Missing Picture")
@@ -1613,6 +1632,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("CATWATCH: missing picture", catwatch_missing_picture),
         ("Background recording", background_recording),
         ("📼 Live engine", live_engine),
+        ("📼 Fast zapping", fast_zapping),
         ("Settings: the two engines", engine_settings),
         ("Open link and Share", open_link),
         ("Double OK hides a film", double_ok_hide),
