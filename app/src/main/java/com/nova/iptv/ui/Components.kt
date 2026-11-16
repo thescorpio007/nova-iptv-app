@@ -818,6 +818,6 @@ fun ConfirmOverlay(title: String, text: String, yesLabel: String, onYes: () -> U
 fun appVersion(): String {
     val context = androidx.compose.ui.platform.LocalContext.current
     return remember {
-        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "5.0"
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "4.0"
     }
 }

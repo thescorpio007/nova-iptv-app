@@ -180,6 +180,6 @@ jobs:
           if grep -q "📼 The Live engine saves" test-run.txt; then
             grep -q "PASS  …and the channel plays from it" test-run.txt || { echo "::warning title=Not published::the Live engine didn't play"; exit 0; }
           fi
-          n=$(printf '%02d' $(( ${{ github.event.workflow_run.run_number }} - 148 )))
-          gh release edit "v5-build-$n" --prerelease=false --latest -R "$GITHUB_REPOSITORY"
-          echo "::notice title=Published::v5-build-$n is now the latest release"
+          n=$(printf '%02d' $(( ${{ github.event.workflow_run.run_number }} - 99 )))
+          gh release edit "v4-build-$n" --prerelease=false --latest -R "$GITHUB_REPOSITORY"
+          echo "::notice title=Published::v4-build-$n is now the latest release"
