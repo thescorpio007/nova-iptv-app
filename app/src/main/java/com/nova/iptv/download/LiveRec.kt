@@ -103,6 +103,10 @@ object LiveRec {
 
     fun isRecording(url: String?): Boolean = url != null && state.value?.url == url
 
+    /** ● Rec from the second on screen: video already saved, written first into the new recording. */
+    private val seeds = java.util.concurrent.ConcurrentHashMap<String, File>()
+    internal fun takeSeed(id: String): File? = seeds.remove(id)
+
     /** FAT32 (4 GB per file): a recording continues in a new file at the first part boundary after 3.8 GB. */
     const val FAT32_PART = 3_800L * 1024 * 1024
     const val FAT32_HARD = 4_000L * 1024 * 1024
@@ -114,7 +118,7 @@ object LiveRec {
     /** Starts recording [url] in the background. Null when another channel is already recording. */
     fun start(
         c: Context, title: String, url: String, accountId: String, icon: String?, endsAt: Long = 0L,
-        fixedEnd: Boolean = false, then: String = "none", programme: String? = null,
+        fixedEnd: Boolean = false, then: String = "none", programme: String? = null, seed: File? = null,
     ): DownloadItem? {
         if (state.value != null) return null
         // You chose a USB / SD drive but none is plugged in: the recording starts anyway (on internal storage).
@@ -138,6 +142,7 @@ object LiveRec {
             endsAt = ends, accountId = accountId,
         )
         DownloadCenter.add(item)
+        if (seed != null && seed.exists()) seeds[item.id] = seed
         val s = State(item.id, title, url, accountId, icon, now, ends, fixedEnd = fixedEnd, then = then)
         state.value = s
         saveActive(c, s)
@@ -464,6 +469,17 @@ class RecordService : Service() {
                 if (s != null && s.id == d.id) LiveRec.state.value = s.copy(bytes = written, seconds = seg.totalSec.toLong(), gaps = gaps)
                 DownloadCenter.update(d.id, persist = false) { it.copy(doneBytes = written, durationSec = seg.totalSec.toLong(), gaps = gaps, gapSec = gapSec, parts = seg.count, partsDone = seg.count) }
             }
+        }
+        // ● The video already saved from the second you were watching comes first (no gap, no jump to live).
+        LiveRec.takeSeed(d.id)?.let { sf ->
+            runCatching {
+                sf.inputStream().use { inp ->
+                    val b = ByteArray(256 * 1024)
+                    while (true) { val n = inp.read(b); if (n < 0) break; if (n > 0) store(b, 0, n) }
+                }
+                Log.i("NovaTest", "LIVEREC ${d.title}: started with ${written / 1024} KB already saved (from the second on screen)")
+            }.onFailure { Log.w("NovaTest", "LIVEREC seed failed: ${it.message}") }
+            runCatching { sf.delete() }
         }
         try {
             while (running) {

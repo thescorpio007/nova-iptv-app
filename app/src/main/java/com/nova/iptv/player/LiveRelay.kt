@@ -335,6 +335,35 @@ class LiveRelay(
     fun bytesStoredTotal(): Long = synchronized(lock) { written }
     fun bytesStored(): Long = synchronized(lock) { written - (segments.firstOrNull()?.start ?: written) }
 
+    /**
+     * ● Rec: copies the stored video from the picture on screen ([memBytes] before the read position) — or from the
+     * oldest stored byte — up to the newest, into [out], so the recording starts at the second you were watching.
+     * Returns the bytes copied.
+     */
+    fun copyStored(memBytes: Long, fromOldest: Boolean, out: java.io.File): Long = synchronized(lock) {
+        val first = segments.firstOrNull()?.start ?: return 0L
+        var from = if (fromOldest) first else (readPos - memBytes.coerceAtLeast(0)).coerceAtLeast(first)
+        from -= from % 188
+        if (from < first) from = first
+        val buf = ByteArray(256 * 1024)
+        java.io.FileOutputStream(out).use { o ->
+            for (seg in segments) {
+                if (seg.end <= from) continue
+                java.io.RandomAccessFile(seg.file, "r").use { r ->
+                    var p = maxOf(from, seg.start)
+                    r.seek(p - seg.start)
+                    while (p < seg.end) {
+                        val n = r.read(buf, 0, minOf(buf.size.toLong(), seg.end - p).toInt())
+                        if (n <= 0) break
+                        o.write(buf, 0, n)
+                        p += n
+                    }
+                }
+            }
+        }
+        written - from
+    }
+
     /** Steps the read position back (to re-read what a restarted player had in memory). */
     fun moveBackBytes(bytes: Long) {
         synchronized(lock) {

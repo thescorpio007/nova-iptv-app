@@ -121,6 +121,74 @@ object LiveBuffer {
         }.start()
     }
 
+    /** A buffer whose files are kept a moment longer (● Rec copies from them). */
+    @Volatile var keepId: String? = null
+
+    /**
+     * ● Rec on the Live engine: the saved video from the second on screen ([windowPosMs]) — or from the oldest saved
+     * moment — up to the newest is copied into a seed file the recording starts with. The hidden buffer then stops
+     * (the recording takes over its connection) and its files are deleted. Blocking (run off the screen's thread).
+     */
+    fun handOver(c: Context, url: String, windowPosMs: Long, fromOldest: Boolean): File? {
+        val b = current ?: return null
+        if (b.url != url) return null
+        keepId = b.id
+        val target = droppedSec + windowPosMs / 1000.0
+        current = null
+        resumeAbs = -1.0; resumeUrl = null
+        runCatching { c.startService(Intent(c, LiveBufferService::class.java).setAction(LiveBufferService.ACTION_STOP)) }
+        Thread.sleep(1500) // the saver ends and closes its files
+        val dir = File(b.path).parentFile ?: return null
+        val seed = File(dir.parentFile, "seed-" + b.id.takeLast(8) + ".ts")
+        return try {
+            val lines = HlsDownload.indexFile(b.path).let { if (it.exists()) it.readLines() else emptyList() }
+            val dropN = lines.lastOrNull { it.startsWith("drop ") }?.substringAfter(' ')?.trim()?.toIntOrNull() ?: 0
+            class P(val off: Long, val len: Long, val sec: Double, val file: Int)
+            val parts = lines.filterNot { it.startsWith("drop") || it.startsWith("init") }.mapNotNull { l ->
+                val f = l.trim().split(' ')
+                if (f.size < 3) null else P(f[0].toLongOrNull() ?: return@mapNotNull null, f[1].toLongOrNull() ?: return@mapNotNull null,
+                    f[2].toDoubleOrNull() ?: 0.0, f.drop(3).firstOrNull { it.startsWith("p") }?.drop(1)?.toIntOrNull() ?: 1)
+            }
+            var k = dropN.coerceAtMost(parts.size)
+            if (!fromOldest) {
+                var cum = parts.take(k).sumOf { it.sec }
+                while (k < parts.size && cum + parts[k].sec <= target) { cum += parts[k].sec; k++ }
+            }
+            val buf = ByteArray(256 * 1024)
+            var copied = 0L
+            java.io.FileOutputStream(seed).use { o ->
+                fun copy(file: Int, from: Long, len: Long) {
+                    java.io.RandomAccessFile(File(LiveRec.partPath(b.path, file)), "r").use { r ->
+                        r.seek(from)
+                        var left = len
+                        while (left > 0) {
+                            val n = r.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                            if (n <= 0) break
+                            o.write(buf, 0, n); left -= n; copied += n
+                        }
+                    }
+                }
+                for (i in k until parts.size) parts[i].let { copy(it.file, it.off, it.len) }
+                // The newest bit, not yet a whole part.
+                val last = parts.lastOrNull()
+                val lf = last?.file ?: 1
+                val tailFrom = if (last != null) last.off + last.len else 0L
+                val lfFile = File(LiveRec.partPath(b.path, lf))
+                if (lfFile.length() > tailFrom) copy(lf, tailFrom, lfFile.length() - tailFrom)
+            }
+            Log.i("NovaTest", "LIVEBUF ${b.title}: handed over to the recording from part $k (${copied / 1024} KB${if (fromOldest) ", from the oldest saved" else ""})")
+            seed
+        } catch (e: Exception) {
+            Log.w("NovaTest", "LIVEBUF hand-over failed: ${e.message}")
+            runCatching { seed.delete() }
+            null
+        } finally {
+            keepId = null
+            runCatching { dir.deleteRecursively() }
+            DownloadCenter.remove(b.id, deleteFile = false)
+        }
+    }
+
     /** Nova goes to the background (Home, TV off): remember where you were; saving continues. */
     fun rememberPosition(url: String, windowPosMs: Long) {
         if (current?.url != url) return
@@ -399,7 +467,7 @@ class LiveBufferService : Service() {
             runCatching { out.close() }
             Log.i("NovaTest", "LIVEBUF ended ${d.title}: ${seg.count} parts, ${seg.totalSec.toLong()} s, $dropped deleted, ${seg.fileNo} files, ${seg.skips} damaged left out")
             // Ended by a channel change or Back (not by a pause): the hidden files go.
-            if (LiveBuffer.current?.id != d.id) {
+            if (LiveBuffer.current?.id != d.id && LiveBuffer.keepId != d.id) {
                 runCatching { file.parentFile?.deleteRecursively() }
                 DownloadCenter.remove(d.id, deleteFile = false)
             }
