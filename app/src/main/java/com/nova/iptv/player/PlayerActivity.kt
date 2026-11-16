@@ -50,6 +50,7 @@ import com.nova.iptv.data.XtreamApi
 import com.nova.iptv.download.DownloadCenter
 import com.nova.iptv.download.Recorder
 import com.nova.iptv.download.LiveRec
+import com.nova.iptv.download.LiveBuffer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -544,6 +545,9 @@ class PlayerActivity : ComponentActivity() {
         nextButton = pill("Next ▶") { zap(1, auto = false) }
         rewindButton = pill("⏪ 30s") { timeshift(-30) }
         liveButton = pill("Live ⏭") { goLive() }
+        // 📼 Live engine extras (pause / 30 s forward), shown only with it.
+        pauseButton = pill("⏸ Pause") { player?.let { it.playWhenReady = !it.playWhenReady; updateEngineViews() } }
+        forwardButton = pill("30s ⏩") { timeshift(30) }
         recButton = pill("● Rec") { toggleRecording() }
         downloadButton = pill("⬇ Download") { downloadCurrent() }
         externalButton = pill("↗ External player") { openExternal() }
@@ -562,7 +566,7 @@ class PlayerActivity : ComponentActivity() {
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            listOf(backPill, prevButton, nextButton, rewindButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, syncButton, hideButton, infoButton, favButton, externalButton, castButton, rotateButton, aspectButton, downloadButton)
+            listOf(backPill, prevButton, nextButton, rewindButton, pauseButton, forwardButton, liveButton, similarButton, recButton, tracksButton, nightButton, boostButton, syncButton, hideButton, infoButton, favButton, externalButton, castButton, rotateButton, aspectButton, downloadButton)
                 .forEach { addView(it) }
         }
         val buttonScroller = HorizontalScrollView(this).apply {
@@ -772,6 +776,7 @@ class PlayerActivity : ComponentActivity() {
     // ================================================================== playback
 
     private fun modeFor(item: PlayItem): SourceMode = when {
+        item.isLive && LiveBuffer.activeFor(item.url) != null -> SourceMode.GROWING
         item.isLocal -> SourceMode.LOCAL
         item.downloadId != null -> SourceMode.GROWING
         !item.isLive && app.storage.readAheadMb > 0 && item.url.startsWith("http", ignoreCase = true) && item.isHls -> SourceMode.VOD_HLS_DISK
@@ -792,7 +797,7 @@ class PlayerActivity : ComponentActivity() {
             SourceMode.VOD_DISK, SourceMode.GROWING -> diskSource
             else -> relaySource
         }
-        val p = PlayerFactory.create(this, app, mode, source, tweaks, quickStart = LiveRec.isRecordingItem(current))
+        val p = PlayerFactory.create(this, app, mode, source, tweaks, quickStart = LiveRec.isRecordingItem(current) || current?.let { it.isLive && LiveBuffer.activeFor(it.url) != null } == true)
         playerTweaks = tweaks
         playerAvoid = avoidNow
         p.addListener(listener)
@@ -821,8 +826,18 @@ class PlayerActivity : ComponentActivity() {
         return p
     }
 
-    private fun buildMediaItem(item: PlayItem): MediaItem =
-        MediaItem.Builder()
+    private fun buildMediaItem(item: PlayItem): MediaItem {
+        // 📼 Live engine: the player reads the channel's hidden parts list, a few seconds behind its newest part,
+        // never speeding up to catch up (so the distance behind live grows after a stall, up to "Keep the last").
+        val buf = if (item.isLive) LiveBuffer.activeFor(item.url) else null
+        if (buf != null) return MediaItem.Builder()
+            .setUri(LiveBuffer.playUrl(buf))
+            .setMimeType(MimeTypes.APPLICATION_M3U8)
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).build())
+            .setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(LiveBuffer.startOffsetMs(this))
+                .setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
+            .build()
+        return MediaItem.Builder()
             .setUri(item.url)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).build())
             .apply {
@@ -854,6 +869,7 @@ class PlayerActivity : ComponentActivity() {
                 }
             }
             .build()
+    }
 
     private fun startPlayback(index: Int) = startPlayback(index, quiet = false, keepTweaks = false)
 
@@ -927,6 +943,11 @@ class PlayerActivity : ComponentActivity() {
             return
         }
 
+        // 📼 Live engine: the channel is saved behind the scenes as .ts parts and played from there (classic look).
+        // Another channel's hidden files are deleted; the same channel's buffer is kept (quiet restarts, coming back).
+        if (item.isLive && !item.isHls && app.storage.liveDiskBuffer && LiveBuffer.on(this)) LiveBuffer.start(this, item)
+        else if (LiveBuffer.activeFor(item.url) == null) LiveBuffer.stop(this)
+
         val mode = modeFor(item)
 
         // A fresh disk buffer per channel. The old one is closed a little later, once the player has
@@ -997,7 +1018,8 @@ class PlayerActivity : ComponentActivity() {
             PlayItem.START_RESUME -> app.storage.getPosition(item.key)
             PlayItem.START_NEWEST -> -1L
             else -> item.startAt.coerceAtLeast(0L)
-        } else if (item.startAt == 0L) 0L else if (growingHls) 0L else if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.VOD_HLS_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
+        } else if (item.isLive && LiveBuffer.activeFor(item.url) != null) LiveBuffer.takeResume(item.url)
+        else if (item.startAt == 0L) 0L else if (growingHls) 0L else if (mode == SourceMode.VOD || mode == SourceMode.VOD_DISK || mode == SourceMode.VOD_HLS_DISK || mode == SourceMode.GROWING || mode == SourceMode.LOCAL) {
             app.storage.getPosition(item.key)
         } else 0L
         if (!quiet) resumeFallbackDone = false
@@ -1028,10 +1050,13 @@ class PlayerActivity : ComponentActivity() {
         val multi = item.isLive && items.size > 1
         prevButton.visibility = if (multi) View.VISIBLE else View.GONE
         nextButton.visibility = if (multi) View.VISIBLE else View.GONE
-        val timeshiftVisible = if (mode == SourceMode.LIVE_RELAY) View.VISIBLE else View.GONE
+        val engine = item.isLive && mode == SourceMode.GROWING
+        val timeshiftVisible = if (mode == SourceMode.LIVE_RELAY || engine) View.VISIBLE else View.GONE
         rewindButton.visibility = timeshiftVisible
         liveButton.visibility = timeshiftVisible
         timeView.visibility = timeshiftVisible
+        pauseButton.visibility = if (engine) View.VISIBLE else View.GONE
+        forwardButton.visibility = if (engine) View.VISIBLE else View.GONE
         recButton.visibility = if (item.isLive) View.VISIBLE else View.GONE
         similarButton.visibility = if (item.isLive && !item.catchup && !item.temporary && item.saved.accountId.isNotBlank()) View.VISIBLE else View.GONE
         downloadButton.visibility = if (!item.isLive && !item.isLocal && item.downloadExt != null) View.VISIBLE else View.GONE
@@ -1494,7 +1519,8 @@ class PlayerActivity : ComponentActivity() {
                                 ss.startMs = System.currentTimeMillis() - ss.startedAt
                                 current?.takeIf { it.isLive && !storedRestart }?.let { learnStart(it.saved.accountId, ss.startMs) }
                             }
-                            ss.mode = playerMode?.name?.lowercase()?.replace('_', ' ').orEmpty()
+                            ss.mode = if (current?.let { it.isLive && LiveBuffer.activeFor(it.url) != null } == true) "📼 live engine"
+                            else playerMode?.name?.lowercase()?.replace('_', ' ').orEmpty()
                             player?.videoFormat?.let { f ->
                                 ss.video = listOfNotNull(
                                     if (f.width > 0) "${f.width}×${f.height}" else null,
@@ -1819,7 +1845,11 @@ class PlayerActivity : ComponentActivity() {
         val task = Runnable {
             val p = player ?: return@Runnable
             if (current !== item) return@Runnable
-            if (playerMode == SourceMode.LIVE_DIRECT || playerMode == SourceMode.LIVE_HLS_DISK ||
+            if (code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && LiveBuffer.activeFor(item.url) != null) {
+                // 📼 Paused longer than "Keep the last": continue from the oldest moment still saved.
+                p.seekTo(0L)
+                Toast.makeText(this, "The oldest part was deleted (Keep the last ${LiveBuffer.keepMin(this)} min) — continuing from the oldest saved moment", Toast.LENGTH_LONG).show()
+            } else if (playerMode == SourceMode.LIVE_DIRECT || playerMode == SourceMode.LIVE_HLS_DISK ||
                 code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW
             ) {
                 p.seekToDefaultPosition()
@@ -1896,7 +1926,9 @@ class PlayerActivity : ComponentActivity() {
         val base = maxOf(app.storage.skipTimeoutSec, startCushion + 6) * 1000L
         // Learned per server: a server whose channels usually need 11 s to start gets ~20 s before a new attempt.
         val learned = current?.saved?.accountId?.let { startLearnedMs(it) } ?: 0L
-        return maxOf(base, minOf(learned * 18 / 10 + 2000, 40_000L))
+        val engine = current?.let { it.isLive && LiveBuffer.activeFor(it.url) != null } == true
+        // 📼 Live engine: the first parts must be saved first (a few seconds more).
+        return maxOf(base, minOf(learned * 18 / 10 + 2000, 40_000L), if (engine) 20_000L else 0L)
     }
 
     private val startPrefs by lazy { getSharedPreferences("start_times", MODE_PRIVATE) }
@@ -2366,6 +2398,16 @@ class PlayerActivity : ComponentActivity() {
     // ================================================================== timeshift
 
     private fun timeshift(seconds: Int) {
+        val item = current
+        if (item != null && item.isLive && LiveBuffer.activeFor(item.url) != null) {
+            // 📼 Within the saved part: back, or forward up to a few seconds before the newest part.
+            val p = player ?: return
+            val maxPos = if (p.duration > 0) maxOf(0L, p.duration - LiveBuffer.startOffsetMs(this)) else Long.MAX_VALUE
+            p.seekTo((p.currentPosition + seconds * 1000L).coerceIn(0L, maxPos))
+            p.playWhenReady = true
+            updateEngineViews()
+            return
+        }
         val r = relay ?: return
         r.moveBy(seconds)
         restartFromRelay()
@@ -2438,7 +2480,27 @@ class PlayerActivity : ComponentActivity() {
         return (if (bps > 0) (r.bytesAhead() / bps).toInt() else r.secondsAhead()) + inMemory
     }
 
+    private lateinit var pauseButton: TextView
+    private lateinit var forwardButton: TextView
+
+    /** 📼 The green line: "● Live · 18 s behind · ⏪ rewind up to 42 min" (or paused), and the Pause button. */
+    private fun updateEngineViews() {
+        val item = current ?: return
+        if (!item.isLive || LiveBuffer.activeFor(item.url) == null || !::pauseButton.isInitialized) return
+        val p = player ?: return
+        val playing = p.playWhenReady
+        pauseButton.text = if (playing) "⏸ Pause" else "▶ Play"
+        if (timeView.visibility != View.VISIBLE) return
+        val behind = if (p.duration > 0) ((p.duration - p.currentPosition) / 1000).coerceAtLeast(0) else 0
+        val back = (p.currentPosition / 1000).coerceAtLeast(0)
+        val behindTxt = if (behind >= 60) "${behind / 60} min ${behind % 60} s" else "$behind s"
+        val backTxt = if (back >= 60) "${back / 60} min" else "$back s"
+        timeView.setTextColor(if (playing) 0xFF2EE66B.toInt() else 0xFFFFD27A.toInt())
+        timeView.text = if (playing) "● Live · $behindTxt behind   ·   ⏪ rewind up to $backTxt" else "⏸ Paused · $behindTxt behind live"
+    }
+
     private fun updateTimeLabel() {
+        updateEngineViews()
         val r = relay ?: return
         if (timeView.visibility != View.VISIBLE) return
         val bps = mediaBps
@@ -2495,6 +2557,8 @@ class PlayerActivity : ComponentActivity() {
 
     private fun recordNow(item: PlayItem, endsAt: Long = 0L, sched: com.nova.iptv.download.RecSchedule.Sched? = null) {
         if (LiveRec.state.value != null) return
+        // The hidden live buffer's connection is freed too (the recording replaces it).
+        LiveBuffer.stop(this)
         // The player's own connection is closed first: the recording takes it (one connection for both).
         player?.stop()
         relay?.close()
@@ -2532,6 +2596,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun startScheduledInstead(s: com.nova.iptv.download.RecSchedule.Sched) {
+        LiveBuffer.stop(this)
         player?.stop()
         relay?.close()
         relay = null
@@ -3791,6 +3856,7 @@ class PlayerActivity : ComponentActivity() {
     private var repairNote = ""
 
     private fun liveOnlyFix(item: PlayItem, problem: String) {
+        if (LiveBuffer.activeFor(item.url) != null) { engineFix(item, problem); return }
         val now = android.os.SystemClock.elapsedRealtime()
         val r = relay
         val quietFor = if (notArrivingSince > 0) now - notArrivingSince else 0L
@@ -3842,6 +3908,41 @@ class PlayerActivity : ComponentActivity() {
         wdReset(now)
         if (action == null) { Log.i("NovaTest", "WD ${item.title}: $problem -> waiting (quiet ${quietFor / 1000} s)"); return }
         wdGraceUntil = now + 20_000
+        logHealth(item, problem, action)
+        if (app.storage.watchdogNotes) Toast.makeText(this, "⟳ ${action.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 📼 Live engine repair, smallest step first: the next key picture at least 0.25 s ahead, then 0.5 s, 0.75 s…
+     * (one step more each time within 2 minutes). Nothing saved ahead yet (slow line): just wait — the distance
+     * behind live grows by itself. Never a jump to live.
+     */
+    private fun engineFix(item: PlayItem, problem: String) {
+        val p = player ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val aheadMs = if (p.duration > 0) p.duration - p.currentPosition else 0L
+        val action: String? = if (aheadMs < 3000 || problem.startsWith("no data")) null else {
+            while (wdLiveFixes.isNotEmpty() && now - wdLiveFixes.first() > 120_000) wdLiveFixes.removeFirst()
+            wdLiveFixes.addLast(now)
+            val n = wdLiveFixes.size
+            if (n >= 8) {
+                p.stop(); p.prepare(); p.playWhenReady = true
+                "restarted the picture at the same place (cushion kept)"
+            } else {
+                val stepMs = (250L * n).coerceAtMost(aheadMs - 1000)
+                p.setSeekParameters(androidx.media3.exoplayer.SeekParameters.NEXT_SYNC)
+                val from = p.currentPosition
+                p.seekTo(from + stepMs)
+                p.playWhenReady = true
+                handler.postDelayed({ player?.setSeekParameters(androidx.media3.exoplayer.SeekParameters.DEFAULT) }, 1500)
+                CatWatch.record(this, stepMs / 1000.0)
+                "🐈 stepped ${"%.2f".format(stepMs / 1000.0)} s to the next key picture (cushion kept)"
+            }
+        }
+        wdReset(now)
+        if (action == null) { Log.i("NovaTest", "WD ${item.title}: $problem -> waiting, nothing saved ahead (line slow; the cushion grows)"); return }
+        Log.i("NovaTest", "LIVEBUF fix ${item.title}: $problem -> $action")
+        wdGraceUntil = now + 15_000
         logHealth(item, problem, action)
         if (app.storage.watchdogNotes) Toast.makeText(this, "⟳ ${action.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
     }
@@ -4497,6 +4598,8 @@ class PlayerActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         saveResumePosition()
+        // 📼 Home / TV off: saving continues in the background; remember where you were.
+        current?.let { c -> player?.let { p -> if (c.isLive) LiveBuffer.rememberPosition(c.url, p.currentPosition) } }
         player?.playWhenReady = false
     }
 
@@ -4509,6 +4612,8 @@ class PlayerActivity : ComponentActivity() {
         endSession()
         handler.removeCallbacksAndMessages(null)
         epgJob?.cancel()
+        // 📼 Back (leaving the player): the hidden live files are deleted. Destroyed in the background: kept.
+        if (isFinishing) LiveBuffer.stop(this)
         if (Recorder.isRecording) Recorder.stop()
         player?.release()
         player = null

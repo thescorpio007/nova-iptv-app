@@ -568,6 +568,11 @@ internal class Segmenter(private val indexFile: File) {
     private var lastEnd = -1L
     /** FAT32 drive: a new file is started at a part boundary once the current file reaches this size. */
     var splitAt = Long.MAX_VALUE
+    /** 📼 Live engine: a new file every this many seconds (30 min), at a part boundary. */
+    var splitSec = Double.MAX_VALUE
+    private var fileStartSec = 0.0
+    /** Told of each part written to the list: its file number, seconds, and whether it starts a new timeline. */
+    var onPart: ((fileNo: Int, sec: Double, disc: Boolean) -> Unit)? = null
     private var keysSeen = 0
     private var bytesPerSec = 0.0
     var totalSec = 0.0
@@ -646,7 +651,8 @@ internal class Segmenter(private val indexFile: File) {
             return
         }
         val secs = if (dur >= 0) dur else wall
-        if (secs >= 4.0) {
+        // The first parts are short (1 s), so playback can start sooner; then about 4 s each.
+        if (secs >= (if (count < 3) 1.0 else 4.0)) {
             if (dur > 0) bytesPerSec = if (bytesPerSec == 0.0) (cut - segStart) / dur else bytesPerSec * 0.8 + (cut - segStart) / dur * 0.2
             emit(segStart, cut - segStart, secs)
             segStart = cut; segPts = pts; segWall = now
@@ -665,13 +671,14 @@ internal class Segmenter(private val indexFile: File) {
 
     /** Appends the finished parts (call once their bytes are in the file). */
     /** Where a new file could start now (the end of the last part, once the current file is big enough), or -1. */
-    fun switchCandidate(): Long = if (lastEnd >= 0 && lastEnd - files.last().first >= splitAt) lastEnd else -1L
+    fun switchCandidate(): Long =
+        if (lastEnd >= 0 && (lastEnd - files.last().first >= splitAt || totalSec - fileStartSec >= splitSec) && lastEnd > files.last().first) lastEnd else -1L
 
     val fileNo: Int get() = files.last().second
     val fileStart: Long get() = files.last().first
 
     /** The bytes from stream offset [at] go into file [n]. */
-    fun startFile(at: Long, n: Int) { files += at to n }
+    fun startFile(at: Long, n: Int) { files += at to n; fileStartSec = totalSec }
 
     fun flush() {
         if (lines.isEmpty()) return
@@ -680,6 +687,7 @@ internal class Segmenter(private val indexFile: File) {
                 val (start, n) = files.last { it.first <= l.off }
                 w.write(String.format(Locale.US, "%d %d %.3f", l.off - start, l.len, l.sec) + (if (l.disc) " d" else "") + (if (n > 1) " p$n" else ""))
                 w.write("\n")
+                onPart?.invoke(n, l.sec, l.disc)
             }
         }
         lines.clear()

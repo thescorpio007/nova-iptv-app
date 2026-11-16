@@ -81,6 +81,8 @@ class NovaApp : Application() {
         Folders.customRoot = storage.storageRoot
         com.nova.iptv.data.Locations.init(this, storage)
         DownloadCenter.init(storage)
+        // 📼 Leftover hidden live buffers (power cut, restart, crash): deleted at once, in the background.
+        runCatching { com.nova.iptv.download.LiveBuffer.cleanAtStart(this) }
         com.nova.iptv.data.CrashLog.install(this)
         com.nova.iptv.data.StreamCheck.init(this)
         com.nova.iptv.data.PlaybackLog.init(this)

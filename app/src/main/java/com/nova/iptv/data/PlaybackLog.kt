@@ -134,6 +134,11 @@ object PlaybackLog {
         sb.appendLine("Nova $version · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · ${dm.widthPixels}×${dm.heightPixels}")
         sb.appendLine("Settings: $settings")
         runCatching { sb.appendLine("CATWATCH: " + com.nova.iptv.player.CatWatch.reportText(context)) }
+        runCatching {
+            val L = com.nova.iptv.download.LiveBuffer
+            sb.appendLine("Live    : " + (if (L.on(context)) "📼 Live engine · keep the last ${L.keepMin(context)} min · on ${if (L.place(context) == "rec") "the recordings drive" else "internal storage"}" else "classic") +
+                (L.cleanedText(context)?.let { " · $it" } ?: ""))
+        }
         // Every drive Nova found (and how) — shows why a USB stick was or wasn't used.
         runCatching {
             val drives = Locations.drives().filter { it.removable }

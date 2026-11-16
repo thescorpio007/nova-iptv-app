@@ -35,7 +35,9 @@ import com.nova.iptv.data.DownloadStatus
 
 @Composable
 fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
-    val items by vm.downloads.collectAsStateWithLifecycle()
+    val allItems by vm.downloads.collectAsStateWithLifecycle()
+    // 📼 The Live engine's hidden buffer is never listed.
+    val items = allItems.filter { it.kind != "livebuffer" }
     val scheduled by com.nova.iptv.download.RecSchedule.all.collectAsStateWithLifecycle()
     val context = LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { com.nova.iptv.download.RecSchedule.load(context) }

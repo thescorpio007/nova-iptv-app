@@ -612,6 +612,7 @@ fun PlayerSettings(vm: MainViewModel) {
     SoundSyncCard()
 
     CatWatchCard()
+    LiveEngineCard()
     RecordingCard()
 
     HidePictureCard()
@@ -1616,6 +1617,36 @@ private fun CatWatchCard() {
         Hint("A note at the top right for 3 s: \"🐈 skipped 0.8 s (damaged part)\".")
         ChoiceRow(listOf("yes" to "Yes", "no" to "No"), if (note) "yes" else "no") { note = it == "yes"; C.setNote(context, note) }
         Hint("Today: $today")
+    }
+}
+
+/** Settings › 📼 Live engine: live TV saved behind the scenes as .ts parts and played from there (classic player look). */
+@Composable
+private fun LiveEngineCard() {
+    val context = LocalContext.current
+    val L = com.nova.iptv.download.LiveBuffer
+    var on by remember { mutableStateOf(L.on(context)) }
+    var keep by remember { mutableStateOf(L.keepMin(context)) }
+    var place by remember { mutableStateOf(L.place(context)) }
+    var start by remember { mutableStateOf(L.startMode(context)) }
+    val keepTxt = if (keep >= 60) "${keep / 60} h" else "$keep min"
+    SettingsCard("📼 Live engine", summary = if (on) "Recording engine · keeps $keepTxt" else "Classic") {
+        Hint("Live TV plays as usual, but Nova keeps the channel you're watching on the box behind the scenes: a slow or broken " +
+            "line never reaches the picture, and you can pause or rewind. Deleted when you change channel or leave with Back. " +
+            "Nothing is shown as a recording.")
+        Text("Engine", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("new" to "📼 Recording engine (new)", "classic" to "Classic"), if (on) "new" else "classic") {
+            on = it == "new"; L.setOn(context, on)
+        }
+        Text("Keep the last", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("30" to "30 min", "60" to "60 min", "120" to "2 h", "240" to "4 h"), keep.toString()) {
+            keep = it.toInt(); L.setKeepMin(context, keep)
+        }
+        Hint("How far you can pause or rewind, and how far behind live you can fall after stalls. Saved in 30-minute .ts files; older ones are deleted by themselves.")
+        Text("Saved on", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("internal" to "Internal storage", "rec" to "Same as recordings"), place) { place = it; L.setPlace(context, it) }
+        Text("Start a channel", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("fast" to "As soon as 4 s are saved", "steady" to "With a 15 s cushion (steadier)"), start) { start = it; L.setStartMode(context, it) }
     }
 }
 

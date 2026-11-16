@@ -281,6 +281,11 @@
         </receiver>
 
         <service
+            android:name=".download.LiveBufferService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
             android:name=".download.RecordService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

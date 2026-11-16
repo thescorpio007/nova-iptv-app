@@ -273,18 +273,26 @@ class GrowingHlsList(
                 t
             }
             val done = d.status == DownloadStatus.DONE
-            if (parts.isNotEmpty()) {
-                val target = kotlin.math.ceil(parts.maxOf { it.third }.coerceAtLeast(1.0)).toInt()
-                val sb = StringBuilder("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:$target\n#EXT-X-MEDIA-SEQUENCE:0\n")
-                sb.append(if (done) "#EXT-X-PLAYLIST-TYPE:VOD\n" else "#EXT-X-PLAYLIST-TYPE:EVENT\n")
+            // 📼 Live engine: the oldest parts are deleted as it goes ("drop N"): a sliding live list.
+            val sliding = d.kind == "livebuffer"
+            val dropN = if (!sliding) 0 else (lines.lastOrNull { it.startsWith("drop ") }?.substringAfter(' ')?.trim()?.toIntOrNull() ?: 0).coerceIn(0, maxOf(0, parts.size - 1))
+            if (parts.size > dropN) {
+                val kept = parts.subList(dropN, parts.size)
+                val target = kotlin.math.ceil(kept.maxOf { it.third }.coerceAtLeast(1.0)).toInt()
+                val sb = StringBuilder("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:$target\n#EXT-X-MEDIA-SEQUENCE:$dropN\n")
+                // Every part starts at a key picture (with PAT/PMT): the player may start or jump at any part.
+                sb.append("#EXT-X-INDEPENDENT-SEGMENTS\n")
+                if (sliding) sb.append("#EXT-X-DISCONTINUITY-SEQUENCE:${disc.count { it in 1..dropN }}\n")
+                else sb.append(if (done) "#EXT-X-PLAYLIST-TYPE:VOD\n" else "#EXT-X-PLAYLIST-TYPE:EVENT\n")
                 if (init != null) sb.append("#EXT-X-MAP:URI=\"video.ts\",BYTERANGE=\"$init@0\"\n")
                 parts.forEachIndexed { n, (off, len, sec) ->
-                    if (n > 0 && n in disc) sb.append("#EXT-X-DISCONTINUITY\n")
+                    if (n < dropN) return@forEachIndexed
+                    if (n > dropN && n in disc) sb.append("#EXT-X-DISCONTINUITY\n")
                     sb.append("#EXTINF:").append(String.format(java.util.Locale.US, "%.3f", if (sec > 0) sec else 1.0)).append(",\n")
                     val fno = fileNo[n] ?: 1
                     sb.append("#EXT-X-BYTERANGE:$len@$off\n").append(if (fno > 1) "part$fno.ts" else "video.ts").append("\n")
                 }
-                if (done) sb.append("#EXT-X-ENDLIST\n")
+                if (done && !sliding) sb.append("#EXT-X-ENDLIST\n")
                 return sb.toString()
             }
             if (d.status == DownloadStatus.FAILED) throw IOException("Download failed: ${d.error ?: "unknown error"}")

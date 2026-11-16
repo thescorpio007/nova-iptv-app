@@ -995,6 +995,51 @@ def catwatch_damaged():
     back_to_main("catwatch")
 
 
+def set_live_engine(on, file_sec=1800):
+    """Switches the Live engine (📼 new / classic) through Nova's settings file, with Nova stopped (like a power cut)."""
+    adb(f"shell am force-stop {PKG}")
+    xml = ("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n"
+           f"    <boolean name=\"on\" value=\"{'true' if on else 'false'}\" />\n"
+           f"    <int name=\"file_sec\" value=\"{file_sec}\" />\n</map>\n")
+    path = os.path.join(OUT, "livebuffer.xml")
+    with open(path, "w") as f:
+        f.write(xml)
+    adb(f"push {path} /data/local/tmp/livebuffer.xml")
+    adb("shell chmod 644 /data/local/tmp/livebuffer.xml")
+    adb(f"shell run-as {PKG} sh -c 'mkdir -p shared_prefs && cp /data/local/tmp/livebuffer.xml shared_prefs/livebuffer.xml'")
+    adb(f"shell am start -n {PKG}/.ui.MainActivity")
+    time.sleep(8)
+
+
+def classic_engine():
+    set_live_engine(False)
+
+
+def live_engine():
+    """📼 Live engine: the channel is saved behind the scenes as .ts parts (1-minute files here) and played from there."""
+    set_live_engine(True, 60)
+    n = count_log(r"READY Paced Channel")
+    open_test_channel("Paced Channel")
+    check("📼 The Live engine saves the channel behind the scenes", wait_log(r"LIVEBUF start Paced Channel", 20))
+    check("…and the channel plays from it", wait_count(r"READY Paced Channel", n + 1, 40))
+    shot("live-engine")
+    check("…crossing a file join (1-minute files)", wait_log(r"LIVEBUF Paced Channel: file 2", 100))
+    time.sleep(15)
+    log = test_log()
+    after = log.split("LIVEBUF start Paced Channel")[-1]
+    check("…with no freeze or repair at the join", not re.search(r"WATCHDOG Paced Channel|LIVEBUF fix Paced", after))
+    # A power cut: Nova is stopped with the hidden files left; the next start deletes them.
+    set_live_engine(True, 60)
+    check("🧹 Leftover hidden files are deleted at the next start", wait_log(r"LIVEBUF 🧹 cleared", 20))
+    n = count_log(r"READY Missing Picture")
+    open_test_channel("Missing Picture")
+    check("📼 Missing picture on the Live engine starts", wait_count(r"READY Missing Picture", n + 1, 40))
+    time.sleep(45)
+    back_to_main("live-engine")
+    check("Back deletes the hidden files", wait_log(r"LIVEBUF stop Missing Picture", 10))
+    check("🐈 …and the missing picture was left out of the parts", wait_log(r"LIVEBUF ended Missing Picture: .* [1-9]\d* damaged left out", 15))
+
+
 def catwatch_missing_picture():
     """🐈 CATWATCH: ~5 s without picture while the sound continues — stepped over, no restart, never to live."""
     n = count_log(r"READY Missing Picture")
@@ -1544,9 +1589,11 @@ if os.environ.get("NOVA_MODE") == "short":
         ("Install and open", install),
         ("First login", login_first),
         ("Restart with an account", restart_check),
+        ("Classic engine for the CATWATCH tests", classic_engine),
         ("CATWATCH: damaged packets", catwatch_damaged),
         ("CATWATCH: missing picture", catwatch_missing_picture),
         ("Background recording", background_recording),
+        ("📼 Live engine", live_engine),
         ("Open link and Share", open_link),
         ("Double OK hides a film", double_ok_hide),
     ]
