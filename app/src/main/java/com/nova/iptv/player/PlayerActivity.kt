@@ -1600,7 +1600,8 @@ class PlayerActivity : ComponentActivity() {
      * Video: the other decoder (hardware ↔ software). Subtitles: switched off.
      */
     private fun tryRecover(item: PlayItem, error: PlaybackException?): Boolean {
-        if (item.isLive) return false
+        // 📼 Live engine channels can switch decoder like films (the picture comes from saved parts, not the line).
+        if (item.isLive && LiveBuffer.activeFor(item.url) == null) return false
         val e = error as? ExoPlaybackException ?: return false
         if (e.type != ExoPlaybackException.TYPE_RENDERER) return false
         val p = player ?: return false
