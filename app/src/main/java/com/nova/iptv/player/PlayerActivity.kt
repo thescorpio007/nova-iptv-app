@@ -245,6 +245,9 @@ class PlayerActivity : ComponentActivity() {
      */
     private val diskSource = DataSource.Factory {
         val item = current ?: throw IllegalStateException("Nothing playing")
+        // 📼 Live engine: the channel's hidden parts list (the item keeps its normal channel address).
+        val buf = if (item.isLive) LiveBuffer.activeFor(item.url) else null
+        if (buf != null) return@Factory GrowingHlsList(buf, applicationContext, app.http, app.storage.userAgent)
         // A streaming (HLS) download watched while it runs: the list of saved parts + the joined file.
         if (item.url.startsWith("nova-dl://") && item.downloadId != null) {
             return@Factory GrowingHlsList(item.downloadId, applicationContext, app.http, app.storage.userAgent)

@@ -1004,9 +1004,9 @@ def set_live_engine(on, file_sec=1800):
     path = os.path.join(OUT, "livebuffer.xml")
     with open(path, "w") as f:
         f.write(xml)
-    adb(f"push {path} /data/local/tmp/livebuffer.xml")
-    adb("shell chmod 644 /data/local/tmp/livebuffer.xml")
-    adb(f"shell run-as {PKG} sh -c 'mkdir -p shared_prefs && cp /data/local/tmp/livebuffer.xml shared_prefs/livebuffer.xml'")
+    # Written through run-as's own input (the app can't read /data/local/tmp).
+    sh(f"adb exec-in run-as {PKG} sh -c 'mkdir -p shared_prefs && cat > shared_prefs/livebuffer.xml' < {path}")
+    note("livebuffer prefs: " + adb(f"shell run-as {PKG} cat shared_prefs/livebuffer.xml").replace("\n", " "))
     adb(f"shell am start -n {PKG}/.ui.MainActivity")
     time.sleep(8)
 
