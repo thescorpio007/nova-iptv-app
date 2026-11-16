@@ -2500,7 +2500,11 @@ class PlayerActivity : ComponentActivity() {
         val behindTxt = if (behind >= 60) "${behind / 60} min ${behind % 60} s" else "$behind s"
         val backTxt = if (back >= 60) "${back / 60} min" else "$back s"
         timeView.setTextColor(if (playing) 0xFF2EE66B.toInt() else 0xFFFFD27A.toInt())
-        timeView.text = if (playing) "● Live · $behindTxt behind   ·   ⏪ rewind up to $backTxt" else "⏸ Paused · $behindTxt behind live"
+        // The download speed, as with the classic player: ⬇ what arrives / what the channel needs.
+        val inB = LiveBuffer.arrivalBps
+        val needB = LiveBuffer.mediaBps
+        val speed = if (inB > 0) "   ·   ⬇ ${mbit(inB)}" + (if (needB > 0) " / needs ${mbit(needB)}" else "") + " Mbit/s" else ""
+        timeView.text = (if (playing) "● Live · $behindTxt behind   ·   ⏪ rewind up to $backTxt" else "⏸ Paused · $behindTxt behind live") + speed
     }
 
     private fun updateTimeLabel() {
@@ -3686,8 +3690,12 @@ class PlayerActivity : ComponentActivity() {
         relay?.let { r -> if (mediaBps > 0) r.mediaBytesPerSec = mediaBps }
         session?.let { ss ->
             if (item != null && item.isLive && p != null && p.isPlaying) {
-                if (mediaBps > 0) ss.needMbit = mediaBps * 8 / 1_000_000
-                if (arrivalBps > 0) ss.arrival(arrivalBps * 8 / 1_000_000)
+                // 📼 Live engine: its own saver measures the speed.
+                val engineOn = LiveBuffer.activeFor(item.url) != null
+                val need = if (engineOn) LiveBuffer.mediaBps else mediaBps
+                val got = if (engineOn) LiveBuffer.arrivalBps else arrivalBps
+                if (need > 0) ss.needMbit = need * 8 / 1_000_000
+                if (got > 0) ss.arrival(got * 8 / 1_000_000)
                 ss.cushion(behindLiveSeconds() ?: -1)
             }
         }

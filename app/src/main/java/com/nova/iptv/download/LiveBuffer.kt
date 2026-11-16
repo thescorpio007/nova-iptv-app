@@ -41,6 +41,9 @@ object LiveBuffer {
     /** Seconds of the oldest parts already deleted (the player's window starts after them). */
     @Volatile var droppedSec = 0.0
     @Volatile var savedSec = 0.0
+    /** Download speed now and what the channel needs (bytes per second), for the green line. */
+    @Volatile var arrivalBps = 0.0
+    @Volatile var mediaBps = 0.0
     /** Where you were (seconds since the channel's buffer started), kept while Nova is in the background. */
     private var resumeAbs = -1.0
     private var resumeUrl: String? = null
@@ -96,7 +99,7 @@ object LiveBuffer {
                 status = DownloadStatus.RECORDING, createdAt = System.currentTimeMillis(), accountId = item.saved.accountId)
             DownloadCenter.add(d)
             current = Buf(id, item.url, item.title, f.absolutePath)
-            droppedSec = 0.0; savedSec = 0.0
+            droppedSec = 0.0; savedSec = 0.0; arrivalBps = 0.0; mediaBps = 0.0
             Log.i("NovaTest", "LIVEBUF start ${item.title}")
             ContextCompat.startForegroundService(c, Intent(c, LiveBufferService::class.java).setAction(LiveBufferService.ACTION_START).putExtra("id", id))
             id
@@ -305,6 +308,8 @@ class LiveBufferService : Service() {
         val buf = ByteArray(64 * 1024)
         var out = FileOutputStream(file, true)
         var loggedParts = 0
+        var speedAt = SystemClock.elapsedRealtime()
+        var speedBytes = 0L
         fun nextFile(at: Long) {
             val n = seg.fileNo + 1
             out.close()
@@ -330,6 +335,13 @@ class LiveBufferService : Service() {
             written += n
             lastDataAt = SystemClock.elapsedRealtime()
             LiveBuffer.savedSec = seg.totalSec
+            val tNow = SystemClock.elapsedRealtime()
+            if (tNow - speedAt >= 2000) {
+                val bps = (written - speedBytes) * 1000.0 / (tNow - speedAt)
+                LiveBuffer.arrivalBps = if (LiveBuffer.arrivalBps == 0.0) bps else LiveBuffer.arrivalBps * 0.6 + bps * 0.4
+                if (seg.totalSec > 5) LiveBuffer.mediaBps = written / seg.totalSec
+                speedAt = tNow; speedBytes = written
+            }
             trim()
             if (seg.count != loggedParts && (seg.count == 1 || seg.count % 10 == 0)) {
                 loggedParts = seg.count
