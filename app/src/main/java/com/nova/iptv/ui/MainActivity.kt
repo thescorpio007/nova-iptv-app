@@ -158,6 +158,7 @@ class MainActivity : ComponentActivity() {
         // Emulator test: switch the Live engine / use short files (only these two harmless settings).
         intent?.let { i ->
             if (i.hasExtra("nova_live_engine")) com.nova.iptv.download.LiveBuffer.setOn(this, i.getBooleanExtra("nova_live_engine", true))
+            if (i.hasExtra("nova_live_engine")) com.nova.iptv.ui.EngineState.newOn = null
             if (i.hasExtra("nova_live_file_sec")) com.nova.iptv.download.LiveBuffer.setFileSec(this, i.getIntExtra("nova_live_file_sec", 1800))
         }
         if (savedInstanceState == null && intent?.action == ACTION_WATCH_REC) { autoPlayed = true; lifecycleScope.launch { kotlinx.coroutines.delay(600); handleWatchRec(intent) } }

@@ -69,6 +69,17 @@ object LiveBuffer {
     fun fileSec(c: Context): Int = prefs(c).getInt("file_sec", 1800)
     fun setFileSec(c: Context, v: Int) = prefs(c).edit().putInt("file_sec", v.coerceIn(60, 1800)).apply()
 
+    // 🎬 New engine › films & series save-ahead (section 6).
+    /** MB saved ahead while a film plays: 500, 1000 (default), 2000, or -1 = the whole film (as far as free space allows). */
+    fun filmMb(c: Context): Int = prefs(c).getInt("film_mb", 1000)
+    fun setFilmMb(c: Context, v: Int) = prefs(c).edit().putInt("film_mb", v).apply()
+    /** When you close the film: "delete" (default) the saved copy, or "keep" it (Nova finishes it in Downloads). */
+    fun filmKeep(c: Context): String = prefs(c).getString("film_keep", "delete") ?: "delete"
+    fun setFilmKeep(c: Context, v: String) = prefs(c).edit().putString("film_keep", v).apply()
+    /** The film save-ahead size in MB for the engine that is ON (New: section 6; Classic: section 10, 0 = off). */
+    fun filmAheadMb(c: Context, classicMb: Int): Int =
+        if (!on(c)) classicMb else filmMb(c).let { if (it < 0) 50_000 else it }
+
     private fun dirs(c: Context): List<File> {
         val internal = File(c.getExternalFilesDir(null) ?: c.filesDir, "livebuffer")
         val rec = runCatching { File(com.nova.iptv.data.Locations.dirFor(com.nova.iptv.data.Locations.Kind.RECORDINGS, ""), ".livebuffer") }.getOrNull()

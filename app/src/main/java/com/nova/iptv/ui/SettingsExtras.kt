@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.ui.platform.LocalContext
@@ -65,6 +66,17 @@ fun SettingsCard(title: String, summary: String? = null, content: @Composable ()
     // Folded sections: one line each (▸ name · current choice); OK / click opens it, opening one closes the other.
     val key = title.substringBefore(" (")
     val open = SettingsFold.open == key
+    val ctx = LocalContext.current
+    val no = SettingsNumbers.number[key]
+    val eng = SettingsNumbers.engine[key]
+    val newOn = EngineState.newOn ?: com.nova.iptv.download.LiveBuffer.on(ctx).also { EngineState.newOn = it }
+    val engineOff = eng != null && (eng == "new") != newOn
+    val tag: String? = when {
+        eng != null && engineOff -> if (key in SettingsNumbers.mainSwitch) "OFF · values kept" else "follows switch ${if (eng == "new") 5 else 7}"
+        eng != null && key in SettingsNumbers.mainSwitch -> "RUNNING"
+        key in SettingsNumbers.both -> "BOTH ENGINES"
+        else -> null
+    }
     // Opening a section closes the one above it, which can push this title off the top of the screen:
     // bring it back into view, so what you just opened is always in front of you.
     val bring = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
@@ -81,6 +93,7 @@ fun SettingsCard(title: String, summary: String? = null, content: @Composable ()
             .bringIntoViewRequester(bring)
             .fillMaxWidth()
             .widthIn(max = 900.dp)
+            .alpha(if (engineOff) 0.5f else 1f)
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
             .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -95,8 +108,20 @@ fun SettingsCard(title: String, summary: String? = null, content: @Composable ()
         ) {
             Row(Modifier.padding(horizontal = 10.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (open) "▾" else "▸", color = MaterialTheme.colorScheme.primary, fontSize = 15.sp, modifier = Modifier.width(24.dp))
+                if (no != null) Text(
+                    "$no", color = Color(0xFF04130C), fontWeight = FontWeight.ExtraBold, fontSize = 13.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(end = 10.dp).background(Color(0xFF3DDC97), RoundedCornerShape(50)).widthIn(min = 28.dp).padding(horizontal = 5.dp, vertical = 3.dp),
+                )
                 Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
-                if (summary != null && !open) {
+                if (tag != null) Text(
+                    tag, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp,
+                    color = if (tag == "RUNNING") Color(0xFF04130C) else Color.White,
+                    modifier = Modifier.padding(start = 10.dp)
+                        .background(if (tag == "RUNNING") Color(0xFF3DDC97) else Color(0xFF55607A), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+                if (summary != null && !open && !engineOff) {
                     Text(
                         "   $summary", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -112,6 +137,94 @@ fun SettingsCard(title: String, summary: String? = null, content: @Composable ()
                 content()
             }
         }
+    }
+}
+
+/** The permanent section numbers (shown on each section), and which streaming engine a section belongs to. */
+object SettingsNumbers {
+    val number: Map<String, Int> = listOf(
+        "Accounts", "Backup & restore", "Hidden items & parental control", "VPN",
+        "📼 New engine", "🎬 Films & series save-ahead",
+        "📺 Classic engine — Live TV buffer", "Rolling buffer", "Live stream format", "Films & series buffer",
+        "🐈 CATWATCH", "Stream watchdog", "Channels that don't work",
+        "Player selection", "↗ External players", "🌙 Night mode", "🎧 Bluetooth sound sync",
+        "● Recording", "⬛ Hide picture", "Built-in player", "Playback engine",
+        "Downloads", "Web browser",
+        "Storage", "Drives", "File organisation", "Buffers",
+        "Display", "Sorting", "Films & series view", "Live TV view", "📡 Receive from phones", "Start-up", "Remote control",
+        "Advanced", "Last problem & playback report", "Reset",
+        "Updates",
+    ).mapIndexed { i, k -> k to i + 1 }.toMap()
+    val engine: Map<String, String> = mapOf(
+        "📼 New engine" to "new", "🎬 Films & series save-ahead" to "new",
+        "📺 Classic engine — Live TV buffer" to "classic", "Rolling buffer" to "classic",
+        "Live stream format" to "classic", "Films & series buffer" to "classic",
+    )
+    val mainSwitch = setOf("📼 New engine", "📺 Classic engine — Live TV buffer")
+    val both = setOf("🐈 CATWATCH", "Stream watchdog", "Channels that don't work")
+}
+
+/** Which engine runs (📼 New ON = Classic OFF), shared by every section so all of them change together. */
+object EngineState {
+    var newOn by mutableStateOf<Boolean?>(null)
+}
+
+/** A sub-section heading inside a group (e.g. "📼 NEW ENGINE"). */
+@Composable
+fun SettingsSubHeader(text: String) {
+    Row(Modifier.padding(start = 6.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(3.dp).height(14.dp).background(Color(0xFF3DDC97)))
+        Text(
+            text, color = Color(0xFF3DDC97), fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp,
+            letterSpacing = 0.5.sp, modifier = Modifier.padding(start = 8.dp),
+        )
+    }
+}
+
+/** The main ON / OFF of a streaming engine. One engine always runs: switching one ON turns the other OFF (asked first, 10 s). */
+@Composable
+fun EngineSwitch(engine: String) {
+    val ctx = LocalContext.current
+    val newOn = EngineState.newOn ?: com.nova.iptv.download.LiveBuffer.on(ctx)
+    val isOn = if (engine == "new") newOn else !newOn
+    var ask by remember { mutableStateOf<Boolean?>(null) }
+    val name = if (engine == "new") "📼 New engine" else "📺 Classic engine"
+    Text("Main switch", fontWeight = FontWeight.Medium)
+    ChoiceRow(listOf("on" to "ON", "off" to "OFF"), if (isOn) "on" else "off") { v ->
+        val want = v == "on"
+        if (want != isOn) ask = want
+    }
+    Hint(
+        if (isOn) "$name runs every live channel and film. The other engine is OFF; its settings are kept."
+        else "OFF: all its settings are kept. Switch ON to use it — the other engine then turns OFF."
+    )
+    ask?.let { want ->
+        val targetNew = if (engine == "new") want else !want
+        val to = if (targetNew) "📼 New engine" else "📺 Classic engine"
+        val from = if (targetNew) "📺 Classic engine" else "📼 New engine"
+        var secs by remember { mutableStateOf(10) }
+        val apply = {
+            com.nova.iptv.download.LiveBuffer.setOn(ctx, targetNew)
+            EngineState.newOn = targetNew
+            android.util.Log.i("NovaTest", "ENGINE switched: ${if (targetNew) "new" else "classic"} ON")
+            ask = null
+        }
+        LaunchedEffect(want) {
+            while (secs > 0) { kotlinx.coroutines.delay(1000); secs-- }
+            apply()
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { ask = null },
+            title = { Text("Switch to the $to?") },
+            text = {
+                Text(
+                    "The $from turns OFF (its settings are kept). The next channel or film plays with the $to. " +
+                        (if (!targetNew) "The New engine's saved live minutes are deleted. " else "") + "Recordings keep going."
+                )
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { apply() }) { Text("Switch now ($secs)") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { ask = null }) { Text("✕ Keep the $from") } },
+        )
     }
 }
 
@@ -165,6 +278,7 @@ fun DisplaySettings(vm: MainViewModel) {
             listOf("on" to "Open while moving", "off" to "Open with OK only"),
             if (s.openGroupOnFocus) "on" else "off",
         ) { vm.setOpenGroupOnFocus(it == "on") }
+        PhoneOrientationPart(vm)
     }
 
     SettingsCard("Sorting") {
@@ -573,14 +687,15 @@ fun OtherAppSettings(vm: MainViewModel) {
     }
 }
 
+/** ▶ Player › 🔊 Player & sound (14–17) when [part] is 1; 🎞 Playback & recording (18–20) when 2. */
 @Composable
-fun PlayerSettings(vm: MainViewModel) {
+fun PlayerSettings(vm: MainViewModel, part: Int) {
     val s by vm.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val apps = remember { com.nova.iptv.player.ExternalPlayer.installed(context) }
     val choices = listOf("builtin" to "Built-in player", "ask" to "Ask each time") + apps.map { it.packageName to it.label }
 
-    SettingsCard("Player selection") {
+    if (part == 1) SettingsCard("Player selection") {
         Hint(
             "Choose the player for each kind of content. External players (VLC, MX Player, Just Player, Kodi…) " +
                 "appear here once installed on the box."
@@ -599,27 +714,22 @@ fun PlayerSettings(vm: MainViewModel) {
                 current,
             ) { vm.setPlayerFor(kind, it) }
         }
-        Hint("“When a channel can't be played here → open it in another app” is in Live TV › Channels that don't work.")
+        Hint("“When a channel can't be played here → open it in another app” is in 📡 Streaming engines › 13 Channels that don't work.")
         if (apps.isEmpty()) {
             Hint("No external player is installed yet. Install VLC, MX Player or Just Player from the store, then come back.")
         }
     }
 
-    ExternalPlayersCard()
+    if (part == 1) {
+        ExternalPlayersCard()
+        NightModeCard()
+        SoundSyncCard()
+        return
+    }
 
-    NightModeCard()
-
-    SoundSyncCard()
-
-    CatWatchCard()
-    LiveEngineCard()
     RecordingCard()
 
     HidePictureCard()
-
-    PhoneOrientationCard(vm)
-
-    SpeedTestCard(vm)
 
     SettingsCard("Built-in player") {
         Text("Video decoder", fontWeight = FontWeight.Medium)
@@ -630,7 +740,7 @@ fun PlayerSettings(vm: MainViewModel) {
         Hint("Box first keeps Dolby / DTS going to a soundbar or receiver. App decoders first plays more audio formats (DTS, AC3, E-AC3, TrueHD) on any TV.")
         ChoiceRow(listOf("device" to "Box first (passthrough)", "ffmpeg" to "App decoders first"), s.audioDecoder, vm::setAudioDecoder)
 
-        Hint("Memory size for live TV: Live TV › Live TV buffer (Memory).")
+        Hint("Memory size for live TV: 📡 Streaming engines › 7 Classic engine (Memory).")
 
         Text("Hardware-accelerated audio", fontWeight = FontWeight.Medium)
         Hint("Sends audio to the box's audio processor (audio offload). Saves power; switch off if sound stutters or is missing.")
@@ -1216,11 +1326,11 @@ private fun AgeHiddenDialog(vm: MainViewModel, onDismiss: () -> Unit) {
 
 /** Settings › 7 System: why Nova closed by itself last time (to send to the developer). */
 @Composable
-fun LastProblemSettings() {
+fun LastProblemSettings(vm: MainViewModel) {
     val context = LocalContext.current
     var text by remember { mutableStateOf(com.nova.iptv.data.CrashLog.last(context)) }
     LaunchedEffect(Unit) { com.nova.iptv.data.CrashLog.seen(context) }
-    SettingsCard("Last problem", summary = if (text == null) "none" else text!!.lineSequence().drop(1).firstOrNull()?.take(60)) {
+    SettingsCard("Last problem & playback report", summary = if (text == null) "none" else text!!.lineSequence().drop(1).firstOrNull()?.take(60)) {
         if (text == null) {
             Hint("Nova has not closed by itself since this was cleared.")
         } else {
@@ -1248,6 +1358,7 @@ fun LastProblemSettings() {
             }
         }
         PlaybackReportSection()
+        SpeedTestPart(vm)
     }
 }
 
@@ -1602,7 +1713,7 @@ private fun NightModeCard() {
 
 /** Settings › 🐈 CATWATCH: damaged parts of live TV stepped over at the next good key picture, before they play. */
 @Composable
-private fun CatWatchCard() {
+fun CatWatchCard() {
     val context = LocalContext.current
     val C = com.nova.iptv.player.CatWatch
     var on by remember { mutableStateOf(C.on(context)) }
@@ -1620,24 +1731,20 @@ private fun CatWatchCard() {
     }
 }
 
-/** Settings › 📼 Live engine: live TV saved behind the scenes as .ts parts and played from there (classic player look). */
+/** Settings › 5 📼 New engine: live TV saved behind the scenes as .ts parts and played from there (classic player look). */
 @Composable
-private fun LiveEngineCard() {
+fun NewEngineCard() {
     val context = LocalContext.current
     val L = com.nova.iptv.download.LiveBuffer
-    var on by remember { mutableStateOf(L.on(context)) }
     var keep by remember { mutableStateOf(L.keepMin(context)) }
     var place by remember { mutableStateOf(L.place(context)) }
     var start by remember { mutableStateOf(L.startMode(context)) }
     val keepTxt = if (keep >= 60) "${keep / 60} h" else "$keep min"
-    SettingsCard("📼 Live engine", summary = if (on) "Recording engine · keeps $keepTxt" else "Classic") {
+    SettingsCard("📼 New engine", summary = "Live TV · keeps $keepTxt") {
+        EngineSwitch("new")
         Hint("Live TV plays as usual, but Nova keeps the channel you're watching on the box behind the scenes: a slow or broken " +
             "line never reaches the picture, and you can pause or rewind. Deleted when you change channel or leave with Back. " +
             "Nothing is shown as a recording.")
-        Text("Engine", fontWeight = FontWeight.Medium)
-        ChoiceRow(listOf("new" to "📼 Recording engine (new)", "classic" to "Classic"), if (on) "new" else "classic") {
-            on = it == "new"; L.setOn(context, on)
-        }
         Text("Keep the last", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("30" to "30 min", "60" to "60 min", "120" to "2 h", "240" to "4 h"), keep.toString()) {
             keep = it.toInt(); L.setKeepMin(context, keep)
@@ -1647,6 +1754,30 @@ private fun LiveEngineCard() {
         ChoiceRow(listOf("internal" to "Internal storage", "rec" to "Same as recordings"), place) { place = it; L.setPlace(context, it) }
         Text("Start a channel", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("fast" to "As soon as 4 s are saved", "steady" to "With a 15 s cushion (steadier)"), start) { start = it; L.setStartMode(context, it) }
+        Hint("Channels sent only as HLS (.m3u8) and web links play with the simple direct player.")
+    }
+}
+
+/** Settings › 6 🎬 Films & series save-ahead (New engine): the film is saved ahead of you on the box and played from there. */
+@Composable
+fun NewEngineFilmsCard() {
+    val context = LocalContext.current
+    val L = com.nova.iptv.download.LiveBuffer
+    var mb by remember { mutableStateOf(L.filmMb(context)) }
+    var keep by remember { mutableStateOf(L.filmKeep(context)) }
+    val mbTxt = when { mb < 0 -> "whole film"; mb >= 1000 -> "${mb / 1000} GB"; else -> "$mb MB" }
+    SettingsCard("🎬 Films & series save-ahead", summary = "$mbTxt · " + if (keep == "keep") "keep on close" else "delete on close") {
+        Hint("While a film or episode plays, Nova saves it ahead of you on the box and the player reads from there, so short internet " +
+            "drops never stop the picture. Used when the 📼 New engine is ON (with the Classic engine: section 10).")
+        Text("Save ahead while watching", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("500" to "500 MB", "1000" to "1 GB", "2000" to "2 GB", "-1" to "Whole film"), mb.toString()) {
+            mb = it.toInt(); L.setFilmMb(context, mb)
+        }
+        Hint("About ${if (mb < 0) "the whole film (as far as free space allows)" else "${(if (mb < 0) 0 else mb) * 8 / 5 / 60} min of an HD film"} ahead of you.")
+        Text("When you close the film", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("delete" to "Delete the saved copy", "keep" to "Keep it in Downloads"), keep) { keep = it; L.setFilmKeep(context, it) }
+        Hint(if (keep == "keep") "The film you leave is finished in Downloads (one connection), so you can watch it again without the internet."
+            else "Nothing stays on the box after you leave the film.")
     }
 }
 
@@ -1770,10 +1901,11 @@ private fun ReceiveFromPhonesCard() {
 
 /** 📱 Phone orientation of the player: follow the phone (default), start upright, or landscape only. */
 @Composable
-private fun PhoneOrientationCard(vm: MainViewModel) {
+private fun PhoneOrientationPart(vm: MainViewModel) {
     val st = vm.appStorage
     var mode by remember { mutableStateOf(st.phoneOrientation) }
-    SettingsCard("📱 Phone orientation", summary = when (mode) { "portrait" -> "start in portrait"; "landscape" -> "landscape only"; else -> "follow the phone" }) {
+    Text("📱 Phone orientation", fontWeight = FontWeight.Medium)
+    run {
         Hint("Phones only — the TV box and tablets stay landscape. The video never stops when it turns. Upright: the video on top, the info and buttons under it (live TV: the channel list below).")
         ChoiceRow(listOf("follow" to "Follow the phone", "portrait" to "Start in portrait", "landscape" to "Landscape only"), mode) { mode = it; st.phoneOrientation = it }
         Hint("Follow the phone = upright or sideways like the phone (uses the phone's auto-rotate switch). The ⟲ Rotate button in the player always switches by hand.")
@@ -1783,7 +1915,7 @@ private fun PhoneOrientationCard(vm: MainViewModel) {
 
 /** ⚡ Speed test: a film of your account downloaded for 15 s (not shown), with or without VPN; results ranked. */
 @Composable
-private fun SpeedTestCard(vm: MainViewModel) {
+private fun SpeedTestPart(vm: MainViewModel) {
     val ctx = LocalContext.current
     val app = ctx.applicationContext as com.nova.iptv.NovaApp
     remember { com.nova.iptv.data.SpeedTest.init(ctx) }
@@ -1800,7 +1932,8 @@ private fun SpeedTestCard(vm: MainViewModel) {
         onDispose { lifecycle.lifecycle.removeObserver(obs) }
     }
     val time = remember { java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.ENGLISH) }
-    SettingsCard("⚡ Speed test", summary = results.size.let { if (it == 0) "not tested yet" else "$it results" }) {
+    Text("⚡ Speed test", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+    run {
         Hint("Nova downloads a film of your account for 15 s (nothing is shown or kept) and measures the real speed — with or without a VPN. To compare VPN servers, change the server in your VPN app, come back and test again.")
         Text(if (vpnOn) "🔒 VPN connected" else "⚠ No VPN", fontWeight = FontWeight.Bold,
             color = if (vpnOn) MaterialTheme.colorScheme.primary else Color(0xFFFFD27A))

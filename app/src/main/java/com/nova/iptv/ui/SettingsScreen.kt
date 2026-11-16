@@ -202,8 +202,10 @@ fun SettingsScreen(vm: MainViewModel) {
 
         }
         val liveBufferCard: @Composable () -> Unit = {
-        Card("Live TV buffer") {
+        Card("📺 Classic engine — Live TV buffer", summary = if (s.liveDiskBuffer) "Disk ${vm.appStorage.liveDiskMinutes} min" else "Memory ${s.bufferMb} MB") {
+            EngineSwitch("classic")
             Text(
+                "The previous engine: a buffer in front of the player, and repairs by restarting it. Its other settings: 8, 9 and 10. " +
                 "Memory: fastest channel changes. Disk: live TV is stored on the device while you watch, " +
                     "so you can pause it, rewind (⏪ 30s) and jump back to live, and it rides out longer internet drops. " +
                     "Disk mode works best with the MPEG-TS format.",
@@ -315,7 +317,7 @@ fun SettingsScreen(vm: MainViewModel) {
         val readAheadCard: @Composable () -> Unit = {
         Card("Films & series buffer (disk read-ahead)") {
             Text(
-                "One connection downloads the film ahead of you into small pieces on disk, and the player reads " +
+                "Classic engine (with the 📼 New engine ON, films use section 6). One connection downloads the film ahead of you into small pieces on disk, and the player reads " +
                     "from there, so short internet drops don't stop the picture. Pieces you have watched are deleted " +
                     "as you go, and everything is deleted when you leave the film. With it on, only ~20 s are kept in memory.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
@@ -393,16 +395,23 @@ fun SettingsScreen(vm: MainViewModel) {
         }
 
         }
-        // Settings grouped by use, in this order (on a TV: two columns, groups 1–3 left, 4–7 right).
+        // Settings grouped by use, numbered 1–38 (the numbers are permanent; on a TV: two columns).
         val groups: List<Pair<String, @Composable () -> Unit>> = listOf(
             "👤  ACCOUNTS & SAFETY" to { accountsCard(); BackupSettings(vm); ParentalSettings(vm); VpnSettings(vm) },
-            "📡  LIVE TV" to { liveBufferCard(); rollingCard(); WatchdogSettings(vm); channelsCard() },
-            "▶  PLAYER" to { PlayerSettings(vm); engineCard(); liveFormatCard() },
-            "🎬  FILMS & DOWNLOADS" to { readAheadCard(); DownloadSettings(vm); WebSettings() },
+            "📡  STREAMING ENGINES" to {
+                SettingsSubHeader("📼 NEW ENGINE"); NewEngineCard(); NewEngineFilmsCard()
+                SettingsSubHeader("📺 CLASSIC ENGINE"); liveBufferCard(); rollingCard(); liveFormatCard(); readAheadCard()
+                SettingsSubHeader("🛡 STREAM PROTECTION — BOTH ENGINES"); CatWatchCard(); WatchdogSettings(vm); channelsCard()
+            },
+            "▶  PLAYER" to {
+                SettingsSubHeader("🔊 PLAYER & SOUND"); PlayerSettings(vm, 1)
+                SettingsSubHeader("🎞 PLAYBACK & RECORDING"); PlayerSettings(vm, 2); engineCard()
+            },
+            "🎬  FILMS & DOWNLOADS" to { DownloadSettings(vm); WebSettings() },
             "💾  STORAGE" to { StorageSettings(vm); BuffersSummary() },
             "🖥  SCREEN & REMOTE" to { DisplaySettings(vm); RemoteSettings(vm) },
-            "🛠  SYSTEM" to {
-                advancedCard(); LastProblemSettings(); resetCard()
+            "🛠  SYSTEM" to { advancedCard(); LastProblemSettings(vm); resetCard() },
+            "⬆  UPDATES" to {
                 UpdatesCard()
                 Text("Nova IPTV " + appVersion(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             },
@@ -411,7 +420,7 @@ fun SettingsScreen(vm: MainViewModel) {
         fun Group(n: Int) {
             val (title, content) = groups[n]
             Text(
-                "${n + 1}  $title", color = Color(0xFF9FC3FF), fontWeight = FontWeight.ExtraBold, fontSize = 12.sp,
+                title.replace("  ", " "), color = Color(0xFF7FF5C8), fontWeight = FontWeight.ExtraBold, fontSize = 12.sp,
                 letterSpacing = 0.6.sp, modifier = Modifier.padding(top = 10.dp, start = 4.dp),
             )
             content()
@@ -419,7 +428,7 @@ fun SettingsScreen(vm: MainViewModel) {
         if (wideSettings) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) { (0..2).forEach { Group(it) } }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) { (3..6).forEach { Group(it) } }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) { (3..7).forEach { Group(it) } }
             }
         } else {
             groups.indices.forEach { Group(it) }
@@ -640,11 +649,9 @@ fun BuffersSummary() {
 @Composable
 private fun UpdatesCard() {
     val context = LocalContext.current
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text("Updates", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+    SettingsCard("Updates", summary = "checked every 6 h") {
         Text(com.nova.iptv.Updater.status(context).ifBlank { "Checked every 6 hours from GitHub; a popup offers a new build. Signature, SHA-256 and signing key are verified before installing." },
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        OutlinedButton(onClick = { context.startActivity(Intent(context, com.nova.iptv.UpdateActivity::class.java)) },
-            modifier = Modifier.padding(top = 6.dp)) { Text("⬆ Check for updates") }
+        OutlinedButton(onClick = { context.startActivity(Intent(context, com.nova.iptv.UpdateActivity::class.java)) }) { Text("⬆ Check for updates") }
     }
 }

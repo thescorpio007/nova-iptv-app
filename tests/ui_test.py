@@ -1006,6 +1006,34 @@ def classic_engine():
     set_live_engine(False)
 
 
+def tap_switch_now():
+    nd = find("Switch now", 6) or find("SWITCH NOW", 4)
+    if nd is None:
+        raise AssertionError('"Switch now" not found on screen')
+    adb(f"shell input tap {nd['x']} {nd['y']}")
+    time.sleep(1.5)
+
+
+def engine_settings():
+    """Settings: 📡 Streaming engines — numbered sections, each engine with its main ON / OFF (one runs at a time)."""
+    tap("Settings", exact=True)
+    time.sleep(2)
+    shot("settings-top")
+    open_section("📼 New engine")
+    check("Settings: the New engine section with its main switch", find("Main switch", 8) is not None)
+    shot("settings-new-engine")
+    tap("OFF", exact=True)
+    check("Switching it OFF asks first", find("Switch to the 📺 Classic engine?", 8) is not None)
+    tap_switch_now()
+    check("…then the Classic engine runs", wait_log(r"ENGINE switched: classic ON", 8))
+    time.sleep(1)
+    shot("settings-classic-on")
+    open_section("📺 Classic engine")
+    tap("ON", exact=True)
+    tap_switch_now()
+    check("…and back to the New engine", wait_log(r"ENGINE switched: new ON", 8))
+
+
 def live_engine():
     """📼 Live engine: the channel is saved behind the scenes as .ts parts (1-minute files here) and played from there."""
     set_live_engine(True, 60)
@@ -1585,6 +1613,7 @@ if os.environ.get("NOVA_MODE") == "short":
         ("CATWATCH: missing picture", catwatch_missing_picture),
         ("Background recording", background_recording),
         ("📼 Live engine", live_engine),
+        ("Settings: the two engines", engine_settings),
         ("Open link and Share", open_link),
         ("Double OK hides a film", double_ok_hide),
     ]

@@ -782,12 +782,28 @@ class PlayerActivity : ComponentActivity() {
         item.isLive && LiveBuffer.activeFor(item.url) != null -> SourceMode.GROWING
         item.isLocal -> SourceMode.LOCAL
         item.downloadId != null -> SourceMode.GROWING
-        !item.isLive && app.storage.readAheadMb > 0 && item.url.startsWith("http", ignoreCase = true) && item.isHls -> SourceMode.VOD_HLS_DISK
-        !item.isLive && app.storage.readAheadMb > 0 && item.url.startsWith("http", ignoreCase = true) -> SourceMode.VOD_DISK
+        !item.isLive && filmAheadMb() > 0 && item.url.startsWith("http", ignoreCase = true) && item.isHls -> SourceMode.VOD_HLS_DISK
+        !item.isLive && filmAheadMb() > 0 && item.url.startsWith("http", ignoreCase = true) -> SourceMode.VOD_DISK
         !item.isLive -> SourceMode.VOD
         !app.storage.liveDiskBuffer -> SourceMode.LIVE_DIRECT
         item.isHls -> SourceMode.LIVE_HLS_DISK
         else -> SourceMode.LIVE_RELAY
+    }
+
+    /** Films save-ahead (MB) of the engine that is ON: 📼 New engine section 6, or 📺 Classic section 10 (0 = off). */
+    private fun filmAheadMb(): Int = LiveBuffer.filmAheadMb(this, app.storage.readAheadMb)
+
+    /** 📼 New engine › "When you close the film: keep it": the film you leave is finished in Downloads. */
+    private fun keepFilmIfWanted(item: PlayItem?) {
+        val it = item ?: return
+        if (it.isLive || it.isLocal || it.catchup || it.temporary || it.downloadId != null) return
+        val ext = it.downloadExt ?: return
+        if (!it.url.startsWith("http", ignoreCase = true)) return
+        if (!LiveBuffer.on(this) || LiveBuffer.filmKeep(this) != "keep") return
+        if (DownloadCenter.isDownloaded(it.url)) return
+        runCatching { DownloadCenter.enqueue(this, it.title, it.url, ext, it.saved.type, it.saved.icon) }
+        Log.i("NovaTest", "FILMKEEP ${it.title} → Downloads")
+        Toast.makeText(this, "📼 “${it.title}” is kept: finishing in Downloads", Toast.LENGTH_SHORT).show()
     }
 
     private fun ensurePlayer(mode: SourceMode): ExoPlayer {
@@ -903,6 +919,7 @@ class PlayerActivity : ComponentActivity() {
             DownloadCenter.get(rec.id)?.let { d -> LiveRec.playItem(d, recStartAt)?.let { item = it } }
         }
         recStartAt = PlayItem.START_NEWEST
+        if (!quiet && current != null && current?.url != item.url) keepFilmIfWanted(current)
         current = item
         // ● Another live channel while a recording runs: both share your line (asked once per recording).
         if (rec != null && item.isLive && item.url != rec.url) {
@@ -994,7 +1011,7 @@ class PlayerActivity : ComponentActivity() {
         hlsAhead = null
         if (mode == SourceMode.VOD_HLS_DISK) {
             val dir = Folders.bufferDir(this, "Buffer/readahead-hls", app.storage.usePublicFolder)
-            val wanted = app.storage.readAheadMb * 1024L * 1024L
+            val wanted = filmAheadMb() * 1024L * 1024L
             val free = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(wanted * 2)
             val usable = minOf(wanted, free - 200L * 1024 * 1024).coerceAtLeast(16L * 1024 * 1024)
             hlsAhead = HlsReadAhead(app.vodHlsCache, app.http, app.storage.userAgent, usable).also { it.start() }
@@ -1002,12 +1019,12 @@ class PlayerActivity : ComponentActivity() {
         if (mode == SourceMode.VOD_DISK) {
             val dir = java.io.File(Folders.bufferDir(this, Folders.BUFFER_MOVIES, app.storage.usePublicFolder), "readahead")
             dir.mkdirs()
-            val wanted = app.storage.readAheadMb * 1024L * 1024L
+            val wanted = filmAheadMb() * 1024L * 1024L
             val free = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(wanted * 2)
             val usable = minOf(wanted, free - 200L * 1024 * 1024).coerceAtLeast(16L * 1024 * 1024)
             if (usable < wanted && !spaceWarned) {
                 spaceWarned = true
-                Toast.makeText(this, "Little free space: read-ahead uses ${usable / (1024 * 1024)} MB instead of ${app.storage.readAheadMb} MB", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Little free space: read-ahead uses ${usable / (1024 * 1024)} MB instead of ${filmAheadMb()} MB", Toast.LENGTH_LONG).show()
             }
             readAhead = ReadAheadBuffer(item.url, app.http, app.storage.userAgent, dir, usable).also { it.start() }
         }
@@ -4669,6 +4686,7 @@ class PlayerActivity : ComponentActivity() {
         epgJob?.cancel()
         // 📼 Back (leaving the player): the hidden live files are deleted. Destroyed in the background: kept.
         if (isFinishing) LiveBuffer.stop(this)
+        if (isFinishing) keepFilmIfWanted(current)
         if (Recorder.isRecording) Recorder.stop()
         player?.release()
         player = null
