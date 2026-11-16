@@ -276,14 +276,7 @@ class GrowingHlsList(
             // 📼 Live engine: the oldest parts are deleted as it goes ("drop N"): a sliding live list.
             val sliding = d.kind == "livebuffer"
             val dropN = if (!sliding) 0 else (lines.lastOrNull { it.startsWith("drop ") }?.substringAfter(' ')?.trim()?.toIntOrNull() ?: 0).coerceIn(0, maxOf(0, parts.size - 1))
-            // 📼 Live engine, first start: list the parts only once enough is saved to stay a few parts behind the
-            // newest one (else playback reaches each new part's end and stalls every few seconds).
-            val enough = !sliding || dropN > 0 || run {
-                val have = parts.sumOf { it.third }
-                val maxPart = parts.maxOfOrNull { it.third } ?: 0.0
-                have >= com.nova.iptv.download.LiveBuffer.startOffsetMs(context) / 1000.0 + maxOf(2.0, maxPart) || System.currentTimeMillis() > end - 20_000
-            }
-            if (parts.size > dropN && enough) {
+            if (parts.size > dropN) {
                 val kept = parts.subList(dropN, parts.size)
                 val target = kotlin.math.ceil(kept.maxOf { it.third }.coerceAtLeast(1.0)).toInt()
                 val sb = StringBuilder("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:$target\n#EXT-X-MEDIA-SEQUENCE:$dropN\n")
