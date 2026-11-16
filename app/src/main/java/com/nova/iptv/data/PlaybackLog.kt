@@ -133,6 +133,11 @@ object PlaybackLog {
         sb.appendLine("NOVA IPTV PLAYBACK REPORT · $period · made ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())}")
         sb.appendLine("Nova $version · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · ${dm.widthPixels}×${dm.heightPixels}")
         sb.appendLine("Settings: $settings")
+        // Every drive Nova found (and how) — shows why a USB stick was or wasn't used.
+        runCatching {
+            val drives = Locations.drives().filter { it.removable }
+            sb.appendLine("Drives  : " + if (drives.isEmpty()) "no USB / SD drive found" else drives.joinToString(" | ") { Locations.statusOf(it).lines().first() + " [" + it.how + "]" })
+        }
         sb.appendLine("──────────────── SUMMARY ────────────────")
         if (r.isEmpty()) sb.appendLine("Nothing played in this period.")
         else {

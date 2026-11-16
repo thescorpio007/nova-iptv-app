@@ -76,7 +76,9 @@ class GrowingFileDataSource(
     private fun waitForFile(): File {
         val end = System.currentTimeMillis() + 30_000
         while (true) {
-            val f = File(item().path)
+            // ● A recording on a FAT32 drive continues in "… (part 2).ts" etc. (4 GB per file).
+            val n = uri?.lastPathSegment?.let { Regex("part(\\d+)\\.ts").matchEntire(it)?.groupValues?.get(1)?.toIntOrNull() } ?: 1
+            val f = File(com.nova.iptv.download.LiveRec.partPath(item().path, n))
             if (f.exists() && f.length() > 0) return f
             checkRunning()
             if (System.currentTimeMillis() > end) throw IOException("The download hasn't started")
@@ -258,12 +260,17 @@ class GrowingHlsList(
             val lines = runCatching { com.nova.iptv.download.HlsDownload.indexFile(d.path).readLines().filter { it.isNotBlank() } }
                 .getOrDefault(emptyList())
             val init = lines.firstOrNull()?.takeIf { it.startsWith("init") }?.substringAfter(' ')?.trim()?.toLongOrNull()
-            // "<offset> <len> <seconds>", plus " d" on a recording's part that starts a new timeline (reconnection).
-            val disc = HashSet<Long>()
+            // "<offset> <len> <seconds>", plus on a recording " d" (a part that starts a new timeline: reconnection)
+            // and " pN" (the part is in file N: recordings on FAT32 drives continue in a new file before 4 GB).
+            val disc = HashSet<Int>()
+            val fileNo = HashMap<Int, Int>()
             val parts = lines.filterNot { it.startsWith("init") }.mapNotNull { l ->
                 val f = l.trim().split(' ')
-                if (f.size < 3) null else Triple(f[0].toLongOrNull() ?: return@mapNotNull null, f[1].toLongOrNull() ?: return@mapNotNull null, f[2].toDoubleOrNull() ?: 0.0)
-                    .also { if (f.getOrNull(3) == "d") disc += it.first }
+                if (f.size < 3) null else Triple(f[0].toLongOrNull() ?: return@mapNotNull null, f[1].toLongOrNull() ?: return@mapNotNull null, f[2].toDoubleOrNull() ?: 0.0) to f.drop(3)
+            }.mapIndexed { n, (t, extra) ->
+                if ("d" in extra) disc += n
+                extra.firstOrNull { it.startsWith("p") }?.drop(1)?.toIntOrNull()?.let { fileNo[n] = it }
+                t
             }
             val done = d.status == DownloadStatus.DONE
             if (parts.isNotEmpty()) {
@@ -272,9 +279,10 @@ class GrowingHlsList(
                 sb.append(if (done) "#EXT-X-PLAYLIST-TYPE:VOD\n" else "#EXT-X-PLAYLIST-TYPE:EVENT\n")
                 if (init != null) sb.append("#EXT-X-MAP:URI=\"video.ts\",BYTERANGE=\"$init@0\"\n")
                 parts.forEachIndexed { n, (off, len, sec) ->
-                    if (n > 0 && off in disc) sb.append("#EXT-X-DISCONTINUITY\n")
+                    if (n > 0 && n in disc) sb.append("#EXT-X-DISCONTINUITY\n")
                     sb.append("#EXTINF:").append(String.format(java.util.Locale.US, "%.3f", if (sec > 0) sec else 1.0)).append(",\n")
-                    sb.append("#EXT-X-BYTERANGE:$len@$off\nvideo.ts\n")
+                    val fno = fileNo[n] ?: 1
+                    sb.append("#EXT-X-BYTERANGE:$len@$off\n").append(if (fno > 1) "part$fno.ts" else "video.ts").append("\n")
                 }
                 if (done) sb.append("#EXT-X-ENDLIST\n")
                 return sb.toString()

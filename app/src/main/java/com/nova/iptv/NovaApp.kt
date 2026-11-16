@@ -90,5 +90,12 @@ class NovaApp : Application() {
         com.nova.iptv.data.AdBlock.init(this, http)
         // Bookmarks between Nova devices on the home Wi-Fi (Web ⚙ › Send / Receive bookmarks).
         runCatching { com.nova.iptv.data.LocalShare.start(this, http) }
+        // New builds: checked every 6 hours, offered in a popup on whichever Nova screen is in front.
+        runCatching { com.nova.iptv.Updater.watch(this) }
+        com.nova.iptv.TopActivity.watch(this)
+        // Downloads waiting for a USB drive start when it is plugged in.
+        runCatching { com.nova.iptv.download.StorageRules.watchDrives(this) }
+        // ⏰ Scheduled recordings: alarms set again (after an update or a restart).
+        runCatching { com.nova.iptv.download.RecSchedule.rearm(this) }
     }
 }

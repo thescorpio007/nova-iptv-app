@@ -113,7 +113,9 @@ class DownloadService : Service() {
         return SpeedLimit(mb * 1024L * 1024L)
     }
 
-    private fun download(app: NovaApp, first: DownloadItem) {
+    private fun download(app: NovaApp, chosen: DownloadItem) {
+        // Where it really goes: USB missing → wait / ask; FAT32 USB → films over 4 GB on internal storage.
+        val first = StorageRules.before(app, chosen) ?: return
         // A file left by an earlier install can't be opened again (Permission denied): use another name.
         val usable = Sidecar.usablePath(first.path)
         val start = if (usable == first.path) first else {

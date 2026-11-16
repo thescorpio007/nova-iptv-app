@@ -636,13 +636,13 @@ fun BuffersSummary() {
 }
 
 
-/** Updates from GitHub Releases: checked once a day; signature, SHA-256 and signing key verified before installing. */
+/** Updates from GitHub Releases: checked every 6 hours; signature, SHA-256 and signing key verified before installing. */
 @Composable
 private fun UpdatesCard() {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Text("Updates", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Text(com.nova.iptv.Updater.status(context).ifBlank { "Checked once a day from GitHub. Signature, SHA-256 and signing key are verified before installing." },
+        Text(com.nova.iptv.Updater.status(context).ifBlank { "Checked every 6 hours from GitHub; a popup offers a new build. Signature, SHA-256 and signing key are verified before installing." },
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         OutlinedButton(onClick = { context.startActivity(Intent(context, com.nova.iptv.UpdateActivity::class.java)) },
             modifier = Modifier.padding(top = 6.dp)) { Text("⬆ Check for updates") }

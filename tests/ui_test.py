@@ -1002,11 +1002,16 @@ def background_recording():
     check("Paced channel starts", wait_count(r"READY Paced Channel", n + 1, 30))
     time.sleep(3)
     adb("shell input keyevent --longpress 23")
-    if not wait_log(r"LIVEREC start Paced Channel", 8):
+    try:
+        tap("Record now", 6)  # the ● Rec popup: record now / schedule / cancel
+    except AssertionError:
+        pass
+    if not wait_log(r"LIVEREC start Paced Channel", 12):
         adb("shell input tap 540 960")  # show the controls, then the Rec button
         time.sleep(1)
         try:
             tap("● Rec", 8)
+            tap("Record now", 6)
         except AssertionError:
             pass
     check("● Rec starts a background recording", wait_log(r"LIVEREC start Paced Channel", 15))
@@ -1029,17 +1034,44 @@ def background_recording():
         note(str(e))
     check("■ Stop in Downloads stops and saves it", wait_log(r"LIVEREC saved Paced Channel", 20))
     back_to_main("recording-list")
+    # ⏰ The ● Rec popup's "Schedule a recording…": the schedule screen saves it, Downloads lists it and cancels it.
+    open_test_channel("Paced Channel")
+    time.sleep(4)
+    adb("shell input keyevent --longpress 23")
+    try:
+        tap("Schedule a recording", 8)
+        time.sleep(2)
+        shot("schedule-screen")
+        tap("Save schedule", 8)
+    except AssertionError as e:
+        note(str(e))
+    check("⏰ A recording can be scheduled from the ● Rec popup", wait_log(r"SCHEDULE saved Paced Channel", 10))
+    back_to_main("schedule")
+    try:
+        tap("⬇", 10, exact=True)
+        time.sleep(2)
+        shot("scheduled-list")
+        tap("✕ Cancel", 10)
+    except AssertionError as e:
+        note(str(e))
+    check("…it is listed in Downloads and can be cancelled", wait_log(r"SCHEDULE cancelled", 10))
+    back_to_main("scheduled-list")
     # A broadcast-like channel (key pictures without IDR): its recording must play too.
     n = count_log(r"READY Broadcast Channel")
     open_test_channel("Broadcast Channel")
     check("Broadcast channel starts", wait_count(r"READY Broadcast Channel", n + 1, 30))
     time.sleep(3)
     adb("shell input keyevent --longpress 23")
-    if not wait_log(r"LIVEREC start Broadcast Channel", 8):
+    try:
+        tap("Record now", 6)  # the ● Rec popup: record now / schedule / cancel
+    except AssertionError:
+        pass
+    if not wait_log(r"LIVEREC start Broadcast Channel", 12):
         adb("shell input tap 540 960")
         time.sleep(1)
         try:
             tap("● Rec", 8)
+            tap("Record now", 6)
         except AssertionError:
             pass
     check("Broadcast channel: recording starts", wait_log(r"LIVEREC start Broadcast Channel", 15))

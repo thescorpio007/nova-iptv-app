@@ -62,6 +62,9 @@ object LiveRec {
         val gaps: Int = 0,
         /** > 0: the recording time is up and Nova asks "Keep recording?" (since this time). */
         val askingSince: Long = 0L,
+        /** ⏰ A scheduled recording: it ends at [endsAt] without asking, then [then] follows. */
+        val fixedEnd: Boolean = false,
+        val then: String = "none",
     )
 
     val state = MutableStateFlow<State?>(null)
@@ -91,6 +94,7 @@ object LiveRec {
         val e = prefs(c).edit()
         if (s == null) e.remove("active") else e.putString("active", JSONObject().apply {
             put("title", s.title); put("url", s.url); put("account", s.accountId); put("icon", s.icon ?: ""); put("ends", s.endsAt)
+            put("fixed", s.fixedEnd); put("then", s.then)
         }.toString())
         e.apply()
     }
@@ -99,9 +103,26 @@ object LiveRec {
 
     fun isRecording(url: String?): Boolean = url != null && state.value?.url == url
 
+    /** FAT32 (4 GB per file): a recording continues in a new file at the first part boundary after 3.8 GB. */
+    const val FAT32_PART = 3_800L * 1024 * 1024
+    const val FAT32_HARD = 4_000L * 1024 * 1024
+
+    /** File [n] of a recording: the file itself, then "… (part 2).ts", "… (part 3).ts" … */
+    fun partPath(path: String, n: Int): String =
+        if (n <= 1) path else path.substringBeforeLast('.') + " (part $n)." + path.substringAfterLast('.', "ts")
+
     /** Starts recording [url] in the background. Null when another channel is already recording. */
-    fun start(c: Context, title: String, url: String, accountId: String, icon: String?, endsAt: Long = 0L): DownloadItem? {
+    fun start(
+        c: Context, title: String, url: String, accountId: String, icon: String?, endsAt: Long = 0L,
+        fixedEnd: Boolean = false, then: String = "none", programme: String? = null,
+    ): DownloadItem? {
         if (state.value != null) return null
+        // You chose a USB / SD drive but none is plugged in: the recording starts anyway (on internal storage).
+        val kindRec = com.nova.iptv.data.Locations.Kind.RECORDINGS
+        if (com.nova.iptv.data.Locations.wantsUsb(kindRec) && com.nova.iptv.data.Locations.resolve(kindRec).drive?.removable != true) {
+            notes.tryEmit("● USB drive not found — recording on internal storage")
+            Log.i("NovaTest", "LIVEREC $title: USB not found → internal storage")
+        }
         val dir = com.nova.iptv.data.Locations.dirFor(
             com.nova.iptv.data.Locations.Kind.RECORDINGS,
             com.nova.iptv.data.Locations.subFolderFor(com.nova.iptv.data.Locations.Kind.RECORDINGS, title = title),
@@ -112,12 +133,12 @@ object LiveRec {
         val f = Folders.uniqueFile(dir, "$title $stamp", "ts")
         val ends = if (endsAt > now) endsAt else now + hours(c) * 3_600_000L
         val item = DownloadItem(
-            id = UUID.randomUUID().toString(), title = "$title · $stamp", kind = "recording", url = url,
+            id = UUID.randomUUID().toString(), title = "$title · " + (programme?.let { "$it · " } ?: "") + stamp, kind = "recording", url = url,
             path = f.absolutePath, icon = icon, status = DownloadStatus.RECORDING, createdAt = now,
             endsAt = ends, accountId = accountId,
         )
         DownloadCenter.add(item)
-        val s = State(item.id, title, url, accountId, icon, now, ends)
+        val s = State(item.id, title, url, accountId, icon, now, ends, fixedEnd = fixedEnd, then = then)
         state.value = s
         saveActive(c, s)
         Log.i("NovaTest", "LIVEREC start $title (${(ends - now) / 60_000} min)")
@@ -163,7 +184,8 @@ object LiveRec {
             val o = JSONObject(raw)
             val ends = o.optLong("ends")
             if (ends <= System.currentTimeMillis() + 60_000) return
-            start(c, o.getString("title"), o.getString("url"), o.optString("account"), o.optString("icon").ifBlank { null }, ends)
+            start(c, o.getString("title"), o.getString("url"), o.optString("account"), o.optString("icon").ifBlank { null }, ends,
+                fixedEnd = o.optBoolean("fixed"), then = o.optString("then", "none"))
             Log.i("NovaTest", "LIVEREC boot: continued ${o.getString("title")}")
         }
     }
@@ -252,7 +274,12 @@ class RecordService : Service() {
             val s = LiveRec.state.value
             if (!running || s == null) return
             val now = System.currentTimeMillis()
-            if (s.askingSince == 0L && now >= s.endsAt) {
+            if (s.fixedEnd && now >= s.endsAt) {
+                // ⏰ A scheduled recording ends at its time (no question), then its action follows.
+                finish("scheduled end")
+                RecSchedule.afterEnd(this@RecordService, s.then, s.title, s.seconds)
+                return
+            } else if (!s.fixedEnd && s.askingSince == 0L && now >= s.endsAt) {
                 LiveRec.state.value = s.copy(askingSince = now)
                 Log.i("NovaTest", "LIVEREC time up ${s.title}: asking")
                 showAsk(s)
@@ -389,13 +416,38 @@ class RecordService : Service() {
         var gaps = 0
         var gapSec = 0L
         val buf = ByteArray(64 * 1024)
-        val out = FileOutputStream(file, true)
+        var out = FileOutputStream(file, true)
+        // FAT32 drive (USB / SD): 4 GB per file at most → the recording continues in "… (part 2).ts" before that.
+        val fat32 = com.nova.iptv.data.Locations.isFat32Path(d.path)
+        if (fat32) seg.splitAt = LiveRec.FAT32_PART
+        if (fat32) Log.i("NovaTest", "LIVEREC ${d.title}: FAT32 drive → new file every ${LiveRec.FAT32_PART / 1048576} MB")
         var lastUi = 0L
         var loggedParts = 0
+        fun nextFile(at: Long) {
+            val n = seg.fileNo + 1
+            out.close()
+            out = FileOutputStream(File(LiveRec.partPath(d.path, n)), true)
+            seg.startFile(at, n)
+            Log.i("NovaTest", "LIVEREC ${d.title}: file part $n (FAT32 limit)")
+        }
         fun store(b: ByteArray, from: Int, n: Int) {
             seg.scan(b, from, n, written)
             try {
-                out.write(b, from, n)
+                val sw = seg.switchCandidate()
+                if (fat32 && sw in written..(written + n)) {
+                    val k = (sw - written).toInt()
+                    if (k > 0) out.write(b, from, k)
+                    seg.flush()
+                    nextFile(sw)
+                    if (n - k > 0) out.write(b, from + k, n - k)
+                } else if (fat32 && written + n - seg.fileStart > LiveRec.FAT32_HARD) {
+                    // No part boundary in time (no key pictures): start the next file here anyway.
+                    seg.flush()
+                    nextFile(written)
+                    out.write(b, from, n)
+                } else {
+                    out.write(b, from, n)
+                }
                 seg.flush()
             } catch (e: IOException) {
                 throw DiskError(e.message ?: "can't write the file")
@@ -466,12 +518,21 @@ class RecordService : Service() {
             }
         } catch (e: Exception) {
             Log.w("NovaTest", "LIVEREC failed ${d.title}: ${e.message}")
-            LiveRec.notes.tryEmit("● Recording stopped: ${e.message}")
-            main.post { finish("error: ${e.message}") }
+            val st = LiveRec.state.value
+            // The USB / SD drive was removed: what was saved stays; the recording continues on internal storage.
+            val driveGone = e is DiskError && File(d.path).parentFile?.exists() != true
+            LiveRec.notes.tryEmit(if (driveGone) "● USB drive removed — the recording continues on internal storage" else "● Recording stopped: ${e.message}")
+            main.post {
+                finish(if (driveGone) "drive removed" else "error: ${e.message}")
+                if (driveGone && st != null && st.endsAt > System.currentTimeMillis() + 60_000) main.postDelayed({
+                    Log.i("NovaTest", "LIVEREC ${st.title}: drive removed → continues on internal storage")
+                    LiveRec.start(this, st.title, st.url, st.accountId, st.icon, st.endsAt, fixedEnd = st.fixedEnd, then = st.then)
+                }, 9500)
+            }
         } finally {
             runCatching { seg.finish(written) }
             runCatching { out.close() }
-            val size = file.length()
+            val size = (1..seg.fileNo).sumOf { File(LiveRec.partPath(d.path, it)).length() }
             DownloadCenter.update(d.id) {
                 it.copy(status = DownloadStatus.DONE, doneBytes = size, totalBytes = size, durationSec = seg.totalSec.toLong(),
                     gaps = gaps, gapSec = gapSec, parts = seg.count, partsDone = seg.count)
@@ -500,7 +561,13 @@ internal class Segmenter(private val indexFile: File) {
     private var segPts = -1L
     private var segWall = SystemClock.elapsedRealtime()
     private var pendingDisc = false
-    private val lines = ArrayList<String>()
+    private class Line(val off: Long, val len: Long, val sec: Double, val disc: Boolean)
+    private val lines = ArrayList<Line>()
+    /** Where each file of the recording starts in the stream (FAT32: a new file before 4 GB), and its number. */
+    private val files = arrayListOf(0L to 1)
+    private var lastEnd = -1L
+    /** FAT32 drive: a new file is started at a part boundary once the current file reaches this size. */
+    var splitAt = Long.MAX_VALUE
     private var keysSeen = 0
     private var bytesPerSec = 0.0
     var totalSec = 0.0
@@ -589,16 +656,32 @@ internal class Segmenter(private val indexFile: File) {
     private fun emit(off: Long, len: Long, secs: Double) {
         if (len <= 0) return
         val s = secs.coerceIn(0.1, 30.0)
-        lines += String.format(Locale.US, "%d %d %.3f", off, len, s) + (if (pendingDisc && count > 0) " d" else "")
+        lines += Line(off, len, s, pendingDisc && count > 0)
+        lastEnd = off + len
         pendingDisc = false
         count++
         totalSec += s
     }
 
     /** Appends the finished parts (call once their bytes are in the file). */
+    /** Where a new file could start now (the end of the last part, once the current file is big enough), or -1. */
+    fun switchCandidate(): Long = if (lastEnd >= 0 && lastEnd - files.last().first >= splitAt) lastEnd else -1L
+
+    val fileNo: Int get() = files.last().second
+    val fileStart: Long get() = files.last().first
+
+    /** The bytes from stream offset [at] go into file [n]. */
+    fun startFile(at: Long, n: Int) { files += at to n }
+
     fun flush() {
         if (lines.isEmpty()) return
-        FileWriter(indexFile, true).use { w -> lines.forEach { w.write(it); w.write("\n") } }
+        FileWriter(indexFile, true).use { w ->
+            lines.forEach { l ->
+                val (start, n) = files.last { it.first <= l.off }
+                w.write(String.format(Locale.US, "%d %d %.3f", l.off - start, l.len, l.sec) + (if (l.disc) " d" else "") + (if (n > 1) " p$n" else ""))
+                w.write("\n")
+            }
+        }
         lines.clear()
     }
 

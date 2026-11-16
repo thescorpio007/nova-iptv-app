@@ -78,6 +78,19 @@ fun StorageSettings(vm: MainViewModel) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     // Re-read drives when coming back (e.g. after allowing All files access or plugging a USB stick).
     LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { version++ } }
+    // …and at once when a USB / SD drive is plugged in or removed.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, i: android.content.Intent?) { version++ }
+        }
+        val f = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_MEDIA_MOUNTED); addAction(android.content.Intent.ACTION_MEDIA_UNMOUNTED)
+            addAction(android.content.Intent.ACTION_MEDIA_REMOVED); addAction(android.content.Intent.ACTION_MEDIA_EJECT)
+            addAction(android.content.Intent.ACTION_MEDIA_BAD_REMOVAL); addDataScheme("file")
+        }
+        runCatching { androidx.core.content.ContextCompat.registerReceiver(context, r, f, androidx.core.content.ContextCompat.RECEIVER_EXPORTED) }
+        onDispose { runCatching { context.unregisterReceiver(r) } }
+    }
     val drives = remember(version) { Locations.drives() }
     val locs = remember(version) { Locations.all() }
     val access = remember(version) { Locations.hasAllFilesAccess() }
@@ -143,9 +156,10 @@ fun StorageSettings(vm: MainViewModel) {
                     ).joinToString("  ·  "),
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (fs == "vfat") {
-                    Text("⚠ FAT32: files bigger than 4 GB (most 4K films) can't be saved here. exFAT or NTFS drives are fine.",
-                        fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                if (d.removable) {
+                    val st = remember(d.id, version) { Locations.statusOf(d) }
+                    Text(st.substringAfter(Locations.nameOf(d) + " · ", st), fontSize = 12.sp,
+                        color = if (st.contains("✕")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
                     SmallButton("Rename", { renaming = d })

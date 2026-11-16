@@ -46,6 +46,8 @@ object Locations {
         val root: File,
         val appDir: File,
         val removable: Boolean,
+        /** How Nova found it (for the report): volumes, app-folders, mounts, storage. */
+        val how: String = "",
     ) {
         fun free(): Long = runCatching { StatFs(root.absolutePath).availableBytes }.getOrDefault(-1)
         fun total(): Long = runCatching { StatFs(root.absolutePath).totalBytes }.getOrDefault(-1)
@@ -118,23 +120,161 @@ object Locations {
 
     // ------------------------------------------------------------------ drives
 
+    /**
+     * Every drive that isn't the box's own storage, found 4 ways (TV boxes often leave USB drives out of Android's
+     * app-folder list): Android's storage volumes, the app-folder list, the system's mount table and the /storage
+     * folder. Each drive is listed once. Boot / EFI partitions (e.g. VTOYEFI) and anything under 1 GB are left out.
+     */
     fun drives(): List<Drive> {
         val list = mutableListOf<Drive>()
         val internalRoot = Environment.getExternalStorageDirectory()
         val internalApp = appContext.getExternalFilesDir(null) ?: appContext.filesDir
         list += Drive("internal", "Internal storage", internalRoot, internalApp, removable = false)
+        val found = LinkedHashMap<String, Drive>()
         val sm = appContext.getSystemService(Context.STORAGE_SERVICE) as StorageManager
-        appContext.getExternalFilesDirs(null).drop(1).filterNotNull().forEach { appDir ->
-            val removable = runCatching { Environment.isExternalStorageRemovable(appDir) }.getOrDefault(true)
-            if (!removable) return@forEach
-            val root = File(appDir.absolutePath.substringBefore("/Android/"))
-            // Android 5 / 6 can't name the drive: its folder name is used instead.
-            val vol = if (android.os.Build.VERSION.SDK_INT >= 24) runCatching { sm.getStorageVolume(appDir) }.getOrNull() else null
-            val id = (if (android.os.Build.VERSION.SDK_INT >= 24) vol?.uuid else null) ?: root.name
-            val sys = (if (android.os.Build.VERSION.SDK_INT >= 24) runCatching { vol?.getDescription(appContext) }.getOrNull() else null) ?: "USB / SD drive"
-            list += Drive(id, sys, root, appDir, removable = true)
+        val pkgDir = "Android/data/${appContext.packageName}/files"
+        fun add(root: File, appDir: File?, name: String?, how: String) {
+            val path = root.absolutePath.trimEnd('/')
+            if (path.isBlank() || path == internalRoot.absolutePath.trimEnd('/') || path.startsWith("/storage/emulated") || path == "/storage/self") return
+            val id = root.name
+            if (id.isBlank() || id == "emulated" || id == "self") return
+            val prev = found[id]
+            if (prev != null) {
+                // Same drive found again: keep the best name and the app folder Android created.
+                found[id] = prev.copy(
+                    systemName = if (prev.systemName == "USB / SD drive" && name != null) name else prev.systemName,
+                    appDir = if (appDir != null && appDir.isDirectory) appDir else prev.appDir,
+                    how = prev.how + "+" + how,
+                )
+                return
+            }
+            found[id] = Drive(id, name ?: "USB / SD drive", File(path), appDir ?: File(path, pkgDir), removable = true, how = how)
         }
+        // 1. Android's storage volumes (names like "TV-USBDrive").
+        if (android.os.Build.VERSION.SDK_INT >= 24) runCatching {
+            sm.storageVolumes.forEach { v ->
+                if (v.isPrimary) return@forEach
+                if (v.state != Environment.MEDIA_MOUNTED && v.state != Environment.MEDIA_MOUNTED_READ_ONLY) return@forEach
+                val dir = if (android.os.Build.VERSION.SDK_INT >= 30) v.directory
+                else runCatching { v.javaClass.getMethod("getPathFile").invoke(v) as File }.getOrNull()
+                    ?: runCatching { File(v.javaClass.getMethod("getPath").invoke(v) as String) }.getOrNull()
+                if (dir != null) add(dir, null, runCatching { v.getDescription(appContext) }.getOrNull(), "volumes")
+            }
+        }
+        // 2. The app-folder list (also gives the drive's app folder, usable without "All files access").
+        appContext.getExternalFilesDirs(null).drop(1).filterNotNull().forEach { appDir ->
+            val root = File(appDir.absolutePath.substringBefore("/Android/"))
+            val name = if (android.os.Build.VERSION.SDK_INT >= 24) runCatching { sm.getStorageVolume(appDir)?.getDescription(appContext) }.getOrNull() else null
+            add(root, appDir, name, "app-folders")
+        }
+        // 3. The mount table: /mnt/media_rw/<id> (the real drive) shown to apps as /storage/<id>.
+        runCatching {
+            File("/proc/mounts").readLines().forEach { line ->
+                val p = line.split(" ")
+                if (p.size < 3) return@forEach
+                val mp = p[1].replace("\\040", " ")
+                val id = when {
+                    mp.startsWith("/mnt/media_rw/") -> mp.removePrefix("/mnt/media_rw/")
+                    mp.startsWith("/storage/") -> mp.removePrefix("/storage/")
+                    else -> return@forEach
+                }.substringBefore('/')
+                if (id.isBlank() || id == "emulated" || id == "self") return@forEach
+                val visible = File("/storage", id)
+                if (visible.isDirectory) add(visible, null, null, "mounts")
+            }
+        }
+        // 4. The /storage folder itself.
+        runCatching {
+            File("/storage").listFiles()?.forEach { f ->
+                if (f.isDirectory && f.name != "emulated" && f.name != "self" && runCatching { f.canonicalPath.startsWith("/storage/emulated") }.getOrDefault(false).not())
+                    add(f, null, null, "storage")
+            }
+        }
+        found.values.forEach { d ->
+            val total = d.total()
+            val name = nameOf(d).uppercase()
+            val boot = name.contains("EFI") || name.contains("VTOY") || name == "BOOT" || name == "SYSTEM RESERVED"
+            if (boot || (total in 0 until 1024L * 1024 * 1024)) {
+                if (leftOutLogged.add(d.id)) android.util.Log.i("NovaTest", "DRIVES left out ${d.id} (${d.systemName}, ${total / 1048576} MB): ${if (boot) "boot partition" else "under 1 GB"}")
+                return@forEach
+            }
+            list += d
+        }
+        val txt = list.joinToString(" | ") { "${it.id} ${it.systemName} ${fileSystem(it) ?: ""} [${it.how}]" }
+        if (txt != lastDrivesLog) { lastDrivesLog = txt; android.util.Log.i("NovaTest", "DRIVES $txt") }
         return list
+    }
+
+    @Volatile private var lastDrivesLog = ""
+    private val leftOutLogged = java.util.Collections.synchronizedSet(HashSet<String>())
+    /** For the playback report: every drive found and how. */
+    val drivesReport: String get() = lastDrivesLog
+
+    /** "TV-USBDrive · FAT32 · 412 GB free · ✓ writable" (or what is wrong). */
+    fun statusOf(d: Drive): String {
+        val fs = fileSystem(d)?.let { fsLabel(it) }
+        val free = d.free()
+        val freeTxt = if (free >= 0) "%.1f GB free".format(free / 1073741824.0) else null
+        val ro = readOnly(d)
+        val canRoot = writable(File(d.root, "NovaIPTV"))
+        val state = when {
+            ro -> "✕ read-only (the box mounted it read-only${if (fs == "NTFS") ": NTFS" else ""}) — not used"
+            canRoot || hasAllFilesAccess() -> "✓ writable"
+            writable(d.appDir) -> "✓ writable (in the drive's app folder; allow All files access for any folder)"
+            else -> "✕ can't write — allow All files access"
+        }
+        return listOfNotNull(nameOf(d), fs, freeTxt, state).joinToString(" · ") +
+            (if (fs == "FAT32") "\nFAT32: 4 GB per file → films over 4 GB go to internal storage; recordings continue in a new file" else "")
+    }
+
+    private fun fsLabel(fs: String): String = when (fs.lowercase()) {
+        "vfat", "msdos", "fat", "fat32" -> "FAT32"
+        "exfat", "texfat", "sdfat" -> "exFAT"
+        "ntfs", "ntfs3", "tntfs", "fuseblk", "ufsd" -> "NTFS"
+        "ext4", "ext3", "ext2" -> fs.uppercase()
+        "f2fs" -> "F2FS"
+        else -> fs
+    }
+
+    /** Mounted read-only by the box (typical for NTFS on Android). */
+    fun readOnly(d: Drive): Boolean = runCatching {
+        mountLine(d)?.split(" ")?.getOrNull(3)?.split(",")?.contains("ro") == true
+    }.getOrDefault(false)
+
+    private fun mountLine(d: Drive): String? = runCatching {
+        val lines = File("/proc/mounts").readLines().filter { l ->
+            val p = l.split(" ")
+            p.size > 2 && (p[1].endsWith("/${d.id}") || p[0].contains(d.id))
+        }
+        // The real drive (not the fuse / sdcardfs layer above it).
+        lines.firstOrNull { it.split(" ")[2] !in setOf("fuse", "sdcardfs", "esdfs") } ?: lines.firstOrNull()
+    }.getOrNull()
+
+    const val FAT32_MAX = 4L * 1024 * 1024 * 1024 - 1
+
+    /** You chose a USB / SD drive for [kind] (directly, or through the main location). */
+    fun wantsUsb(kind: Kind): Boolean {
+        val loc = get(kind)
+        val drive = if (loc.drive == "main" && kind != Kind.MAIN) get(Kind.MAIN).drive else loc.drive
+        return drive == "any_usb" || drive.startsWith("drive:")
+    }
+
+    fun isFat32(d: Drive): Boolean = d.removable && fileSystem(d)?.let { fsLabel(it) } == "FAT32"
+
+    /** The USB / SD drive a file is on (null: internal storage). */
+    fun driveOf(path: String): Drive? = drives().filter { it.removable }.firstOrNull { d ->
+        path.startsWith(d.root.absolutePath + "/") || path.startsWith(d.appDir.absolutePath + "/")
+    }
+
+    fun isFat32Path(path: String): Boolean = runCatching { driveOf(path)?.let { isFat32(it) } == true }.getOrDefault(false)
+
+    /** The same kind of place on internal storage (for files a FAT32 drive can't hold). */
+    fun internalDirFor(kind: Kind, sub: String): File {
+        val internal = drives().first { !it.removable }
+        val base = File(File(internal.root, "Download/NovaIPTV"), kind.defaultSub)
+        val dir = if (sub.isBlank()) base else File(base, sub)
+        if (writable(dir)) return dir
+        return File(internal.appDir, kind.defaultSub + (if (sub.isBlank()) "" else "/$sub")).apply { mkdirs() }
     }
 
     /** Your name for a drive ("Films 1TB"), or the system's ("SanDisk SD card"). */
@@ -164,12 +304,7 @@ object Locations {
     /** "vfat" = FAT32 (max 4 GB per file), "exfat", "ntfs"… (null if unknown). */
     fun fileSystem(d: Drive): String? {
         if (!d.removable) return null
-        return runCatching {
-            File("/proc/mounts").readLines().firstOrNull { line ->
-                val parts = line.split(" ")
-                parts.size > 2 && (parts[1].endsWith("/${d.id}") || parts[0].contains(d.id))
-            }?.split(" ")?.getOrNull(2)
-        }.getOrNull()
+        return mountLine(d)?.split(" ")?.getOrNull(2)
     }
 
     fun hasAllFilesAccess(): Boolean = Folders.hasAllFilesAccess()

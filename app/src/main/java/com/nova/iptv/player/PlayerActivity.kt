@@ -2444,17 +2444,76 @@ class PlayerActivity : ComponentActivity() {
             Toast.makeText(this, "Recording needs the MPEG-TS live format (Settings).", Toast.LENGTH_LONG).show()
             return
         }
+        // ● Record now (chosen in 10 s), ⏰ Schedule…, or Cancel.
+        val h = LiveRec.hours(this)
+        val (nowP, nextP) = XtreamApi.nowNext(lastGuide)
+        val fmt = { t: Long -> XtreamApi.formatTime(t) }
+        val guideLine = listOfNotNull(
+            nowP?.let { "Now ${fmt(System.currentTimeMillis())}: ${it.title} (${fmt(it.start)}–${fmt(it.end)})" },
+            nextP?.let { "next: ${it.title} ${fmt(it.start)}–${fmt(it.end)}" },
+        ).joinToString(" · ").ifBlank { item.title }
+        RecPopups.choose(
+            this, "● Record ${item.title}", guideLine,
+            listOf(
+                RecPopups.Choice("● Record now", "For $h h (your limit) · until ${LiveRec.hhmm(System.currentTimeMillis() + h * 3_600_000L)} · then asks \"keep recording?\"") { recordNow(item) },
+                RecPopups.Choice("⏰ Schedule a recording…", "Choose start and end (or a programme from the TV guide)") {
+                    RecScheduleDialog.show(this, RecScheduleDialog.newFor(item.title, item.url, item.saved.accountId, item.saved.icon, lastGuide), lastGuide)
+                },
+                RecPopups.Choice("✕ Cancel") { },
+            ),
+            default = 0,
+        ) { recordNow(item) }
+    }
+
+    /** The TV guide of the channel playing (for the record popup and the schedule screen). */
+    private var lastGuide: List<com.nova.iptv.data.EpgEntry> = emptyList()
+
+    private fun recordNow(item: PlayItem, endsAt: Long = 0L, sched: com.nova.iptv.download.RecSchedule.Sched? = null) {
+        if (LiveRec.state.value != null) return
         // The player's own connection is closed first: the recording takes it (one connection for both).
         player?.stop()
         relay?.close()
         relay = null
-        val d = LiveRec.start(this, item.title, item.url, item.saved.accountId, item.saved.icon) ?: return
+        val d = (if (sched != null) LiveRec.start(this, sched.title, sched.url, sched.accountId, sched.icon, endsAt = sched.end, fixedEnd = true, then = sched.then, programme = sched.programme)
+        else LiveRec.start(this, item.title, item.url, item.saved.accountId, item.saved.icon, endsAt)) ?: return
         val h = LiveRec.hours(this)
         session?.action("● Recording started (background, $h h)")
-        Toast.makeText(this, "● Recording ${item.title} for $h h in the background — now playing from the recording", Toast.LENGTH_LONG).show()
+        val until = if (sched != null) "until ${LiveRec.hhmm(sched.end)}" else "for $h h"
+        Toast.makeText(this, "● Recording ${item.title} $until in the background — now playing from the recording", Toast.LENGTH_LONG).show()
         Log.i("NovaTest", "LIVEREC watching ${item.title} from the recording (${d.id.take(8)})")
         recStartAt = PlayItem.START_NEWEST
         handler.postDelayed({ startPlayback(PlaybackQueue.index, quiet = false, keepTweaks = false) }, 400)
+    }
+
+    /**
+     * ⏰ A scheduled recording starts while Nova plays. Watching that channel: switch to the recording. Watching another
+     * channel of the same account with no connection left: ask (record and watch the recording, chosen in 10 s, or skip it).
+     */
+    fun scheduledStart(s: com.nova.iptv.download.RecSchedule.Sched) {
+        val item = current
+        if (item != null && item.isLive && item.url == s.url) { recordNow(item, sched = s); return }
+        val conflict = item != null && item.isLive && item.saved.accountId == s.accountId && app.storage.maxConnections(s.accountId) < 2
+        if (!conflict) { com.nova.iptv.download.RecSchedule.startNow(this, s); return }
+        val acc = app.storage.account(s.accountId)?.name ?: "Your account"
+        RecPopups.choose(
+            this, "⏰ Recording starts: ${s.title}",
+            (s.programme?.let { "$it " } ?: "") + "(${LiveRec.hhmm(s.start)} → ${LiveRec.hhmm(s.end)}). $acc has 1 connection, used by ${item!!.title}.",
+            listOf(
+                RecPopups.Choice("● Record and watch the recording", "${item.title} stops · chosen in 10 s") { startScheduledInstead(s) },
+                RecPopups.Choice("▶ Keep watching ${item.title}", "This recording is skipped") { Log.i("NovaTest", "SCHEDULE ${s.title} skipped (watching ${item.title})") },
+            ),
+            default = 0,
+        ) { startScheduledInstead(s) }
+    }
+
+    private fun startScheduledInstead(s: com.nova.iptv.download.RecSchedule.Sched) {
+        player?.stop()
+        relay?.close()
+        relay = null
+        handler.postDelayed({
+            com.nova.iptv.download.RecSchedule.startNow(this, s)
+            handler.postDelayed({ playRecording(PlayItem.START_NEWEST) }, 400)
+        }, 800)
     }
 
     /** ■ Stop rec: keep recording and watch it (chosen after 10 s), or stop and save. */
@@ -2925,6 +2984,7 @@ class PlayerActivity : ComponentActivity() {
 
     private fun loadEpg(item: PlayItem) {
         epgJob?.cancel()
+        lastGuide = emptyList()
         epgView.text = item.subtitle.orEmpty()
         epgView.visibility = if (epgView.text.isNullOrEmpty() && !item.isLive) View.GONE else View.VISIBLE
         if (!item.isLive) return
@@ -2936,6 +2996,7 @@ class PlayerActivity : ComponentActivity() {
                 emptyList()
             }
             if (current !== item) return@launch
+            lastGuide = list
             val (now, next) = XtreamApi.nowNext(list)
             val lines = buildList {
                 if (now != null) add("Now  ${XtreamApi.formatTime(now.start)}–${XtreamApi.formatTime(now.end)}   ${now.title}")

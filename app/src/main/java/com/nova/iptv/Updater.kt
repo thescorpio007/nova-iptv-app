@@ -42,7 +42,7 @@ import java.security.cert.X509Certificate
  *  1. SHA256SUMS.txt must carry a valid signature (SHA256SUMS.sig) made with this app's own signing key,
  *  2. the downloaded APK's SHA-256 must match its line in SHA256SUMS.txt,
  *  3. the APK must be signed with the same key as the installed app (Android checks this again when installing).
- * Checked once a day and from the "Check for updates" button; the family taps once to install.
+ * Checked every 6 hours (and from the "Check for updates" button); a popup offers it, one tap installs.
  * Only releases that passed the automatic test are used (test builds stay marked "pre-release").
  */
 object Updater {
@@ -55,6 +55,8 @@ object Updater {
     private const val NOTE_ID = 7701
     private const val JOB_ID = 7702
     private const val DAY = 24 * 3600_000L
+    /** Checked every 6 hours (when Nova is closed too); a found build is offered in a popup. */
+    const val EVERY = 6 * 3600_000L
 
     private fun sp(c: Context) = c.applicationContext.getSharedPreferences("nova_update", Context.MODE_PRIVATE)
 
@@ -80,18 +82,72 @@ object Updater {
     fun schedule(c: Context) {
         try {
             val js = c.getSystemService(JobScheduler::class.java) ?: return
-            if (js.allPendingJobs.any { it.id == JOB_ID }) return
+            if (js.allPendingJobs.any { it.id == JOB_ID && it.intervalMillis == EVERY }) return
+            js.cancel(JOB_ID)
             js.schedule(JobInfo.Builder(JOB_ID, ComponentName(c, UpdateJob::class.java))
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setPeriodic(DAY).setPersisted(true).build())
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setPeriodic(EVERY).setPersisted(true).build())
         } catch (_: Exception) { }
     }
 
-    /** From the app's own start or service: check if the last check is over a day old. */
-    fun maybe(c: Context) {
+    /** From the app's own start or service: check if the last check is over 6 hours old. */
+    fun maybe(c: Context, then: (() -> Unit)? = null) {
         schedule(c)
-        if (System.currentTimeMillis() - lastCheck(c) < DAY) return
+        if (System.currentTimeMillis() - lastCheck(c) < EVERY) return
         val app = c.applicationContext
-        Thread { try { check(app, manual = false) } catch (_: Exception) { } }.start()
+        Thread {
+            try { check(app, manual = false) } catch (_: Exception) { }
+            then?.let { android.os.Handler(android.os.Looper.getMainLooper()).post(it) }
+        }.start()
+    }
+
+    // ---------------------------------------------------------------- every 6 h while Nova runs, and the popup
+    private var resumed: java.lang.ref.WeakReference<Activity>? = null
+    private val ticker = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** Follows which Nova screen is in front, and checks every 6 hours while Nova runs (the box often stays on Nova). */
+    fun watch(app: android.app.Application) {
+        app.registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(a: Activity) { resumed = java.lang.ref.WeakReference(a); ticker.postDelayed({ popupIfReady(a) }, 1500) }
+            override fun onActivityPaused(a: Activity) { if (resumed?.get() === a) resumed = null }
+            override fun onActivityCreated(a: Activity, b: Bundle?) {}
+            override fun onActivityStarted(a: Activity) {}
+            override fun onActivityStopped(a: Activity) {}
+            override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
+            override fun onActivityDestroyed(a: Activity) {}
+        })
+        ticker.post(object : Runnable {
+            override fun run() {
+                maybe(app) { resumed?.get()?.let { popupIfReady(it) } }
+                ticker.postDelayed(this, 30 * 60_000L)
+            }
+        })
+    }
+
+    private var popupShowing = false
+
+    /** "New build found": ⬇ Download & install, or Later (asked again at the next 6-hour check). */
+    fun popupIfReady(a: Activity) {
+        if (a is UpdateActivity || a.isFinishing || popupShowing) return
+        val r = ready(a) ?: return
+        val p = sp(a)
+        if (p.getInt("later_build", 0) == r.first && System.currentTimeMillis() - p.getLong("later_at", 0) < EVERY) return
+        popupShowing = true
+        android.util.Log.i("NovaTest", "UPDATE popup build ${r.first}")
+        val notes = r.third.lines().map { it.trim() }.filter { it.isNotBlank() }.take(4).joinToString("\n")
+        android.app.AlertDialog.Builder(a, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("⬇ $APP build %02d is available".format(r.first))
+            .setMessage("You have build %02d. The new build is verified (signature, SHA-256, same key).".format(current(a)) +
+                (if (notes.isNotBlank()) "\n\n$notes" else ""))
+            .setPositiveButton("⬇ Download & install") { _, _ ->
+                p.edit().putInt("offered", r.first).apply()
+                val msg = try { install(a) } catch (e: Exception) { e.message }
+                if (msg != null) android.widget.Toast.makeText(a, msg, android.widget.Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Later") { _, _ ->
+                p.edit().putInt("later_build", r.first).putLong("later_at", System.currentTimeMillis()).apply()
+            }
+            .setOnDismissListener { popupShowing = false }
+            .show()
     }
 
     private val busy = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -256,14 +312,8 @@ object Updater {
         } catch (_: Exception) { }
     }
 
-    /** Shown once per build when the app opens (also on Android TV, where notifications are not seen). */
-    fun offerOnOpen(a: Activity) {
-        val r = ready(a) ?: return
-        val p = sp(a)
-        if (p.getInt("offered", 0) == r.first) return
-        p.edit().putInt("offered", r.first).apply()
-        a.startActivity(Intent(a, UpdateActivity::class.java))
-    }
+    /** When the app opens: the update popup (also on Android TV, where notifications are not seen). */
+    fun offerOnOpen(a: Activity) = popupIfReady(a)
 
     // ---------------------------------------------------------------- installing
     /** Why it should not install right now (null = fine). */

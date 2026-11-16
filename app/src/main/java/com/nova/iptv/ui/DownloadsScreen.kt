@@ -36,7 +36,9 @@ import com.nova.iptv.data.DownloadStatus
 @Composable
 fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
     val items by vm.downloads.collectAsStateWithLifecycle()
+    val scheduled by com.nova.iptv.download.RecSchedule.all.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) { com.nova.iptv.download.RecSchedule.load(context) }
 
     val dlState = androidx.compose.foundation.lazy.rememberLazyListState()
     LazyColumn(Modifier.fillMaxSize().scrollBar(dlState), state = dlState, contentPadding = PaddingValues(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -57,6 +59,16 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
         }
         if (items.isEmpty()) {
             item { EmptyText("No downloads or recordings yet.\nOpen a movie or a series episode and choose Download.") }
+        }
+        // ⏰ Scheduled recordings on top.
+        if (scheduled.isNotEmpty()) item(key = "sched-title") {
+            Text("⏰ SCHEDULED", fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 6.dp, start = 2.dp))
+        }
+        itemsIndexed(scheduled, key = { _, s -> "sched-" + s.id }) { _, sc ->
+            ScheduledRow(sc,
+                onEdit = { (context as? android.app.Activity)?.let { a -> com.nova.iptv.player.RecScheduleDialog.show(a, sc, emptyList()) } },
+                onCancel = { com.nova.iptv.download.RecSchedule.cancel(context, sc.id) })
         }
         // ● Recordings first: resume one after coming back home, even while it still records.
         val recordings = items.filter { it.kind == "recording" }
@@ -112,6 +124,31 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
                 onDelete = { vm.deleteDownload(d) },
             )
         }
+        }
+    }
+}
+
+/** ⏰ A scheduled recording: when, repeat, then…; Edit / Cancel. */
+@Composable
+private fun ScheduledRow(s: com.nova.iptv.download.RecSchedule.Sched, onEdit: () -> Unit, onCancel: () -> Unit) {
+    val R = com.nova.iptv.download.RecSchedule
+    val day = androidx.compose.runtime.remember(s.start) {
+        val c = java.util.Calendar.getInstance(); val today = c.get(java.util.Calendar.DAY_OF_YEAR); c.timeInMillis = s.start
+        when (c.get(java.util.Calendar.DAY_OF_YEAR) - today) { 0 -> "Today"; 1 -> "Tomorrow"; else -> java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault()).format(java.util.Date(s.start)) }
+    }
+    val rep = when (s.repeat) { "daily" -> "Every day "; "weekdays" -> "Mon–Fri "; "weekly" -> "Every week from $day "; else -> "$day " }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface).padding(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Logo(s.icon, s.title, Modifier.size(width = 56.dp, height = 56.dp).clip(RoundedCornerShape(8.dp)))
+            Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                Text(s.title + (s.programme?.let { " · $it" } ?: ""), fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("⏰ $rep${com.nova.iptv.download.LiveRec.hhmm(s.start)} → ${com.nova.iptv.download.LiveRec.hhmm(s.end)} · then: ${R.thenLabel(s.then)}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = onEdit) { Text("✎ Edit") }
+            TextButton(onClick = onCancel) { Text("✕ Cancel", color = MaterialTheme.colorScheme.error) }
         }
     }
 }

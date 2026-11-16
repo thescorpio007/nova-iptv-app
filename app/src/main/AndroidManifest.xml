@@ -17,6 +17,8 @@
 
     <!-- Optional: lets the app use a visible folder at the top of a USB drive (Android 11+) -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- ⏰ Scheduled recordings start exactly on time. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <!-- Background downloads -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -261,6 +263,22 @@
             android:name=".ui.CastService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".download.RecAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".download.NovaAdmin"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/nova_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".download.RecordService"

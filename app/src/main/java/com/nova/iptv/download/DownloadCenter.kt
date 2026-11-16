@@ -60,7 +60,11 @@ object DownloadCenter {
             storage.downloads = _items.value
         }
         if (deleteFile) runCatching { File(item.path).delete() }
-        if (deleteFile && item.kind == "recording") runCatching { HlsDownload.indexFile(item.path).delete() }
+        if (deleteFile && item.kind == "recording") runCatching {
+            HlsDownload.indexFile(item.path).delete()
+            var n = 2
+            while (File(LiveRec.partPath(item.path, n)).delete()) n++
+        }
     }
 
     /** A download being watched while it downloads: it goes first. */
