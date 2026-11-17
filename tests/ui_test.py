@@ -1129,6 +1129,14 @@ def background_recording():
     except AssertionError as e:
         note(str(e))
     check("■ Stop in Downloads stops and saves it", wait_log(r"LIVEREC saved Paced Channel", 20))
+    # 🗑 Delete asks first; no answer for 10 s = "No, keep it".
+    time.sleep(2)
+    try:
+        tap("Delete", 10, exact=True)
+        check("🗑 Delete asks first (Yes / No)", wait_log(r"DELETE asking Paced Channel", 8))
+        check("…no answer for 10 s keeps the file", wait_log(r"DELETE kept Paced Channel \(no answer\)", 16))
+    except AssertionError as e:
+        note(str(e))
     back_to_main("recording-list")
     # ⏰ The ● Rec popup's "Schedule a recording…": the schedule screen saves it, Downloads lists it and cancels it.
     open_test_channel("Paced Channel")

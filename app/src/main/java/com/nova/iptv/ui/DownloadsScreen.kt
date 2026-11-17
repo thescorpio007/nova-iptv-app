@@ -92,7 +92,7 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
                     val item = vm.localPlayItem(d)
                     if (item != null) com.nova.iptv.data.Cast.open(context, item, resumeAt)
                 }),
-                onDelete = { vm.deleteDownload(d) },
+                onDelete = { confirmDelete(context, d) { vm.deleteDownload(d) } },
             )
         }
         val split = items.filter { it.kind != "recording" }.partition { com.nova.iptv.download.DownloadCenter.isServer(it.url) }
@@ -123,7 +123,7 @@ fun DownloadsScreen(vm: MainViewModel, onPlay: PlayFn) {
                 }),
                 onPause = { vm.pauseDownload(d) },
                 onResume = { vm.resumeDownload(d) },
-                onDelete = { vm.deleteDownload(d) },
+                onDelete = { confirmDelete(context, d) { vm.deleteDownload(d) } },
             )
         }
         }
@@ -285,7 +285,7 @@ private fun DownloadRow(
             val ctx = androidx.compose.ui.platform.LocalContext.current
             val qrState = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("🔗 " + d.url, fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                Text(com.nova.iptv.data.UrlPrivacy.label(ctx, d.url), fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     color = androidx.compose.ui.graphics.Color(0xFFBFE9FF), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 TextButton(onClick = { copyText(ctx, d.url, "✓ Link copied — paste it in another app (1DM, VLC, a browser…)") }) { Text("📋 Copy link") }
                 TextButton(onClick = { qrState.value = true }) { Text("▦ QR") }
@@ -310,4 +310,22 @@ private fun DownloadRow(
             }
         }
     }
+}
+
+
+/** 🗑 Delete asks first: "✕ No, keep it" is chosen by itself after 10 s; "Yes, delete" must be pressed. */
+private fun confirmDelete(c: android.content.Context, d: com.nova.iptv.data.DownloadItem, onYes: () -> Unit) {
+    val a = (c as? android.app.Activity) ?: com.nova.iptv.TopActivity.get() ?: return
+    val f = java.io.File(d.path)
+    val size = if (f.exists() && f.length() > 0) " · %.1f GB".format(f.length() / 1073741824.0) else ""
+    android.util.Log.i("NovaTest", "DELETE asking ${d.title}")
+    com.nova.iptv.player.RecPopups.choose(
+        a, "🗑 Delete this file?",
+        "“${d.title}”$size\nIt is removed from the box (or USB) for good.",
+        listOf(
+            com.nova.iptv.player.RecPopups.Choice("✕ No, keep it", "Chosen in 10 s if you don't answer") { android.util.Log.i("NovaTest", "DELETE kept ${d.title}") },
+            com.nova.iptv.player.RecPopups.Choice("🗑 Yes, delete") { android.util.Log.i("NovaTest", "DELETE yes ${d.title}"); onYes() },
+        ),
+        default = 0,
+    ) { android.util.Log.i("NovaTest", "DELETE kept ${d.title} (no answer)") }
 }

@@ -401,7 +401,13 @@ fun ParentalSettings(vm: MainViewModel) {
     var showList by remember { mutableStateOf(false) }
     var pendingAge by remember { mutableStateOf<(() -> Unit)?>(null) }
 
-    SettingsCard("Hidden items & parental control", summary = "${hidden.size} hidden  ·  " + if (s.hasPin) "PIN on" else "no PIN") {
+    var showUrls by remember { mutableStateOf(com.nova.iptv.data.UrlPrivacy.show(context)) }
+    SettingsCard("Hidden items & parental control", summary = "${hidden.size} hidden  ·  " + (if (s.hasPin) "PIN on" else "no PIN") + "  ·  links " + if (showUrls) "shown" else "hidden") {
+        Text("🔗 Web addresses of streams", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("hide" to "Hide", "show" to "Show"), if (showUrls) "show" else "hide") {
+            showUrls = it == "show"; com.nova.iptv.data.UrlPrivacy.setShow(context, showUrls)
+        }
+        Hint("Stream addresses hold your account name and password. Hidden: the player and Downloads show “🔗 hidden”. 📋 Copy link and ▦ QR still work when you press them.")
         Hint(
             if (s.hasPin) "A PIN protects your hidden groups and channels. They can only be shown again from the list below, after entering the PIN."
             else "Set a PIN so hidden groups and channels can only be shown again with it. Hide things with ✎ Edit in Live TV, Films or Series."

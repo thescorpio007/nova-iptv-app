@@ -926,7 +926,7 @@ class PlayerActivity : ComponentActivity() {
             val other = item
             handler.postDelayed({ if (current === other) recordingSharesLine(other) }, 2500)
         }
-        linkTexts.forEach { it.text = "🔗 " + item.url }
+        linkTexts.forEach { it.text = com.nova.iptv.data.UrlPrivacy.label(this, item.url) }
         applySoundSync(announce = !quiet)
         if (otherAppOpen) closeOtherApp()
         if (similarOpen) closeSimilar()
@@ -2843,7 +2843,7 @@ class PlayerActivity : ComponentActivity() {
             typeface = Typeface.MONOSPACE
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-            text = current?.url?.let { "🔗 $it" } ?: ""
+            text = current?.url?.let { com.nova.iptv.data.UrlPrivacy.label(this@PlayerActivity, it) } ?: ""
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         linkTexts += url
