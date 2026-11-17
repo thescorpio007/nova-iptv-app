@@ -196,7 +196,8 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                         if (!tab.zone) SmallTab("←", false) { vm.setTab(Tab.LIVE) }
                         Tab.entries.filter { !it.top }.forEach { t ->
                             val icon = when (t) { Tab.SEARCH -> "🔍"; Tab.RECENT -> "🕘"; Tab.DOWNLOADS -> "⬇"; Tab.LINK -> "🔗"; Tab.SETTINGS -> "⚙"; else -> t.label }
-                            IconTab(icon, t == tab, rec = if (t == Tab.DOWNLOADS) recordingCount() else 0, onLong = {
+                            IconTab(icon, t == tab, rec = if (t == Tab.DOWNLOADS) recordingCount() else 0,
+                                dl = if (t == Tab.DOWNLOADS) downloadingCount() else 0, onLong = {
                                 android.widget.Toast.makeText(ctx, t.label.removePrefix("🔗 "), android.widget.Toast.LENGTH_SHORT).show()
                             }) { vm.setTab(t) }
                         }
@@ -234,11 +235,12 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (i == 4) Spacer(Modifier.width(16.dp)) // gap between Live TV · Films · Series · Web and the rest
                             val rec = if (t == Tab.DOWNLOADS) recordingCount() else 0
+                            val dl = if (t == Tab.DOWNLOADS) downloadingCount() else 0
                             Chip(
-                                if (rec > 0) t.label + "  ● $rec" else t.label, t == tab, { vm.setTab(t) },
+                                when { rec > 0 -> t.label + "  ● $rec"; dl > 0 -> t.label + "  $dl"; else -> t.label }, t == tab, { vm.setTab(t) },
                                 modifier = (if (i == 0) Modifier.focusRequester(firstTab) else Modifier)
                                     .focusRequester(if (t == tab) current else ownTab)
-                                    .then(if (rec > 0) Modifier.recGlow() else Modifier),
+                                    .then(if (rec > 0) Modifier.recGlow() else if (dl > 0) Modifier.recGlow(DL_GREEN) else Modifier),
                                 big = t.top,
                             )
                         }
@@ -271,11 +273,11 @@ private fun ZoneButton(t: Tab, selected: Boolean, onClick: () -> Unit, modifier:
 }
 
 @Composable
-private fun IconTab(icon: String, selected: Boolean, rec: Int = 0, onLong: () -> Unit, onClick: () -> Unit) {
+private fun IconTab(icon: String, selected: Boolean, rec: Int = 0, dl: Int = 0, onLong: () -> Unit, onClick: () -> Unit) {
     FocusBox(onClick = onClick, onLongClick = onLong, shape = RoundedCornerShape(16.dp), selected = selected,
-        modifier = if (rec > 0) Modifier.recGlow() else Modifier) {
+        modifier = if (rec > 0) Modifier.recGlow() else if (dl > 0) Modifier.recGlow(DL_GREEN) else Modifier) {
         Text(
-            if (rec > 0) "$icon●$rec" else icon,
+            when { rec > 0 -> "$icon●$rec"; dl > 0 -> "$icon$dl"; else -> icon },
             modifier = Modifier
                 .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color(0x14FFFFFF), RoundedCornerShape(16.dp))
                 .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1559,9 +1561,18 @@ private fun recordingCount(): Int {
     return items.count { it.status == com.nova.iptv.data.DownloadStatus.RECORDING }
 }
 
-/** ⬇ blinking with a light red layer (once a second) while something records. */
+/** How many films / episodes / links are downloading right now (⬇ blinks light green while > 0). */
 @Composable
-private fun Modifier.recGlow(): Modifier {
+private fun downloadingCount(): Int {
+    val items by com.nova.iptv.download.DownloadCenter.items.collectAsState()
+    return items.count { it.status == com.nova.iptv.data.DownloadStatus.DOWNLOADING && it.kind != "livebuffer" }
+}
+
+private val DL_GREEN = Color(0xFFAAFFC8)
+
+/** ⬇ blinking (once a second): light red while something records, light green while something downloads. */
+@Composable
+private fun Modifier.recGlow(color: Color = Color(0xFFFF4040)): Modifier {
     val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "rec")
     val a by t.animateFloat(
         initialValue = 0.15f, targetValue = 0.65f,
@@ -1569,5 +1580,5 @@ private fun Modifier.recGlow(): Modifier {
             androidx.compose.animation.core.tween<Float>(500), androidx.compose.animation.core.RepeatMode.Reverse,
         ), label = "recA",
     )
-    return this.background(Color(0xFFFF4040).copy(alpha = a), RoundedCornerShape(16.dp))
+    return this.background(color.copy(alpha = a), RoundedCornerShape(16.dp))
 }

@@ -1010,6 +1010,8 @@ def tap_downloads():
     """The Downloads tab: "⬇" — or "⬇●1" while something records."""
     nd = find("⬇●", 3) or find("⬇", 8, exact=True)
     if nd is None:
+        nd = next((n for n in nodes() if re.fullmatch(r"⬇\d+", (n["text"] or "").strip())), None)
+    if nd is None:
         raise AssertionError('"⬇" not found on screen')
     adb(f"shell input tap {nd['x']} {nd['y']}")
     time.sleep(1.5)
