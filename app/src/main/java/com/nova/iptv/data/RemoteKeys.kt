@@ -42,6 +42,7 @@ object RemoteKeys {
         Action("live_tracks", Area.LIVE, "Audio & subtitles", listOf(KeyEvent.KEYCODE_PROG_BLUE, KeyEvent.KEYCODE_CAPTIONS)),
         Action("live_external", Area.LIVE, "Open in external player", emptyList()),
         Action("live_golive", Area.LIVE, "Jump to live (fixes a stuck picture)", emptyList()),
+        Action("live_menu", Area.LIVE, "☰ Simple menu (favourite · recently watched · sound & subtitles · record)", emptyList()),
         // ---- films & series
         Action("vod_play_pause", Area.VOD, "Play / pause", listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)),
         Action("vod_back", Area.VOD, "Back 10 s", listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND)),
@@ -245,6 +246,47 @@ object RemoteKeys {
     fun resetAll(storage: Storage) {
         storage.remoteKeyMap = null
     }
+
+    /**
+     * 👴 Easy layout (for a simple remote): ▲▼ channels, OK channel list, ◀ last watched channel, ▶ info,
+     * ☰ simple menu while watching live TV / sound & subtitles in a film / search in the lists, ⌫ sound & subtitles.
+     */
+    fun applyEasy(storage: Storage) {
+        storage.remoteKeyMap = null
+        setTvArrows(storage, true)
+        storage.tvArrows = true
+        val full = actions.associate { a -> a.id to defaultsOf(storage, a) }.toMutableMap()
+        fun put(id: String, key: Int) {
+            val a = byId[id] ?: return
+            actions.filter { it.area.overlaps(a.area) && it.id != id }.forEach { o -> full[o.id] = full[o.id].orEmpty() - key }
+            full[id] = (full[id].orEmpty() - key) + key
+        }
+        put("live_recall", KeyEvent.KEYCODE_DPAD_LEFT)
+        put("live_menu", KeyEvent.KEYCODE_MENU)
+        put("live_tracks", KeyEvent.KEYCODE_DEL)
+        put("vod_tracks", KeyEvent.KEYCODE_MENU)
+        put("vod_tracks", KeyEvent.KEYCODE_DEL)
+        put("list_search", KeyEvent.KEYCODE_MENU)
+        save(storage, full)
+    }
+
+    /** "easy", "standard" or "own" (changed by hand) — shown in Settings › Remote control. */
+    fun layoutName(c: android.content.Context): String =
+        c.getSharedPreferences("remote_style", android.content.Context.MODE_PRIVATE).getString("layout", "standard") ?: "standard"
+    fun setLayoutName(c: android.content.Context, v: String) =
+        c.getSharedPreferences("remote_style", android.content.Context.MODE_PRIVATE).edit().putString("layout", v).apply()
+
+    /** Which remote picture: "round", "stick", "air" (simple remotes) or "full". */
+    fun style(c: android.content.Context): String =
+        c.getSharedPreferences("remote_style", android.content.Context.MODE_PRIVATE).getString("style", "full") ?: "full"
+    fun setStyle(c: android.content.Context, v: String) =
+        c.getSharedPreferences("remote_style", android.content.Context.MODE_PRIVATE).edit().putString("style", v).apply()
+
+    /** A button Nova learnt by a press (□ △ ○ ★, app keys…): its key code, or 0. */
+    fun learnt(c: android.content.Context, id: String): Int =
+        c.getSharedPreferences("remote_style", android.content.Context.MODE_PRIVATE).getInt("learn_$id", 0)
+    fun setLearnt(c: android.content.Context, id: String, code: Int) =
+        c.getSharedPreferences("remote_style", android.content.Context.MODE_PRIVATE).edit().putInt("learn_$id", code).apply()
 
     /** Buttons Nova never takes over (the system needs them). */
     fun isReserved(keyCode: Int) = keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_HOME ||

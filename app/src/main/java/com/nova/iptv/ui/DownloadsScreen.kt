@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.nova.iptv.ui
 
 import android.widget.Toast
@@ -148,7 +150,8 @@ private fun ScheduledRow(s: com.nova.iptv.download.RecSchedule.Sched, onEdit: ()
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+        // On a narrow (phone) screen the buttons continue on the next line, so 🗑 Delete stays visible.
+        androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = onEdit) { Text("✎ Edit") }
             TextButton(onClick = onCancel) { Text("✕ Cancel", color = MaterialTheme.colorScheme.error) }
         }
@@ -192,13 +195,14 @@ private fun RecordingRow(
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+        // On a narrow (phone) screen the buttons continue on the next line, so 🗑 Delete stays visible.
+        androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
             if (resumeAt > 0) TextButton(onClick = { onPlay(com.nova.iptv.player.PlayItem.START_RESUME) }) { Text("▶ Resume ${L.clock(resumeAt / 1000)}") }
             else TextButton(onClick = { onPlay(if (recording) com.nova.iptv.player.PlayItem.START_NEWEST else 0L) }) { Text(if (recording) "▶ Watch" else "▶ Play") }
             TextButton(onClick = { onPlay(0L) }) { Text("⏮ From start") }
             if (onTv != null) TextButton(onClick = onTv) { Text("📺 TV") }
             if (recording) TextButton(onClick = onStop) { Text("■ Stop", color = MaterialTheme.colorScheme.error) }
-            else TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            else TextButton(onClick = onDelete) { Text("🗑 Delete", color = MaterialTheme.colorScheme.error) }
         }
     }
 }
@@ -292,7 +296,8 @@ private fun DownloadRow(
             }
             if (qrState.value) LinkQrDialog(d.url) { qrState.value = false }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+        // On a narrow (phone) screen the buttons continue on the next line, so 🗑 Delete stays visible.
+        androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
             if (d.kind != "recording" && d.status in listOf(DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED, DownloadStatus.PAUSED) && d.doneBytes > 0) {
                 TextButton(onClick = onWatch) { Text("▶ Watch now") }
             }
@@ -306,7 +311,7 @@ private fun DownloadRow(
                 else -> Unit
             }
             if (d.status != DownloadStatus.RECORDING) {
-                TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = onDelete) { Text("🗑 Delete", color = MaterialTheme.colorScheme.error) }
             }
         }
     }

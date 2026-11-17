@@ -94,6 +94,7 @@ fun RemoteSettings(vm: MainViewModel) {
             if (s.numberKeys) "on" else "off",
         ) { vm.setNumberKeys(it == "on") }
 
+        RemoteStylePicker(version) { version++ }
         androidx.compose.material3.Button(onClick = { showMap = true }) { Text("🎮 Your remote (picture with every button)") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { testing = true }) { Text("Test a button") }
@@ -151,13 +152,16 @@ fun RemoteSettings(vm: MainViewModel) {
                 Toast.makeText(context, "${RemoteKeys.keyName(code)} is kept for Android and can't be changed", Toast.LENGTH_LONG).show()
             } else {
                 val others = RemoteKeys.conflicts(storage, a.id, code)
-                if (others.isNotEmpty()) {
-                    clash = Triple(a, code, others)
-                } else {
-                    RemoteKeys.assign(storage, a.id, code)
-                    version++
-                    Toast.makeText(context, "${RemoteKeys.keyName(code)} → ${a.label}", Toast.LENGTH_LONG).show()
-                }
+                RemoteKeys.assign(storage, a.id, code)
+                RemoteKeys.setLayoutName(context, "own")
+                version++
+                // Already used on this button: no question, only a note (just so you know).
+                Toast.makeText(
+                    context,
+                    "${RemoteKeys.keyName(code)} → ${a.label}" +
+                        if (others.isEmpty()) "" else "\nℹ Just so you know: it no longer does “${others.joinToString { it.label.substringBefore(" (") }}”",
+                    Toast.LENGTH_LONG,
+                ).show()
             }
         }
     }

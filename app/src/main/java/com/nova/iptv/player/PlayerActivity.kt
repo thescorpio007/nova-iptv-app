@@ -3683,6 +3683,7 @@ class PlayerActivity : ComponentActivity() {
                 Toast.makeText(this, "Aspect: ${resizeNames[resizeIndex]}", Toast.LENGTH_SHORT).show()
             }
             "live_tracks", "vod_tracks" -> { playerView.hideController(); vod.openPanel() }
+            "live_menu" -> showSimpleMenu()
             "live_external", "vod_external" -> openExternal()
             "vod_back" -> { vod.seekBy(-10_000); vod.show() }
             "vod_forward" -> { vod.seekBy(10_000); vod.show() }
@@ -3701,6 +3702,22 @@ class PlayerActivity : ComponentActivity() {
             else -> return false
         }
         return true
+    }
+
+    /** ☰ Simple menu (👴 Easy remote layout): four big choices; ✕ Close is chosen by itself after 10 s. */
+    private fun showSimpleMenu() {
+        Log.i("NovaTest", "KEY simple menu")
+        RecPopups.choose(
+            this, "☰ Menu", current?.title ?: "",
+            listOf(
+                RecPopups.Choice("★ Favourite (add / remove)") { toggleFavorite() },
+                RecPopups.Choice("🕘 Recently watched") { showRecentBar() },
+                RecPopups.Choice("🔊 Sound & subtitles") { playerView.hideController(); vod.openPanel() },
+                RecPopups.Choice("● Record") { toggleRecording() },
+                RecPopups.Choice("✕ Close", "Chosen in 10 s") { },
+            ),
+            default = 4,
+        ) { }
     }
 
     private fun focusFirstPill() {

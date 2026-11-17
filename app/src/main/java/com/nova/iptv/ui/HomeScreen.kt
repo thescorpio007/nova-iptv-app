@@ -43,6 +43,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -194,7 +195,7 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                         if (!tab.zone) SmallTab("←", false) { vm.setTab(Tab.LIVE) }
                         Tab.entries.filter { !it.top }.forEach { t ->
                             val icon = when (t) { Tab.SEARCH -> "🔍"; Tab.RECENT -> "🕘"; Tab.DOWNLOADS -> "⬇"; Tab.LINK -> "🔗"; Tab.SETTINGS -> "⚙"; else -> t.label }
-                            IconTab(icon, t == tab, onLong = {
+                            IconTab(icon, t == tab, rec = if (t == Tab.DOWNLOADS) recordingCount() else 0, onLong = {
                                 android.widget.Toast.makeText(ctx, t.label.removePrefix("🔗 "), android.widget.Toast.LENGTH_SHORT).show()
                             }) { vm.setTab(t) }
                         }
@@ -231,10 +232,12 @@ private fun TopBar(vm: MainViewModel, tab: Tab, edit: Boolean, isTv: Boolean, cu
                         val ownTab = remember(t) { FocusRequester() }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (i == 4) Spacer(Modifier.width(16.dp)) // gap between Live TV · Films · Series · Web and the rest
+                            val rec = if (t == Tab.DOWNLOADS) recordingCount() else 0
                             Chip(
-                                t.label, t == tab, { vm.setTab(t) },
+                                if (rec > 0) t.label + "  ● $rec" else t.label, t == tab, { vm.setTab(t) },
                                 modifier = (if (i == 0) Modifier.focusRequester(firstTab) else Modifier)
-                                    .focusRequester(if (t == tab) current else ownTab),
+                                    .focusRequester(if (t == tab) current else ownTab)
+                                    .then(if (rec > 0) Modifier.recGlow() else Modifier),
                                 big = t.top,
                             )
                         }
@@ -267,10 +270,11 @@ private fun ZoneButton(t: Tab, selected: Boolean, onClick: () -> Unit, modifier:
 }
 
 @Composable
-private fun IconTab(icon: String, selected: Boolean, onLong: () -> Unit, onClick: () -> Unit) {
-    FocusBox(onClick = onClick, onLongClick = onLong, shape = RoundedCornerShape(16.dp), selected = selected) {
+private fun IconTab(icon: String, selected: Boolean, rec: Int = 0, onLong: () -> Unit, onClick: () -> Unit) {
+    FocusBox(onClick = onClick, onLongClick = onLong, shape = RoundedCornerShape(16.dp), selected = selected,
+        modifier = if (rec > 0) Modifier.recGlow() else Modifier) {
         Text(
-            icon,
+            if (rec > 0) "$icon●$rec" else icon,
             modifier = Modifier
                 .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color(0x14FFFFFF), RoundedCornerShape(16.dp))
                 .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1544,4 +1548,25 @@ private fun AgeBanner(count: Int, what: String) {
             .border(1.dp, androidx.compose.ui.graphics.Color(0x552EE66B), RoundedCornerShape(8.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp),
     )
+}
+
+
+/** How many ● recordings are running in the background (the ⬇ button blinks red while > 0). */
+@Composable
+private fun recordingCount(): Int {
+    val items by com.nova.iptv.download.DownloadCenter.items.collectAsState()
+    return items.count { it.status == com.nova.iptv.data.DownloadStatus.RECORDING }
+}
+
+/** ⬇ blinking with a light red layer (once a second) while something records. */
+@Composable
+private fun Modifier.recGlow(): Modifier {
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "rec")
+    val a by t.animateFloat(
+        0.15f, 0.65f,
+        androidx.compose.animation.core.infiniteRepeatable(
+            androidx.compose.animation.core.tween(500), androidx.compose.animation.core.RepeatMode.Reverse,
+        ), label = "recA",
+    )
+    return this.background(Color(0xFFFF4040).copy(alpha = a), RoundedCornerShape(16.dp))
 }

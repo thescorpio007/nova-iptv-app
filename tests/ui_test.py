@@ -1006,6 +1006,15 @@ def classic_engine():
     set_live_engine(False)
 
 
+def tap_downloads():
+    """The Downloads tab: "⬇" — or "⬇●1" while something records."""
+    nd = find("⬇●", 3) or find("⬇", 8, exact=True)
+    if nd is None:
+        raise AssertionError('"⬇" not found on screen')
+    adb(f"shell input tap {nd['x']} {nd['y']}")
+    time.sleep(1.5)
+
+
 def tap_switch_now():
     nd = find("Switch now", 6) or find("SWITCH NOW", 4)
     if nd is None:
@@ -1122,7 +1131,9 @@ def background_recording():
     check("It keeps recording after leaving the player", still and len(parts_after) > len(parts_before),
           f"{parts_before[-1:] } -> {parts_after[-1:]}")
     try:
-        tap("⬇", 10, exact=True)  # the Downloads tab (icon on a phone)
+        rec_tab = find("⬇●", 6)
+        check("⬇ shows ● while recording in the background", rec_tab is not None)
+        tap_downloads()  # the Downloads tab (icon on a phone)
         time.sleep(2)
         shot("recording-list")
         tap("■ Stop", 10)
@@ -1132,7 +1143,7 @@ def background_recording():
     # 🗑 Delete asks first; no answer for 10 s = "No, keep it".
     time.sleep(2)
     try:
-        tap("Delete", 10, exact=True)
+        tap("🗑 Delete", 10, exact=True)
         check("🗑 Delete asks first (Yes / No)", wait_log(r"DELETE asking Paced Channel", 8))
         check("…no answer for 10 s keeps the file", wait_log(r"DELETE kept Paced Channel.*\(no answer\)", 16))
     except AssertionError as e:
@@ -1152,7 +1163,7 @@ def background_recording():
     check("⏰ A recording can be scheduled from the ● Rec popup", wait_log(r"SCHEDULE saved Paced Channel", 10))
     back_to_main("schedule")
     try:
-        tap("⬇", 10, exact=True)
+        tap_downloads()
         time.sleep(2)
         shot("scheduled-list")
         tap("✕ Cancel", 10)
