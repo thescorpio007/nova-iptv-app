@@ -44,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -1563,9 +1564,9 @@ private fun recordingCount(): Int {
 private fun Modifier.recGlow(): Modifier {
     val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "rec")
     val a by t.animateFloat(
-        0.15f, 0.65f,
-        androidx.compose.animation.core.infiniteRepeatable(
-            androidx.compose.animation.core.tween(500), androidx.compose.animation.core.RepeatMode.Reverse,
+        initialValue = 0.15f, targetValue = 0.65f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable<Float>(
+            androidx.compose.animation.core.tween<Float>(500), androidx.compose.animation.core.RepeatMode.Reverse,
         ), label = "recA",
     )
     return this.background(Color(0xFFFF4040).copy(alpha = a), RoundedCornerShape(16.dp))
