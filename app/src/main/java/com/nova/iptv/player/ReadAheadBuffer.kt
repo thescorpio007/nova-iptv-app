@@ -30,10 +30,10 @@ import kotlin.concurrent.withLock
  * Jumping to a part that isn't on disk moves the download there (HTTP Range).
  */
 class ReadAheadBuffer(
-    private val url: String,
+    val url: String,
     private val client: OkHttpClient,
     private val userAgent: String,
-    private val dir: File,
+    val dir: File,
     limitBytes: Long,
 ) {
     companion object {
@@ -44,6 +44,13 @@ class ReadAheadBuffer(
     @Volatile private var limit = limitBytes.coerceAtLeast(3 * SEG)
     private val aheadLimit get() = (limit * 8 / 10).coerceAtLeast(2 * SEG)
     private val behindLimit get() = (limit - aheadLimit).coerceAtLeast(SEG)
+
+    /**
+     * ⬇ Download pressed while watching: nothing is deleted any more and the same connection saves the whole film
+     * (ahead to the end, then the part before where you started). See [com.nova.iptv.download.FilmKeep].
+     */
+    @Volatile var keepAll = false
+        set(v) { field = v; lock.withLock { reevaluate = true; changed.signalAll() } }
 
     /** Size in use now (bytes): the chosen size, or more for a big film (see [growTo]). */
     val limitBytes: Long get() = limit
@@ -101,6 +108,31 @@ class ReadAheadBuffer(
         if (old.isNotEmpty()) Thread({ old.forEach { runCatching { it.deleteRecursively() } } }, "nova-readahead-clear").apply { isDaemon = true }.start()
     }
 
+    /** Bytes saved on disk now. */
+    fun storedBytes(): Long = lock.withLock { storedLocked() }
+
+    /** Every byte of the film is on disk. */
+    fun isComplete(): Boolean = lock.withLock { total > 0 && firstMissingFromZeroLocked() >= total }
+
+    /** The whole segments on disk: (segment number, its length). */
+    fun completeSegments(): List<Pair<Int, Long>> = lock.withLock { complete.map { it to (segLen[it] ?: SEG) } }
+
+    fun segmentFile(i: Int): File = segFile(i)
+
+    /** Stops downloading and waits for it, but keeps the segments on disk (they become the download). */
+    fun closeKeep() {
+        lock.withLock { closed = true; changed.signalAll() }
+        call?.cancel()
+        thread.interrupt()
+        runCatching { thread.join(5000) }
+    }
+
+    private fun firstMissingFromZeroLocked(): Long {
+        var i = 0
+        while (i in complete) i++
+        return minOf(segStart(i), if (total > 0) total else Long.MAX_VALUE)
+    }
+
     fun close() {
         lock.withLock {
             closed = true
@@ -155,6 +187,7 @@ class ReadAheadBuffer(
 
     /** Deletes segments far behind the player when over the limit (then far-ahead ones). */
     private fun evictLocked() {
+        if (keepAll) return
         val readSeg = (readPos / SEG).toInt()
         val behindSegs = (behindLimit / SEG).toInt().coerceAtLeast(1)
         while (storedLocked() > limit) {
@@ -175,9 +208,14 @@ class ReadAheadBuffer(
                     if (closed) return
                     reevaluate = false
                     val t = downloadStartLocked(readPos)
-                    val aheadOk = t - readPos < aheadLimit
+                    val aheadOk = keepAll || t - readPos < aheadLimit
                     val notAtEnd = total <= 0 || t < total
                     if (aheadOk && notAtEnd) return@withLock t
+                    // ⬇ Keeping the whole film: the end is reached, now the part before where you started.
+                    if (keepAll && total > 0) {
+                        val gap = firstMissingFromZeroLocked()
+                        if (gap < total) return@withLock gap
+                    }
                     downloading = false
                     try {
                         changed.await(1, TimeUnit.SECONDS)
@@ -256,9 +294,11 @@ class ReadAheadBuffer(
                         val ahead = pos - readPos
                         // The player is a little ahead of the download: keep going, we'll get there.
                         val nearby = readPos >= pos && readPos - pos < 2 * SEG
-                        val jumpedAway = reevaluate && !nearby && downloadStartLocked(readPos) != pos
+                        // Keeping the whole film and filling the part before where you watch: only stop for a real need.
+                        val playerNeeds = total <= 0 || downloadStartLocked(readPos) < total
+                        val jumpedAway = reevaluate && !nearby && downloadStartLocked(readPos) != pos && (!keepAll || playerNeeds)
                         when {
-                            ahead >= aheadLimit -> if (rangeSupported) 0 else 1 // full: stop (or wait if we can't jump back in)
+                            !keepAll && ahead >= aheadLimit -> if (rangeSupported) 0 else 1 // full: stop (or wait if we can't jump back in)
                             jumpedAway && rangeSupported -> 0
                             // The next segment is already on disk: reconnect after it instead of downloading it again.
                             pos % SEG == 0L && (pos / SEG).toInt() in complete && rangeSupported -> 0

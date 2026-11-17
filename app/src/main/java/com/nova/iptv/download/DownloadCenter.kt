@@ -92,8 +92,9 @@ object DownloadCenter {
     /** Takes the next waiting download of this lane and marks it running (so two workers never take the same). */
     fun claimNext(lane: String): DownloadItem? = synchronized(lock) {
         val list = _items.value
-        val pick = priorityId?.let { id -> list.firstOrNull { it.id == id && it.status == DownloadStatus.QUEUED && laneOf(it.url) == lane } }
-            ?: list.lastOrNull { it.status == DownloadStatus.QUEUED && laneOf(it.url) == lane }
+        // 📼 A film the player is saving with its own connection is never taken (no second connection).
+        val pick = priorityId?.let { id -> list.firstOrNull { it.id == id && it.status == DownloadStatus.QUEUED && laneOf(it.url) == lane && !FilmKeep.attached(it.id) } }
+            ?: list.lastOrNull { it.status == DownloadStatus.QUEUED && laneOf(it.url) == lane && !FilmKeep.attached(it.id) }
             ?: return@synchronized null
         val running = pick.copy(status = DownloadStatus.DOWNLOADING, error = null)
         _items.value = list.map { if (it.id == pick.id) running else it }

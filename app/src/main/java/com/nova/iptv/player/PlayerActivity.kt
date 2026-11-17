@@ -51,6 +51,7 @@ import com.nova.iptv.download.DownloadCenter
 import com.nova.iptv.download.Recorder
 import com.nova.iptv.download.LiveRec
 import com.nova.iptv.download.LiveBuffer
+import com.nova.iptv.download.FilmKeep
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -801,7 +802,8 @@ class PlayerActivity : ComponentActivity() {
         if (!it.url.startsWith("http", ignoreCase = true)) return
         if (!LiveBuffer.on(this) || LiveBuffer.filmKeep(this) != "keep") return
         if (DownloadCenter.isDownloaded(it.url)) return
-        runCatching { DownloadCenter.enqueue(this, it.title, it.url, ext, it.saved.type, it.saved.icon) }
+        val adopted = FilmKeep.adopt(this, readAhead, it.title, it.url, ext, it.saved.type, it.saved.icon)
+        if (!adopted) runCatching { DownloadCenter.enqueue(this, it.title, it.url, ext, it.saved.type, it.saved.icon) }
         Log.i("NovaTest", "FILMKEEP ${it.title} → Downloads")
         Toast.makeText(this, "📼 “${it.title}” is kept: finishing in Downloads", Toast.LENGTH_SHORT).show()
     }
@@ -1004,9 +1006,13 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
-        // A fresh read-ahead per film / episode (the old one's segments are deleted).
-        readAhead?.close()
-        readAhead = null
+        // A fresh read-ahead per film / episode (the old one's segments are deleted) — except a film being
+        // ⬇ downloaded from its buffer: the same film keeps it; another film hands it to the downloader.
+        val keepSame = mode == SourceMode.VOD_DISK && readAhead != null && FilmKeep.owns(readAhead) && readAhead?.url == item.url
+        if (!keepSame) {
+            readAhead?.let { if (!FilmKeep.released(this, it)) it.close() }
+            readAhead = null
+        }
         hlsAhead?.close()
         hlsAhead = null
         if (mode == SourceMode.VOD_HLS_DISK) {
@@ -1016,8 +1022,16 @@ class PlayerActivity : ComponentActivity() {
             val usable = minOf(wanted, free - 200L * 1024 * 1024).coerceAtLeast(16L * 1024 * 1024)
             hlsAhead = HlsReadAhead(app.vodHlsCache, app.http, app.storage.userAgent, usable).also { it.start() }
         }
-        if (mode == SourceMode.VOD_DISK) {
-            val dir = java.io.File(Folders.bufferDir(this, Folders.BUFFER_MOVIES, app.storage.usePublicFolder), "readahead")
+        if (mode == SourceMode.VOD_DISK && !keepSame && FilmKeep.bufferFor(item.url) != null) readAhead = FilmKeep.bufferFor(item.url)
+        else if (mode == SourceMode.VOD_DISK && !keepSame) {
+            // One folder per film (a film being downloaded from its buffer keeps its own); old ones are cleared.
+            val base = Folders.bufferDir(this, Folders.BUFFER_MOVIES, app.storage.usePublicFolder)
+            val dir = java.io.File(base, "readahead-" + Integer.toHexString(item.url.hashCode()))
+            val keep = FilmKeep.keptDirs() + dir.name
+            Thread({
+                base.listFiles { f -> f.isDirectory && f.name.startsWith("readahead") && f.name !in keep && !f.name.contains(".old-") }
+                    .orEmpty().forEach { runCatching { it.deleteRecursively() } }
+            }, "nova-readahead-old").apply { isDaemon = true }.start()
             dir.mkdirs()
             val wanted = filmAheadMb() * 1024L * 1024L
             val free = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(wanted * 2)
@@ -3140,6 +3154,11 @@ class PlayerActivity : ComponentActivity() {
     private fun downloadCurrent() {
         val item = current ?: return
         val ext = item.downloadExt ?: return
+        // 📼 Watching from the film's buffer: it becomes the download (what is saved counts, one connection).
+        if (FilmKeep.adopt(this, readAhead, item.title, item.url, ext, item.saved.type, item.saved.icon)) {
+            Toast.makeText(this, "⬇ Downloading from what is already saved — 1 connection, watching not affected", Toast.LENGTH_LONG).show()
+            return
+        }
         DownloadCenter.enqueue(this, item.title, item.url, ext, item.saved.type, item.saved.icon)
         Toast.makeText(this, "Download started — see the Downloads tab", Toast.LENGTH_LONG).show()
     }
@@ -4709,7 +4728,7 @@ class PlayerActivity : ComponentActivity() {
         player = null
         relay?.close()
         relay = null
-        readAhead?.close()
+        readAhead?.let { if (!FilmKeep.released(this, it)) it.close() }
         readAhead = null
         hlsAhead?.close()
         hlsAhead = null
