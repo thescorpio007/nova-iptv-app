@@ -1134,7 +1134,7 @@ def background_recording():
     try:
         tap("Delete", 10, exact=True)
         check("🗑 Delete asks first (Yes / No)", wait_log(r"DELETE asking Paced Channel", 8))
-        check("…no answer for 10 s keeps the file", wait_log(r"DELETE kept Paced Channel \(no answer\)", 16))
+        check("…no answer for 10 s keeps the file", wait_log(r"DELETE kept Paced Channel.*\(no answer\)", 16))
     except AssertionError as e:
         note(str(e))
     back_to_main("recording-list")
