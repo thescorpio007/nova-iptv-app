@@ -135,6 +135,9 @@ object LiveBuffer {
     /** A buffer whose files are kept a moment longer (● Rec copies from them). */
     @Volatile var keepId: String? = null
 
+    /** Seconds of the oldest saved video left out of the last hand-over (not enough free space for it). */
+    @Volatile var seedSkippedSec: Double = 0.0
+
     /**
      * ● Rec on the Live engine: the saved video from the second on screen ([windowPosMs]) — or from the oldest saved
      * moment — up to the newest is copied into a seed file the recording starts with. The hidden buffer then stops
@@ -165,6 +168,13 @@ object LiveBuffer {
                 var cum = parts.take(k).sumOf { it.sec }
                 while (k < parts.size && cum + parts[k].sec <= target) { cum += parts[k].sec; k++ }
             }
+            // Free space: the copy is written twice for a moment (seed, then recording) — never go below the limit.
+            val freeNow = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+            val allowance = (freeNow - LiveRec.minFreeGb(c) * 1073741824L - 1024L * 1024 * 1024) / 2
+            var seedBytes = parts.drop(k).sumOf { it.len }
+            val k0 = k
+            while (k < parts.size && seedBytes > allowance) { seedBytes -= parts[k].len; k++ }
+            seedSkippedSec = (k0 until k).sumOf { parts[it].sec }
             val buf = ByteArray(256 * 1024)
             var copied = 0L
             java.io.FileOutputStream(seed).use { o ->

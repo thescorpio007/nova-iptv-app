@@ -1795,6 +1795,7 @@ private fun RecordingCard() {
     var hours by remember { mutableStateOf(L.hours(context)) }
     var fromRec by remember { mutableStateOf(L.fromRecording(context)) }
     var minGb by remember { mutableStateOf(L.minFreeGb(context)) }
+    var partGb by remember { mutableStateOf(L.partGb(context)) }
     var boot by remember { mutableStateOf(L.continueAfterBoot(context)) }
     val free = remember { L.freeBytes(context) }
     val now by L.state.collectAsStateWithLifecycle()
@@ -1809,6 +1810,9 @@ private fun RecordingCard() {
         ChoiceRow(listOf("rec" to "From the recording (no extra connection)", "live" to "Live stream"), if (fromRec) "rec" else "live") {
             fromRec = it == "rec"; L.setFromRecording(context, fromRec)
         }
+        Text("Size of each recording file", fontWeight = FontWeight.Medium)
+        ChoiceRow(listOf("1" to "1 GB", "2" to "2 GB", "4" to "4 GB", "8" to "8 GB"), partGb.toString()) { partGb = it.toInt(); L.setPartGb(context, partGb) }
+        Hint("When a file is full the recording continues in a new file (… part 2, part 3 …) — nothing is lost — until the free space limit below or the recording time ends. A USB drive formatted FAT32 can't hold more than 3.8 GB per file.")
         Text("Stop when free space is below", fontWeight = FontWeight.Medium)
         ChoiceRow(listOf("1" to "1 GB", "2" to "2 GB", "5" to "5 GB"), minGb.toString()) { minGb = it.toInt(); L.setMinFreeGb(context, minGb) }
         Text("After a power cut / box restart", fontWeight = FontWeight.Medium)

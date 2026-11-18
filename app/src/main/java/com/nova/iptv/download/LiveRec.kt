@@ -80,6 +80,14 @@ object LiveRec {
     fun setFromRecording(c: Context, v: Boolean) = prefs(c).edit().putBoolean("from_rec", v).apply()
     fun minFreeGb(c: Context): Int = prefs(c).getInt("min_free_gb", 2)
     fun setMinFreeGb(c: Context, v: Int) = prefs(c).edit().putInt("min_free_gb", v).apply()
+    /** Size of each recording file (GB). A full file is closed and the recording continues in the next one. */
+    fun partGb(c: Context): Int = prefs(c).getInt("part_gb", 4).coerceIn(1, 8)
+    fun setPartGb(c: Context, v: Int) = prefs(c).edit().putInt("part_gb", v).apply()
+    /** Bytes per file: the chosen size, and on a FAT32 drive never above 3.8 GB (the drive can't hold more). */
+    fun partBytes(c: Context, fat32: Boolean): Long {
+        val want = partGb(c) * 1073741824L - 64L * 1024 * 1024 // a little room for the part that ends the file
+        return if (fat32) minOf(want, FAT32_PART) else want
+    }
     fun continueAfterBoot(c: Context): Boolean = prefs(c).getBoolean("boot_continue", false)
     fun setContinueAfterBoot(c: Context, v: Boolean) = prefs(c).edit().putBoolean("boot_continue", v).apply()
 
@@ -292,7 +300,7 @@ class RecordService : Service() {
                 finish("time is up — stopped and saved")
                 return
             }
-            if (now - lastSpaceCheck > 30_000) {
+            if (now - lastSpaceCheck > 2_000) { // every 2 s: stops at the limit (2 GB left by default), not a long time after
                 lastSpaceCheck = now
                 val free = LiveRec.freeBytes(this@RecordService)
                 val min = LiveRec.minFreeGb(this@RecordService) * 1073741824L
@@ -424,8 +432,11 @@ class RecordService : Service() {
         var out = FileOutputStream(file, true)
         // FAT32 drive (USB / SD): 4 GB per file at most → the recording continues in "… (part 2).ts" before that.
         val fat32 = com.nova.iptv.data.Locations.isFat32Path(d.path)
-        if (fat32) seg.splitAt = LiveRec.FAT32_PART
-        if (fat32) Log.i("NovaTest", "LIVEREC ${d.title}: FAT32 drive → new file every ${LiveRec.FAT32_PART / 1048576} MB")
+        // Every drive: a new file at the chosen size (Settings › Recording), FAT32 never above 3.8 GB.
+        val partMax = LiveRec.partBytes(this, fat32)
+        val hardMax = if (fat32) LiveRec.FAT32_HARD else partMax + 128L * 1024 * 1024
+        seg.splitAt = partMax
+        Log.i("NovaTest", "LIVEREC ${d.title}: new file every ${partMax / 1048576} MB${if (fat32) " (FAT32 drive)" else ""}")
         var lastUi = 0L
         var loggedParts = 0
         fun nextFile(at: Long) {
@@ -433,19 +444,19 @@ class RecordService : Service() {
             out.close()
             out = FileOutputStream(File(LiveRec.partPath(d.path, n)), true)
             seg.startFile(at, n)
-            Log.i("NovaTest", "LIVEREC ${d.title}: file part $n (FAT32 limit)")
+            Log.i("NovaTest", "LIVEREC ${d.title}: file part $n (size limit reached, recording continues)")
         }
         fun store(b: ByteArray, from: Int, n: Int) {
             seg.scan(b, from, n, written)
             try {
                 val sw = seg.switchCandidate()
-                if (fat32 && sw in written..(written + n)) {
+                if (sw in written..(written + n)) {
                     val k = (sw - written).toInt()
                     if (k > 0) out.write(b, from, k)
                     seg.flush()
                     nextFile(sw)
                     if (n - k > 0) out.write(b, from + k, n - k)
-                } else if (fat32 && written + n - seg.fileStart > LiveRec.FAT32_HARD) {
+                } else if (written + n - seg.fileStart > hardMax) {
                     // No part boundary in time (no key pictures): start the next file here anyway.
                     seg.flush()
                     nextFile(written)

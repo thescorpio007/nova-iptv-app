@@ -2590,11 +2590,9 @@ class PlayerActivity : ComponentActivity() {
         RecPopups.choose(
             this, "● Record ${item.title}", guideLine,
             listOf(
-                RecPopups.Choice("● Record from here", (if (behindNow >= 5) "From the second on screen (${secsText(behindNow)} behind live) · " else "") +
-                    "for $h h · until ${LiveRec.hhmm(System.currentTimeMillis() + h * 3_600_000L)}") { recordNow(item) },
-            ) + (if (oldestBack >= 30) listOf(
-                RecPopups.Choice("⏪ Record from the oldest saved moment", "Includes the last ${secsText(oldestBack)} before the picture on screen") { recordNow(item, fromOldest = true) },
-            ) else emptyList()) + listOf(
+                RecPopups.Choice("● Record", (if (oldestBack >= 5) "From the oldest saved moment (${secsText(oldestBack)} before the picture on screen) · " else "") +
+                    "for $h h · until ${LiveRec.hhmm(System.currentTimeMillis() + h * 3_600_000L)} · you keep watching from 2 s before now") { recordNow(item) },
+            ) + listOf(
                 RecPopups.Choice("⏰ Schedule a recording…", "Choose start and end (or a programme from the TV guide)") {
                     RecScheduleDialog.show(this, RecScheduleDialog.newFor(item.title, item.url, item.saved.accountId, item.saved.icon, lastGuide), lastGuide)
                 },
@@ -2614,16 +2612,26 @@ class PlayerActivity : ComponentActivity() {
      * there (Live engine parts or the disk buffer) is copied in first, then the recording takes over the channel's
      * connection. You keep watching from the same second, now from the recording.
      */
-    private fun recordNow(item: PlayItem, endsAt: Long = 0L, sched: com.nova.iptv.download.RecSchedule.Sched? = null, fromOldest: Boolean = false) {
+    private fun recordNow(item: PlayItem, endsAt: Long = 0L, sched: com.nova.iptv.download.RecSchedule.Sched? = null) {
         if (LiveRec.state.value != null) return
         val p = player
         val engineOn = LiveBuffer.activeFor(item.url) != null
+        // ● The recording always starts from the oldest saved moment; what you watch continues 2 s before the click.
+        val backMs = 2000L
+        val fromOldest = true
         val posMs = p?.currentPosition ?: 0L
-        val memBytes = if (p != null && mediaBps > 0) ((p.bufferedPosition - p.currentPosition).coerceAtLeast(0) / 1000.0 * mediaBps).toLong() else 0L
+        val memBytes = 0L
         val r = relay
+        // Where the click is inside the saved video (ms from its oldest moment).
+        val clickMs: Long = when {
+            engineOn -> posMs
+            r != null && mediaBps > 0 -> (((r.bytesStored() - r.bytesAhead()) / mediaBps).toLong() - (p?.let { (it.bufferedPosition - it.currentPosition) / 1000 } ?: 0L)).coerceAtLeast(0L) * 1000
+            else -> 0L
+        }
         relay = null
-        // The player stops reading first; the recording will take the channel's connection.
-        p?.stop()
+        // Live engine: the picture keeps playing from its saved files while the video is copied (no freeze);
+        // the player stops only when the recording is ready. Without the engine the recording needs the connection first.
+        if (!engineOn) p?.stop()
         val app0 = applicationContext
         Thread {
             val seed: java.io.File? = if (sched != null) null else runCatching {
@@ -2640,6 +2648,7 @@ class PlayerActivity : ComponentActivity() {
             runCatching { r?.close() }
             runOnUiThread {
                 if (isFinishing || isDestroyed) { seed?.delete(); return@runOnUiThread }
+                if (engineOn) player?.stop()
                 if (!engineOn) LiveBuffer.stop(this)
                 val d = (if (sched != null) LiveRec.start(this, sched.title, sched.url, sched.accountId, sched.icon, endsAt = sched.end, fixedEnd = true, then = sched.then, programme = sched.programme)
                 else LiveRec.start(this, item.title, item.url, item.saved.accountId, item.saved.icon, endsAt, seed = seed))
@@ -2649,8 +2658,8 @@ class PlayerActivity : ComponentActivity() {
                 val until = if (sched != null) "until ${LiveRec.hhmm(sched.end)}" else "for $h h"
                 Toast.makeText(this, "● Recording ${item.title} $until" + (if (seed != null) " — from the second you were watching" else ""), Toast.LENGTH_LONG).show()
                 Log.i("NovaTest", "LIVEREC watching ${item.title} from the recording (${d.id.take(8)})" + (if (seed != null) " · seeded" else ""))
-                // With the saved video in it: continue at its start (= the second on screen). Without: its newest part.
-                recStartAt = if (seed != null) 0L else PlayItem.START_NEWEST
+                // With the saved video in it: continue 2 s before where you clicked Record. Without: its newest part.
+                recStartAt = if (seed != null) (clickMs - (if (engineOn) (LiveBuffer.seedSkippedSec * 1000).toLong() else 0L) - backMs).coerceAtLeast(0L) else PlayItem.START_NEWEST
                 handler.postDelayed({ startPlayback(PlaybackQueue.index, quiet = false, keepTweaks = false) }, 300)
             }
         }.start()
