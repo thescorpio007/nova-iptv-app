@@ -60,7 +60,7 @@ import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SettingsCard(title: String, summary: String? = null, content: @Composable () -> Unit) {
     // Folded sections: one line each (▸ name · current choice); OK / click opens it, opening one closes the other.
@@ -113,19 +113,28 @@ fun SettingsCard(title: String, summary: String? = null, content: @Composable ()
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     modifier = Modifier.padding(end = 10.dp).background(Color(0xFF3DDC97), RoundedCornerShape(50)).widthIn(min = 28.dp).padding(horizontal = 5.dp, vertical = 3.dp),
                 )
-                Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
-                if (tag != null) Text(
-                    tag, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp,
-                    color = if (tag == "RUNNING") Color(0xFF04130C) else Color.White,
-                    modifier = Modifier.padding(start = 10.dp)
-                        .background(if (tag == "RUNNING") Color(0xFF3DDC97) else Color(0xFF55607A), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-                if (summary != null && !open && !engineOff) {
-                    Text(
-                        "   $summary", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
+                // Title first (takes the width left and wraps by itself); the tag and the current choice go on a second
+                // line, so a narrow phone never squeezes them into one letter per line.
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
+                    val showSummary = summary != null && !open && !engineOff
+                    if (tag != null || showSummary) androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) {
+                        if (tag != null) Text(
+                            tag, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp, maxLines = 1, softWrap = false,
+                            color = if (tag == "RUNNING") Color(0xFF04130C) else Color.White,
+                            modifier = Modifier
+                                .background(if (tag == "RUNNING") Color(0xFF3DDC97) else Color(0xFF55607A), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                        if (showSummary) Text(
+                            summary!!, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
+                            maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
