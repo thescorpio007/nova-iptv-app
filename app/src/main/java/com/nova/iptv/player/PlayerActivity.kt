@@ -3938,11 +3938,15 @@ class PlayerActivity : ComponentActivity() {
             counters.ensureUpdated()
             val frames = counters.renderedOutputBufferCount
             if (frames != wdLastFrames) { wdLastFrames = frames; wdFramesSince = now }
-            else if (now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) {
+            else if (now - wdFramesSince > minOf(maxOf(5000L, limit * 5 / 8), app.storage.frozenSoundSecs * 1000L)) {
+                // Frozen picture: with the sound still playing it is the picture decoder that is stuck (not the line),
+                // so it is fixed after the shorter "sound still playing" time (Settings › Stream watchdog); otherwise as before.
                 val sound = p.audioDecoderCounters?.let { a -> a.ensureUpdated(); val n = a.renderedOutputBufferCount; val moved = n != wdLastAudio; wdLastAudio = n; moved } ?: false
-                val ahead = relay?.let { r -> if (mediaBps > 0) " · ${(r.bytesAhead() / mediaBps).toInt()} s stored ahead" else "" } ?: ""
-                watchdogAct(item, "picture frozen for ${(now - wdFramesSince) / 1000} s" + (if (sound) " (sound kept playing)" else "") + ahead)
-                return
+                if (sound || now - wdFramesSince > maxOf(5000L, limit * 5 / 8)) {
+                    val ahead = relay?.let { r -> if (mediaBps > 0) " · ${(r.bytesAhead() / mediaBps).toInt()} s stored ahead" else "" } ?: ""
+                    watchdogAct(item, "picture frozen for ${(now - wdFramesSince) / 1000} s" + (if (sound) " (sound kept playing)" else "") + ahead)
+                    return
+                }
             }
         }
         if (!item.isLive) return

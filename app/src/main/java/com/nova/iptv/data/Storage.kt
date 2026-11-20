@@ -274,6 +274,11 @@ class Storage(context: Context) {
         get() = prefs.getBoolean("watchdog", true)
         set(value) = prefs.edit().putBoolean("watchdog", value).apply()
 
+    /** Frozen picture while the sound still plays: seconds before it is fixed (2 / 3 / 5 / 7). */
+    var frozenSoundSecs: Int
+        get() = prefs.getInt("wd_frozen_sound", 3).coerceIn(2, 7)
+        set(value) = prefs.edit().putInt("wd_frozen_sound", value).apply()
+
     /** Seconds without progress before the watchdog acts (5 fast, 8 normal, 15 relaxed). */
     var watchdogSecs: Int
         get() = prefs.getInt("watchdog_secs", 8)

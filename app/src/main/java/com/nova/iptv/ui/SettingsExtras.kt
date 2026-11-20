@@ -837,6 +837,14 @@ fun WatchdogSettings(vm: MainViewModel) {
                 else -> "No automatic repairs. The Live ⏭ button (or the remote button you give it) still fixes a stuck picture."
             }
         )
+        if (on) {
+            Text("🐈 Frozen picture, sound still playing — fix after", fontWeight = FontWeight.Medium)
+            ChoiceRow(
+                listOf("2" to "2 s", "3" to "3 s", "5" to "5 s", "7" to "7 s (as before)"),
+                remember(version) { storage.frozenSoundSecs.toString() },
+            ) { storage.frozenSoundSecs = it.toInt(); version++ }
+            Hint("CATWATCH steps to the next key picture. With 3 s the freeze you see is about 3 s instead of 7 s. Only used when the sound is still playing, so a stuck connection is judged as before.")
+        }
         if (on && mode == "full") {
             Text("Sensitivity", fontWeight = FontWeight.Medium)
             ChoiceRow(
