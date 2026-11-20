@@ -1,0 +1,10 @@
+crw-rw-rw- 1 root kvm 10, 232 Nov 20 07:57 /dev/kvm
+accel:
+0
+KVM (version 12) is installed and usable.
+accel
+4
+               total        used        free      shared  buff/cache   available
+Mem:           15982        1146        6387          49        8844       14836
+Swap:           3071           0        3071
+booted=1 after 15 s
